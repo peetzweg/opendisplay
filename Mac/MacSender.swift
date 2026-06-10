@@ -613,6 +613,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let dx = obj["dx"] as? Double, let dy = obj["dy"] as? Double {
                 inputInjector?.handleScroll(dx: dx, dy: dy)
             }
+        case "kf":
+            // The phone's decoder lost sync (e.g. it attached mid-GOP and
+            // periodic keyframes are off) — force an IDR on the next frame.
+            Log.info("phone requested keyframe")
+            needsKeyframe = true
         default:
             Log.info("unknown control message type: \(type)")
         }

@@ -34,7 +34,7 @@ struct ReceiverScreen: View {
     @State private var showSettings = false
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("showAnalytics") private var showAnalytics = false
-    @AppStorage("metalRenderer") private var metalRenderer = true
+    @AppStorage("metalRenderer") private var metalRenderer = false
 
     // Streaming = connected and the video format is known.
     private var isStreaming: Bool {
@@ -278,7 +278,7 @@ struct SettingsView: View {
     @ObservedObject var receiver: PhoneReceiver
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
-    @AppStorage("metalRenderer") private var metalRenderer = true
+    @AppStorage("metalRenderer") private var metalRenderer = false
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -299,11 +299,11 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("Performance overlay", isOn: $showAnalytics)
-                    Toggle("Metal renderer", isOn: $metalRenderer)
+                    Toggle("Metal renderer (experimental)", isOn: $metalRenderer)
                 } header: {
                     Text("Analytics")
                 } footer: {
-                    Text("The overlay shows FPS, bitrate, frame timing, stalls, and latency graphs at the bottom of the screen while streaming. The Metal renderer decodes and presents frames directly for lower display latency; turn it off to fall back to the system video layer.")
+                    Text("The overlay shows FPS, bitrate, frame timing, stalls, and latency graphs at the bottom of the screen while streaming. The experimental Metal renderer decodes and presents frames manually — it adds decode and true on-glass latency metrics to the overlay, but in our measurements the system video layer displays frames faster. Leave it off unless you're debugging.")
                 }
 
                 Section {
@@ -396,7 +396,9 @@ struct VideoLayerView: UIViewRepresentable {
         view.isMultipleTouchEnabled = true
         view.receiver = receiver
 
+        Log.info("video view: metal=\(useMetal)")
         if useMetal, let renderer = MetalVideoRenderer() {
+            Log.info("metal renderer active")
             view.metalRenderer = renderer
             view.layer.addSublayer(renderer.metalLayer)
             receiver.onDecodedFrame = { [weak renderer] pixelBuffer, captureMs in

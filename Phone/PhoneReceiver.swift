@@ -105,11 +105,12 @@ final class PhoneReceiver: ObservableObject {
     private var decompressionSession: VTDecompressionSession?
     private var decodeWindow: [Double] = []
     private var photonWindow: [Double] = []
-    // Default ON (matches the @AppStorage default in the settings UI).
-    private var useMetalPath: Bool {
-        UserDefaults.standard.object(forKey: "metalRenderer") == nil
-            || UserDefaults.standard.bool(forKey: "metalRenderer")
-    }
+    private var loggedDisplayPath = false
+    private var decodeErrorCount = 0
+    // Default OFF: A/B measurement showed the system video layer reaches
+    // glass faster than our CAMetalLayer path (iOS gives AVSBDL a dedicated
+    // compositor plane). Kept as an experimental toggle + for its metrics.
+    private var useMetalPath: Bool { UserDefaults.standard.bool(forKey: "metalRenderer") }
 
     /// Called by the renderer's presented handler: maps the CACurrentMediaTime-
     /// based glass timestamp into wall-clock ms and computes true photon e2e.
@@ -559,6 +560,10 @@ final class PhoneReceiver: ObservableObject {
 
         guard let sample else { return }
 
+        if loggedDisplayPath != (useMetalPath && onDecodedFrame != nil) {
+            loggedDisplayPath = useMetalPath && onDecodedFrame != nil
+            Log.info("display path: metal=\(useMetalPath) sink=\(onDecodedFrame != nil)")
+        }
         if useMetalPath, onDecodedFrame != nil {
             decodeAndRender(sample, captureMs: captureMs)
         } else {
@@ -682,8 +687,11 @@ final class PhoneReceiver: ObservableObject {
             VTDecompressionSessionInvalidate(session)
             decompressionSession = nil
         }
+        // NV12: the decoder's native output — BGRA would add a conversion
+        // pass inside VideoToolbox (measured ~7ms); the YUV→RGB happens in
+        // the renderer's fragment shader instead (~free).
         let attrs: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
             kCVPixelBufferMetalCompatibilityKey: true,
         ]
         var session: VTDecompressionSession?
@@ -708,13 +716,33 @@ final class PhoneReceiver: ObservableObject {
             if status == noErr, let imageBuffer {
                 self.decodeWindow.append(self.nowMs - t0)
                 self.onDecodedFrame?(imageBuffer, captureMs)
+            } else {
+                if self.decodeErrorCount % 60 == 0 {
+                    Log.info("decode output error: \(status) imageBuffer=\(imageBuffer != nil)")
+                }
+                self.decodeErrorCount += 1
+                // Joined mid-GOP (e.g. the renderer attached after the
+                // connect-time IDR, and periodic keyframes are off) — ask
+                // the Mac for a fresh sync point.
+                self.requestKeyframeIfNeeded()
             }
         }
         if status != noErr {
-            // e.g. P-frame after joining mid-stream — the Mac forces a
-            // keyframe on every (re)connect, so this resolves itself.
             decodeFlushes += 1
+            decodeErrorCount += 1
+            if decodeErrorCount % 60 == 1 {
+                Log.info("decode call error: \(status) (\(decodeErrorCount) total)")
+            }
+            requestKeyframeIfNeeded()
         }
+    }
+
+    private var lastKeyframeRequest = Date.distantPast
+    private func requestKeyframeIfNeeded() {
+        guard Date().timeIntervalSince(lastKeyframeRequest) > 1 else { return }
+        lastKeyframeRequest = Date()
+        Log.info("requesting keyframe (decoder needs sync)")
+        sendControl(["type": "kf"])
     }
 
     private func percentile(_ values: [Double], _ p: Double) -> Double {
