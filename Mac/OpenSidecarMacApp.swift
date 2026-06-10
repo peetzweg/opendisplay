@@ -57,10 +57,40 @@ final class SenderController: ObservableObject {
     private func startBrowsing() {
         let browser = NWBrowser(for: .bonjour(type: "_opensidecar._tcp", domain: nil), using: .tcp)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
-            DispatchQueue.main.async { self?.discovered = Array(results) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.discovered = Array(results)
+                self.reselectSavedTarget()
+            }
         }
         browser.start(queue: .main)
         self.browser = browser
+    }
+
+    /// The connection choice survives relaunches: if the user last used a
+    /// WiFi device, re-select it as soon as discovery finds it again.
+    private func reselectSavedTarget() {
+        guard case .usb = target,
+              let saved = UserDefaults.standard.string(forKey: "lastTarget"),
+              saved != "usb" else { return }
+        for result in discovered {
+            if case .service(let name, _, _, _) = result.endpoint, name == saved {
+                target = .wifi(result)
+                restartIfRunning()
+                return
+            }
+        }
+    }
+
+    func rememberTarget() {
+        switch target {
+        case .usb:
+            UserDefaults.standard.set("usb", forKey: "lastTarget")
+        case .wifi(let result):
+            if case .service(let name, _, _, _) = result.endpoint {
+                UserDefaults.standard.set(name, forKey: "lastTarget")
+            }
+        }
     }
 
     func start() {
@@ -113,8 +143,36 @@ final class SenderController: ObservableObject {
     }
 }
 
+/// Polls the permission states the app depends on so the UI can surface
+/// exactly what's missing instead of failing silently.
+@MainActor
+final class PermissionMonitor: ObservableObject {
+    @Published var screenRecording = false
+    @Published var accessibility = false
+    private var timer: Timer?
+
+    init() {
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+            Task { @MainActor in self.refresh() }
+        }
+    }
+
+    func refresh() {
+        screenRecording = CGPreflightScreenCaptureAccess()
+        accessibility = AXIsProcessTrusted()
+    }
+
+    static func openPrivacyPane(_ anchor: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var controller: SenderController
+    @StateObject private var permissions = PermissionMonitor()
 
     private var statusColor: Color {
         if !controller.running { return .secondary.opacity(0.5) }
@@ -161,7 +219,10 @@ struct ContentView: View {
                             .tag(ConnectionTarget.wifi(result))
                     }
                 }
-                .onChange(of: controller.target) { controller.restartIfRunning() }
+                .onChange(of: controller.target) {
+                    controller.rememberTarget()
+                    controller.restartIfRunning()
+                }
 
                 Picker("Mode", selection: $controller.mode) {
                     Text("Extend").tag(CaptureMode.extend)
@@ -169,6 +230,30 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: controller.mode) { controller.restartIfRunning() }
+
+                Section("Permissions") {
+                    permissionRow(
+                        "Screen Recording",
+                        granted: permissions.screenRecording,
+                        help: "Required to capture the display.",
+                        anchor: "Privacy_ScreenCapture"
+                    )
+                    permissionRow(
+                        "Accessibility",
+                        granted: permissions.accessibility,
+                        help: "Required for touch input from the phone.",
+                        anchor: "Privacy_Accessibility"
+                    )
+                    // macOS offers no API to query Local Network access, so
+                    // infer from discovery results and let the user check.
+                    permissionRow(
+                        "Local Network",
+                        granted: !controller.discovered.isEmpty,
+                        uncertain: controller.discovered.isEmpty,
+                        help: "Required for WiFi mode. If no device appears in the Connection menu, allow OpenSidecar under Privacy & Security → Local Network on this Mac AND on the iPhone — and keep the iPhone app open.",
+                        anchor: "Privacy_LocalNetwork"
+                    )
+                }
             }
             .formStyle(.grouped)
             .scrollDisabled(true)
@@ -195,6 +280,31 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
-        .frame(width: 420)
+        .frame(width: 440)
+    }
+
+    @ViewBuilder
+    private func permissionRow(_ title: String, granted: Bool, uncertain: Bool = false,
+                               help: String, anchor: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Image(systemName: uncertain ? "questionmark.circle.fill"
+                            : granted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(uncertain ? .orange : granted ? .green : .red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if uncertain || !granted {
+                    Text(help)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if uncertain || !granted {
+                Button("Open Settings") {
+                    PermissionMonitor.openPrivacyPane(anchor)
+                }
+                .controlSize(.small)
+            }
+        }
     }
 }

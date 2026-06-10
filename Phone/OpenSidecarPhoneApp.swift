@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import UIKit
+import Combine
 
 @main
 struct OpenSidecarPhoneApp: App {
@@ -11,51 +12,68 @@ struct OpenSidecarPhoneApp: App {
     }
 }
 
+// MARK: - Shake to open settings
+
+extension Notification.Name {
+    static let deviceDidShake = Notification.Name("deviceDidShake")
+}
+
+extension UIWindow {
+    open override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
+        if motion == .motionShake {
+            NotificationCenter.default.post(name: .deviceDidShake, object: nil)
+        }
+        super.motionEnded(motion, with: event)
+    }
+}
+
+// MARK: - Root screen
+
 struct ReceiverScreen: View {
     @StateObject private var model = ReceiverModel()
+    @State private var showSettings = false
+
+    // Streaming = connected and the video format is known.
+    private var isStreaming: Bool {
+        model.receiver.connected && model.receiver.videoSize != .zero
+    }
 
     var body: some View {
         GeometryReader { geo in
-            content
-                .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
-                .onChange(of: geo.size) { _, size in
-                    model.receiver.setOrientation(portrait: size.height > size.width)
-                }
-        }
-        .ignoresSafeArea()
-    }
-
-    private var content: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VideoLayerView(displayLayer: model.receiver.displayLayer, receiver: model.receiver)
-                .ignoresSafeArea()
-            // Status overlay; fades out once frames are flowing.
-            if !model.receiver.connected || model.receiver.fps == 0 {
-                VStack(spacing: 8) {
-                    Text("OpenSidecar")
-                        .font(.title2).bold()
-                    Text(model.receiver.status)
-                        .font(.system(.body, design: .monospaced))
-                }
-                .foregroundStyle(.white)
-                .padding(20)
-                .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
-            } else {
-                VStack {
-                    HStack {
+            ZStack {
+                if isStreaming {
+                    Color.black.ignoresSafeArea()
+                    VideoLayerView(displayLayer: model.receiver.displayLayer,
+                                   receiver: model.receiver)
+                        .ignoresSafeArea()
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text("\(model.receiver.fps) fps")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.35))
+                                .padding(6)
+                        }
                         Spacer()
-                        Text("\(model.receiver.fps) fps")
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .padding(6)
                     }
-                    Spacer()
+                } else {
+                    IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
             }
+            .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
+            .onChange(of: geo.size) { _, size in
+                model.receiver.setOrientation(portrait: size.height > size.width)
+            }
         }
-        .statusBarHidden()
-        .persistentSystemOverlays(.hidden)
+        .ignoresSafeArea(edges: isStreaming ? .all : [])
+        .statusBarHidden(isStreaming)
+        .persistentSystemOverlays(isStreaming ? .hidden : .automatic)
+        .sheet(isPresented: $showSettings) {
+            SettingsView(receiver: model.receiver)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
+            showSettings = true
+        }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             model.start()
@@ -63,10 +81,143 @@ struct ReceiverScreen: View {
     }
 }
 
+// MARK: - Idle view (no Mac connected) — regular iOS look, follows light/dark
+
+struct IdleView: View {
+    @ObservedObject var receiver: PhoneReceiver
+    @Binding var showSettings: Bool
+
+    var body: some View {
+        VStack(spacing: 28) {
+            Spacer()
+
+            Image(systemName: "rectangle.on.rectangle")
+                .font(.system(size: 56, weight: .light))
+                .foregroundStyle(.tint)
+
+            VStack(spacing: 6) {
+                Text("OpenSidecar")
+                    .font(.largeTitle.bold())
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(receiver.connected ? Color.green : Color.orange)
+                        .frame(width: 8, height: 8)
+                    Text(receiver.status)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Plug in the USB cable and start the Mac app",
+                      systemImage: "cable.connector")
+                Label("Or choose this iPhone under WiFi in the Mac app",
+                      systemImage: "wifi")
+                Label("Keep this app open — streaming starts automatically",
+                      systemImage: "play.circle")
+            }
+            .font(.subheadline)
+            .padding(20)
+            .frame(maxWidth: 420)
+            .background(Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 16))
+
+            Spacer()
+
+            Button {
+                showSettings = true
+            } label: {
+                Label("Settings & Help", systemImage: "gearshape")
+            }
+            .buttonStyle(.bordered)
+
+            Text("Tip: shake the phone to open settings anytime")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 8)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+}
+
+// MARK: - Settings / help sheet
+
+struct SettingsView: View {
+    @ObservedObject var receiver: PhoneReceiver
+    @Environment(\.dismiss) private var dismiss
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Status") {
+                    LabeledContent("Listening", value: "Port 9000")
+                    LabeledContent("Connection",
+                                   value: receiver.connected ? "Connected" : "Waiting for Mac")
+                    if receiver.videoSize != .zero {
+                        LabeledContent("Stream",
+                                       value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
+                    }
+                }
+
+                Section {
+                    Button("Open iOS Settings for OpenSidecar") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                } header: {
+                    Text("Permissions")
+                } footer: {
+                    Text("WiFi mode needs Local Network access. If your Mac can't find this iPhone, enable it under Settings → Privacy & Security → Local Network → OpenSidecar. USB mode works without it.")
+                }
+
+                Section {
+                    Label("USB: plug in the cable, run the Mac app — it connects automatically through the wire (lowest latency).",
+                          systemImage: "cable.connector")
+                    Label("WiFi: both devices on the same network, then pick this iPhone in the Mac app's Connection menu.",
+                          systemImage: "wifi")
+                    Label("Rotate the phone for a vertical second monitor.",
+                          systemImage: "rectangle.portrait.rotate")
+                    Label("Touch: tap to click, drag to drag, two-finger pan to scroll.",
+                          systemImage: "hand.tap")
+                } header: {
+                    Text("How to connect")
+                }
+
+                Section("About") {
+                    LabeledContent("Version", value: version)
+                    Link(destination: URL(string: "https://github.com/peetzweg/opensidecar")!) {
+                        Label("GitHub — peetzweg/opensidecar", systemImage: "link")
+                    }
+                    Link(destination: URL(string: "https://peetzweg.github.io/opensidecar/")!) {
+                        Label("Website", systemImage: "globe")
+                    }
+                }
+            }
+            .navigationTitle("OpenSidecar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Model
+
 @MainActor
 final class ReceiverModel: ObservableObject {
     let receiver: PhoneReceiver
     private var started = false
+    private var cancellables = Set<AnyCancellable>()
 
     init() {
         receiver = PhoneReceiver(displayLayer: AVSampleBufferDisplayLayer())
@@ -81,7 +232,6 @@ final class ReceiverModel: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
     }
-    private var cancellables = Set<AnyCancellable>()
 
     func start() {
         guard !started else { return }
@@ -90,7 +240,7 @@ final class ReceiverModel: ObservableObject {
     }
 }
 
-import Combine
+// MARK: - Video layer host view
 
 /// UIView whose backing layer is the AVSampleBufferDisplayLayer.
 /// Forwards touches as normalized video-space coordinates (touchscreen mode).
