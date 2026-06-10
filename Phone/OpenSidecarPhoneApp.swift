@@ -32,6 +32,8 @@ extension UIWindow {
 struct ReceiverScreen: View {
     @StateObject private var model = ReceiverModel()
     @State private var showSettings = false
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("showAnalytics") private var showAnalytics = false
 
     // Streaming = connected and the video format is known.
     private var isStreaming: Bool {
@@ -46,15 +48,14 @@ struct ReceiverScreen: View {
                     VideoLayerView(displayLayer: model.receiver.displayLayer,
                                    receiver: model.receiver)
                         .ignoresSafeArea()
-                    VStack {
-                        HStack {
+                    if showAnalytics {
+                        VStack {
                             Spacer()
-                            Text("\(model.receiver.fps) fps")
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.35))
-                                .padding(6)
+                            PerfOverlay(stats: model.receiver.perf,
+                                        videoSize: model.receiver.videoSize)
+                                .padding(.bottom, 10)
                         }
-                        Spacer()
+                        .allowsHitTesting(false)   // never block touch input
                     }
                 } else {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
@@ -73,6 +74,10 @@ struct ReceiverScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
             showSettings = true
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // iOS may tear the listener down while suspended — recover.
+            if phase == .active { model.receiver.ensureListening() }
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
@@ -142,11 +147,78 @@ struct IdleView: View {
     }
 }
 
+// MARK: - Performance overlay (Steam-Deck style, opt-in via Settings)
+
+struct PerfOverlay: View {
+    let stats: PerfStats
+    let videoSize: CGSize
+
+    var body: some View {
+        HStack(spacing: 14) {
+            metric("FPS", "\(stats.fps)")
+            metric("Mbit/s", String(format: "%.1f", stats.mbps))
+            metric("frame", String(format: "%.1f ms", stats.avgFrameMs))
+            metric("max", String(format: "%.0f ms", stats.maxFrameMs))
+            metric("stalls", "\(stats.stalls)")
+            if stats.decodeFlushes > 0 {
+                metric("flushes", "\(stats.decodeFlushes)")
+            }
+            FrameTimeGraph(samples: stats.samples)
+                .frame(width: 130, height: 30)
+            metric("res", "\(Int(videoSize.width))×\(Int(videoSize.height))")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 1) {
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+            Text(label)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+}
+
+/// Bar graph of the last ~120 inter-frame intervals. Green ≤ 25 ms,
+/// yellow ≤ 50 ms, red above — with a reference line at 16.7 ms (60 fps).
+struct FrameTimeGraph: View {
+    let samples: [Double]
+
+    var body: some View {
+        Canvas { context, size in
+            guard !samples.isEmpty else { return }
+            let ceiling = 60.0   // ms mapped to full height
+            let barWidth = size.width / CGFloat(max(samples.count, 1))
+            for (i, ms) in samples.enumerated() {
+                let h = min(ms / ceiling, 1.0) * size.height
+                let rect = CGRect(x: CGFloat(i) * barWidth,
+                                  y: size.height - h,
+                                  width: max(barWidth - 0.5, 0.5),
+                                  height: h)
+                let color: Color = ms <= 25 ? .green : ms <= 50 ? .yellow : .red
+                context.fill(Path(rect), with: .color(color.opacity(0.85)))
+            }
+            // 60 fps reference line
+            let y = size.height - (16.7 / ceiling) * size.height
+            context.stroke(Path { p in
+                p.move(to: CGPoint(x: 0, y: y))
+                p.addLine(to: CGPoint(x: size.width, y: y))
+            }, with: .color(.white.opacity(0.35)), lineWidth: 0.5)
+        }
+    }
+}
+
 // MARK: - Settings / help sheet
 
 struct SettingsView: View {
     @ObservedObject var receiver: PhoneReceiver
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("showAnalytics") private var showAnalytics = false
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -163,6 +235,14 @@ struct SettingsView: View {
                         LabeledContent("Stream",
                                        value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
                     }
+                }
+
+                Section {
+                    Toggle("Performance overlay", isOn: $showAnalytics)
+                } header: {
+                    Text("Analytics")
+                } footer: {
+                    Text("Shows FPS, bitrate, frame timing, stalls, and a frame-time graph at the bottom of the screen while streaming. Useful for debugging latency.")
                 }
 
                 Section {
