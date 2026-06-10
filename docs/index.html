@@ -193,6 +193,16 @@ cd opensidecar &amp;&amp; xcodegen generate
       a capture is running.</p>
     </details>
     <details>
+      <summary>WiFi mode can't find my iPhone — why?</summary>
+      <p>WiFi discovery needs the <strong>Local Network</strong> permission on
+      <em>both</em> sides, and macOS/iOS deny it silently if the prompt was missed:
+      check System Settings → Privacy &amp; Security → Local Network on the Mac,
+      and Settings → Privacy &amp; Security → Local Network on the iPhone. Both
+      devices must be on the same WiFi and the iPhone app must be open. The Mac
+      app shows a live permission panel, and the iPhone app has a settings screen
+      (shake the phone) that links straight there. USB mode needs none of this.</p>
+    </details>
+    <details>
       <summary>iPad support?</summary>
       <p>The receiver is a universal iOS app — it runs on iPad today. iPad-specific
       features (Apple Pencil, pressure) are on the roadmap.</p>

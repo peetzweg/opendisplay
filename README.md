@@ -150,6 +150,25 @@ Open the iPhone app, then pick **"iPhone (WiFi)"** from the Connection menu
 in the Mac app. Discovery is automatic via Bonjour. USB has lower latency;
 WiFi has no cable.
 
+### Permissions checklist
+
+macOS and iOS gate several things this app needs — most prompt on first use,
+but some **fail silently** if denied or missed. The Mac app shows a live
+permission status panel; the iPhone app has a settings screen (shake the
+phone, or tap Settings & Help when idle).
+
+| Where | Permission | Needed for | If missing |
+|---|---|---|---|
+| Mac | Screen Recording | capturing the display | black screen on the phone |
+| Mac | Accessibility | touch/scroll input | taps do nothing |
+| Mac | **Local Network** | WiFi discovery | no device in the Connection menu |
+| iPhone | **Local Network** | WiFi discovery | Mac can't find the phone |
+
+All live under **Privacy & Security** in System Settings (Mac) / Settings
+(iPhone). The Local Network ones are only needed for WiFi mode — USB works
+without them. If the prompt never appeared, toggle the entry manually or
+force-quit and reopen the app.
+
 ## FAQ
 
 **Why do I see the purple screen-recording indicator in the menu bar?**
@@ -158,6 +177,12 @@ screen — Duet, Luna, OBS, and Zoom trigger it too. Apple Sidecar doesn't,
 only because it's implemented inside the OS rather than on public capture
 APIs. It cannot (and shouldn't) be hidden by an app; it's how macOS tells
 you a capture is running.
+
+**The Mac app doesn't show my iPhone in the Connection menu (WiFi).**
+Both sides need **Local Network** permission, and both fail *silently*
+without it: check Privacy & Security → Local Network on the Mac **and** on
+the iPhone, make sure both are on the same WiFi network, and keep the
+iPhone app open in the foreground. USB mode is unaffected.
 
 **Does it support iPad?** The receiver app is universal (iPhone + iPad);
 iPad is the same codebase. iPad-specific polish (Pencil, pressure) is on the
