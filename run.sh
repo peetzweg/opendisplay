@@ -1,6 +1,7 @@
 #!/bin/zsh
-# Start the USB tunnel and the Mac sender app. The phone app must be running
-# (it listens on :9000); the Mac app retries until the tunnel is up.
+# Start the Mac sender app. The phone app must be running (it listens on
+# :9000); USB connectivity goes through macOS's built-in usbmuxd — no tunnel
+# tool needed. The Mac app retries until the device shows up.
 set -e
 cd "$(dirname "$0")"
 
@@ -10,13 +11,5 @@ if [[ ! -d $APP ]]; then
   exit 1
 fi
 
-if ! pgrep -fq "iproxy 9000"; then
-  echo "starting iproxy 9000 9000…"
-  iproxy 9000 9000 &
-  IPROXY_PID=$!
-  trap "kill $IPROXY_PID 2>/dev/null" EXIT
-fi
-
 open "$APP"
-echo "OpenSidecar running — logs at /tmp/opensidecar-mac.log. Ctrl-C to stop the tunnel."
-wait
+echo "OpenSidecar running — logs at /tmp/opensidecar-mac.log."

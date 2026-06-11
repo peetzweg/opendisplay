@@ -72,6 +72,13 @@ struct PhoneInfo: Decodable {
     var kind: String { device ?? "device" }
 }
 
+/// How the sender reaches the receiver. Reconnects re-dial from scratch, so
+/// a USB device that was replugged (new usbmuxd DeviceID) is found again.
+enum SenderTransport {
+    case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
+    case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
+}
+
 @available(macOS 14.0, *)
 final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
@@ -91,7 +98,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private let queue = DispatchQueue(label: "sender.video")
     private let startCode: [UInt8] = [0, 0, 0, 1]
 
-    private let endpoint: NWEndpoint
+    private let transport: SenderTransport
     private let endpointName: String
     private let mode: CaptureMode
     private let quality: StreamQuality
@@ -118,7 +125,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var inputInjector: InputInjector?
 
     // Liveness: both sides ping every 2s; if nothing arrives for 5s the link
-    // is half-open (e.g. iproxy accepted but the device is gone) — reconnect.
+    // is half-open (e.g. usbmuxd accepted but the device is gone) — reconnect.
     private var lastReceived = Date()
     private var dropsTotal = 0
 
@@ -153,9 +160,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var lastPixelBuffer: CVPixelBuffer?
     private var lastCaptureAt = Date.distantPast
 
-    init(endpoint: NWEndpoint, name: String, mode: CaptureMode,
+    init(transport: SenderTransport, name: String, mode: CaptureMode,
          quality: StreamQuality = .best) {
-        self.endpoint = endpoint
+        self.transport = transport
         self.endpointName = name
         self.mode = mode
         self.quality = quality
@@ -166,16 +173,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func start() async throws {
         stopped = false
-        connect()
+        queue.async { self.connect() }   // dial state lives on `queue`
         schedulePing()
         scheduleWatchdog()
 
-        // Screen Recording permission: preflight, request if missing, and poll
-        // until granted (the user flips the toggle in System Settings).
+        // Screen Recording permission: poll until granted. No auto-prompt at
+        // launch — the permission panel's Grant button triggers the system
+        // dialog, so the request always has visible context.
         if !CGPreflightScreenCaptureAccess() {
-            await status("Waiting for Screen Recording permission…")
-            CGRequestScreenCaptureAccess()
-            Log.info("Screen Recording permission missing — requested, polling for grant")
+            await status("Screen Recording permission needed — see Permissions below")
+            Log.info("Screen Recording permission missing — waiting for grant via the permission panel")
             while !CGPreflightScreenCaptureAccess() {
                 try await Task.sleep(for: .seconds(2))
                 if stopped { return }
@@ -201,9 +208,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             try await setupExtend(info)
 
             // Touch back-channel (Milestone 3). Needs Accessibility trust;
-            // the prompt fires once and we keep going — touches start working
-            // the moment the user grants it.
-            if !InputInjector.ensureAccessibilityPermission() {
+            // streaming works without it, so don't interrupt with a prompt —
+            // the permission panel's Grant button asks when the user is ready.
+            if !AXIsProcessTrusted() {
                 await status("Extending — grant Accessibility for touch input")
                 // Event posting is trust-checked per-post, so it starts working
                 // the moment the user grants — poll just to log/report it.
@@ -397,8 +404,31 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - Connection (with retry)
 
+    // Guards against a stale async USB dial adopting after a newer one (or a
+    // manual reconnect) superseded it. Only touched on `queue`.
+    private var dialGeneration = 0
+
     private func connect() {
         guard !stopped else { return }
+        switch transport {
+        case .tcp(let endpoint): connectTCP(endpoint)
+        case .usb(let udid, let port): connectUSB(udid: udid, port: port)
+        }
+    }
+
+    /// Bookkeeping shared by both transports once a connection is live.
+    private func becomeReady(_ conn: NWConnection) {
+        Log.info("connection ready to \(endpointName)")
+        connectionReady = true
+        everConnected = true
+        disconnectedSince = nil
+        needsKeyframe = true   // new peer needs SPS/PPS + IDR
+        lastReceived = Date()  // fresh grace period for the watchdog
+        receiveControl(on: conn)
+        Task { await self.status("Connected to \(self.endpointName)") }
+    }
+
+    private func connectTCP(_ endpoint: NWEndpoint) {
         let options = NWProtocolTCP.Options()
         options.noDelay = true   // latency matters more than throughput here
         let params = NWParameters(tls: nil, tcp: options)
@@ -408,22 +438,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let self else { return }
             switch state {
             case .ready:
-                Log.info("connection ready to \(self.endpointName)")
-                self.connectionReady = true
-                self.everConnected = true
-                self.disconnectedSince = nil
-                self.needsKeyframe = true   // new peer needs SPS/PPS + IDR
-                self.lastReceived = Date()  // fresh grace period for the watchdog
-                self.receiveControl(on: conn)
-                Task { await self.status("Connected to \(self.endpointName)") }
+                self.becomeReady(conn)
             case .failed(let error):
                 Log.info("connection failed: \(error)")
                 self.connectionReady = false
                 self.scheduleReconnect()
             case .waiting(let error):
                 // On loopback there is no "path change" to wake us up again
-                // (e.g. iproxy not started yet) — treat waiting as failure
-                // and poll by reconnecting.
+                // (e.g. a manual -host tunnel not started yet) — treat
+                // waiting as failure and poll by reconnecting.
                 Log.info("connection waiting: \(error) — will retry")
                 self.connectionReady = false
                 Task { await self.status("Waiting for receiver at \(self.endpointName)…") }
@@ -435,6 +458,57 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
         conn.start(queue: queue)
+    }
+
+    /// Dial through macOS's built-in usbmuxd — no external tunnel needed.
+    /// The handshake is async, so adoption is gated on `dialGeneration`.
+    private func connectUSB(udid: String?, port: UInt16) {
+        dialGeneration += 1
+        let generation = dialGeneration
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let conn = try await Usbmux.dial(udid: udid, port: port, queue: queue)
+                queue.async {
+                    guard generation == self.dialGeneration, !self.stopped else {
+                        conn.cancel()
+                        return
+                    }
+                    self.connection = conn
+                    conn.stateUpdateHandler = { [weak self] state in
+                        guard let self else { return }
+                        switch state {
+                        case .failed(let error):
+                            Log.info("usb connection failed: \(error)")
+                            self.connectionReady = false
+                            self.scheduleReconnect()
+                        case .cancelled:
+                            self.connectionReady = false
+                        default:
+                            break
+                        }
+                    }
+                    self.becomeReady(conn)
+                }
+            } catch {
+                // Distinct guidance per failure: cable missing vs app closed.
+                let hint: String
+                switch error as? Usbmux.Failure {
+                case .noDevice:
+                    hint = "Waiting for a USB device — plug in the iPhone or iPad…"
+                case .refused:
+                    hint = "Device found — open the OpenSidecar app on it…"
+                default:
+                    Log.info("usb dial failed: \(error)")
+                    hint = "USB connection failed: \(error.localizedDescription)"
+                }
+                queue.async {
+                    guard generation == self.dialGeneration, !self.stopped else { return }
+                    Task { await self.status(hint) }
+                    self.scheduleReconnect()
+                }
+            }
+        }
     }
 
     private func scheduleReconnect() {
@@ -452,6 +526,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
         connectionReady = false
+        dialGeneration += 1   // a USB dial still in flight must not adopt
         connection?.cancel()
         connection = nil
         pendingSends = 0

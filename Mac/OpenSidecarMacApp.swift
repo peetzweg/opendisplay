@@ -76,17 +76,13 @@ enum MainWindow {
 }
 
 enum ConnectionTarget: Hashable {
-    case usb                          // iproxy tunnel on localhost
+    case usb(udid: String?)           // wired via built-in usbmuxd; nil = first device
     case wifi(NWBrowser.Result)       // discovered via Bonjour
 
-    var label: String {
-        switch self {
-        case .usb:
-            return "USB (wired)"
-        case .wifi(let result):
-            if case .service(let name, _, _, _) = result.endpoint { return "\(name) (WiFi)" }
-            return "WiFi device"
-        }
+    var wifiLabel: String? {
+        guard case .wifi(let result) = self else { return nil }
+        if case .service(let name, _, _, _) = result.endpoint { return "\(name) (WiFi)" }
+        return "WiFi device"
     }
 }
 
@@ -110,8 +106,10 @@ final class SenderController: ObservableObject {
     @Published var mbps = 0.0
     @Published var running = false
     @Published var discovered: [NWBrowser.Result] = []
-    @Published var target: ConnectionTarget = .usb
-    // `-host x.x.x.x` / `-port n` override the USB tunnel endpoint.
+    @Published var usbDevices: [UsbmuxDevice] = []
+    @Published var target: ConnectionTarget = .usb(udid: nil)
+    // `-host x.x.x.x` / `-port n` bypass usbmuxd with a manual TCP endpoint
+    // (debugging escape hatch, e.g. an iproxy or SSH tunnel).
     @Published var host = UserDefaults.standard.string(forKey: "host") ?? "127.0.0.1"
     @Published var port = UserDefaults.standard.string(forKey: "port") ?? "9000"
     // `-mode mirror` / `-mode extend` launch argument also works.
@@ -122,13 +120,45 @@ final class SenderController: ObservableObject {
 
     private var sender: MacSender?
     private var browser: NWBrowser?
+    private var usbWatcher: UsbmuxDeviceWatcher?
 
     init() {
         startBrowsing()
+        usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
+            guard let self else { return }
+            self.usbDevices = devices
+            // An explicitly selected device that detached has no picker entry
+            // anymore — fall back to the generic wired target.
+            if case .usb(let udid?) = self.target,
+               !devices.contains(where: { $0.udid == udid }) {
+                self.target = .usb(udid: nil)
+            }
+            self.reselectSavedTarget()
+        }
         // Auto-start unless explicitly disabled (`-autostart NO`).
         if UserDefaults.standard.object(forKey: "autostart") == nil
             || UserDefaults.standard.bool(forKey: "autostart") {
             start()
+        }
+    }
+
+    /// Label for the generic "first wired device" picker entry: the device's
+    /// name once one is attached (and resolved), a neutral fallback otherwise.
+    var usbLabel: String {
+        if usbDevices.count == 1, let device = usbDevices.first { return device.label }
+        return "USB (wired)"
+    }
+
+    /// Human-readable name of the current target, for status messages.
+    func targetLabel() -> String {
+        switch target {
+        case .usb(let udid):
+            if let device = usbDevices.first(where: { $0.udid == udid }) ?? usbDevices.first {
+                return device.label
+            }
+            return "USB (wired)"
+        case .wifi:
+            return target.wifiLabel ?? "WiFi device"
         }
     }
 
@@ -146,11 +176,20 @@ final class SenderController: ObservableObject {
     }
 
     /// The connection choice survives relaunches: if the user last used a
-    /// WiFi device, re-select it as soon as discovery finds it again.
+    /// WiFi or a specific wired device, re-select it as soon as discovery
+    /// (Bonjour / usbmuxd) finds it again.
     private func reselectSavedTarget() {
-        guard case .usb = target,
+        guard case .usb(udid: nil) = target,
               let saved = UserDefaults.standard.string(forKey: "lastTarget"),
               saved != "usb" else { return }
+        if saved.hasPrefix("usb:") {
+            let udid = String(saved.dropFirst(4))
+            if usbDevices.contains(where: { $0.udid == udid }), usbDevices.count > 1 {
+                target = .usb(udid: udid)
+                // Same transport either way — no restart needed.
+            }
+            return
+        }
         for result in discovered {
             if case .service(let name, _, _, _) = result.endpoint, name == saved {
                 target = .wifi(result)
@@ -162,8 +201,8 @@ final class SenderController: ObservableObject {
 
     func rememberTarget() {
         switch target {
-        case .usb:
-            UserDefaults.standard.set("usb", forKey: "lastTarget")
+        case .usb(let udid):
+            UserDefaults.standard.set(udid.map { "usb:\($0)" } ?? "usb", forKey: "lastTarget")
         case .wifi(let result):
             if case .service(let name, _, _, _) = result.endpoint {
                 UserDefaults.standard.set(name, forKey: "lastTarget")
@@ -173,19 +212,24 @@ final class SenderController: ObservableObject {
 
     func start() {
         guard !running else { return }
-        let endpoint: NWEndpoint
+        let transport: SenderTransport
         switch target {
-        case .usb:
+        case .usb(let udid):
             guard let portNum = UInt16(port) else { return }
-            endpoint = .hostPort(host: NWEndpoint.Host(host),
-                                 port: NWEndpoint.Port(rawValue: portNum)!)
+            if UserDefaults.standard.object(forKey: "host") != nil {
+                // Manual override: dial a plain TCP endpoint instead of usbmuxd.
+                transport = .tcp(.hostPort(host: NWEndpoint.Host(host),
+                                           port: NWEndpoint.Port(rawValue: portNum)!))
+            } else {
+                transport = .usb(udid: udid, port: portNum)
+            }
         case .wifi(let result):
-            endpoint = result.endpoint
+            transport = .tcp(result.endpoint)
         }
 
         running = true
         status = "Starting…"
-        let sender = MacSender(endpoint: endpoint, name: target.label, mode: mode, quality: quality)
+        let sender = MacSender(transport: transport, name: targetLabel(), mode: mode, quality: quality)
         sender.onStatus = { [weak self] text in
             self?.status = text
             Log.info("status: \(text)")
@@ -255,6 +299,19 @@ final class PermissionMonitor: ObservableObject {
         accessibility = AXIsProcessTrusted()
     }
 
+    /// Fire the system permission dialog on demand. macOS only shows each
+    /// dialog once per reset — after that the call just (re)registers the
+    /// app in System Settings, so the row exists to toggle manually.
+    func requestScreenRecording() {
+        CGRequestScreenCaptureAccess()
+        refresh()
+    }
+
+    func requestAccessibility() {
+        _ = InputInjector.ensureAccessibilityPermission()
+        refresh()
+    }
+
     static func openPrivacyPane(_ anchor: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
             NSWorkspace.shared.open(url)
@@ -314,9 +371,17 @@ struct ContentView: View {
             // Settings
             Form {
                 Picker("Connection", selection: $controller.target) {
-                    Text(ConnectionTarget.usb.label).tag(ConnectionTarget.usb)
+                    // Generic wired entry — dials the first attached device,
+                    // labeled with its name once usbmuxd/lockdown report it.
+                    Text(controller.usbLabel).tag(ConnectionTarget.usb(udid: nil))
+                    // Explicit per-device entries only matter with 2+ devices.
+                    if controller.usbDevices.count > 1 {
+                        ForEach(controller.usbDevices) { device in
+                            Text(device.label).tag(ConnectionTarget.usb(udid: device.udid))
+                        }
+                    }
                     ForEach(controller.discovered, id: \.self) { result in
-                        Text(ConnectionTarget.wifi(result).label)
+                        Text(ConnectionTarget.wifi(result).wifiLabel ?? "WiFi device")
                             .tag(ConnectionTarget.wifi(result))
                     }
                 }
@@ -372,13 +437,15 @@ struct ContentView: View {
                         "Screen Recording",
                         granted: permissions.screenRecording,
                         help: "Required to capture the display.",
-                        anchor: "Privacy_ScreenCapture"
+                        anchor: "Privacy_ScreenCapture",
+                        request: { permissions.requestScreenRecording() }
                     )
                     permissionRow(
                         "Accessibility",
                         granted: permissions.accessibility,
                         help: "Required for touch input from the device.",
-                        anchor: "Privacy_Accessibility"
+                        anchor: "Privacy_Accessibility",
+                        request: { permissions.requestAccessibility() }
                     )
                     // macOS offers no API to query Local Network access, so
                     // infer from discovery results and let the user check.
@@ -423,7 +490,8 @@ struct ContentView: View {
 
     @ViewBuilder
     private func permissionRow(_ title: String, granted: Bool, uncertain: Bool = false,
-                               help: String, anchor: String) -> some View {
+                               help: String, anchor: String,
+                               request: (() -> Void)? = nil) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Image(systemName: uncertain ? "questionmark.circle.fill"
                             : granted ? "checkmark.circle.fill" : "xmark.circle.fill")
@@ -438,6 +506,11 @@ struct ContentView: View {
             }
             Spacer()
             if uncertain || !granted {
+                if let request {
+                    Button("Grant…") { request() }
+                        .controlSize(.small)
+                        .help("Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under \(title) in System Settings — flip the toggle there.")
+                }
                 Button("Open Settings") {
                     PermissionMonitor.openPrivacyPane(anchor)
                 }

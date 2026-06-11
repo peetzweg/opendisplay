@@ -39,7 +39,8 @@ pipeline, USB transport, input injection) are already working.
   monitor (drag windows to it, arrange it in System Settings), not a mirror.
   Mirroring is also available as a mode.
 - 🔌 **USB-wired for lowest latency** — streams over the Lightning/USB-C
-  cable via `usbmux`; no network required, no WiFi jitter.
+  cable via macOS's built-in `usbmuxd`; plug in and go, no network, no
+  WiFi jitter, no helper tools.
 - 📶 **WiFi with zero config** — the iPhone advertises itself via Bonjour;
   pick it from a dropdown on the Mac.
 - 🔍 **Retina / HiDPI** — the virtual display matches the device panel
@@ -69,7 +70,8 @@ CGVirtualDisplay  ← macOS believes a monitor is attached
 ```
 
 The **phone listens and the Mac connects** — that ordering is what makes the
-exact same code work over USB (via `usbmux`/`iproxy`) and WiFi. The phone
+exact same code work over USB (via the `usbmuxd` daemon built into every
+macOS install) and WiFi. The phone
 announces its native panel size; the Mac creates a `CGVirtualDisplay` at
 exactly half that in points (@2x HiDPI) and streams the pixels back.
 
@@ -113,7 +115,7 @@ account ($99/yr) removes that limit.
 ### Prerequisites
 
 ```sh
-brew install xcodegen libimobiledevice   # project generation + USB tunnel
+brew install xcodegen   # project generation
 ```
 
 Xcode 15+ and a free or paid Apple developer account (to sideload the iOS
@@ -140,8 +142,9 @@ under Membership, or just pick your team in Xcode's Signing pane.)
 ### Run (USB — recommended)
 
 1. Install + open **OpenSidecar** on the iPhone (it listens on port 9000).
-2. On the Mac, run `./run.sh` — starts the `iproxy` USB tunnel and the Mac
-   app, which auto-connects.
+2. On the Mac, run `./run.sh` (or just open the app) — it talks to macOS's
+   built-in `usbmuxd` directly and auto-connects over the cable. No tunnel
+   tools needed.
 3. Grant **Screen Recording** (for capture) and **Accessibility** (for touch)
    when macOS asks — one time each.
 4. Drag a window onto your new display. Done.
@@ -221,7 +224,6 @@ The capture/streaming pipeline itself uses only public APIs.
 Tracked as [roadmap issues](https://github.com/peetzweg/opensidecar/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap) — pick one up if you'd like to contribute!
 
 **Connectivity & distribution**
-- [#3](https://github.com/peetzweg/opensidecar/issues/3) Built-in USB connectivity — plug in and go, no helper tools
 - [#16](https://github.com/peetzweg/opensidecar/issues/16) Encrypted WiFi transport with pairing code
 - [ ] App Store release of the iOS app + notarized Mac downloads
 
@@ -246,7 +248,7 @@ Tracked as [roadmap issues](https://github.com/peetzweg/opensidecar/issues?q=is%
 - [#14](https://github.com/peetzweg/opensidecar/issues/14) Remote access beyond the local network
 - [#15](https://github.com/peetzweg/opensidecar/issues/15) Additional client platforms
 
-Done: prebuilt releases, WiFi via Bonjour, portrait mode, touch + two-finger scroll, performance overlay, iPad support.
+Done: prebuilt releases, built-in USB connectivity (no helper tools), WiFi via Bonjour, portrait mode, touch + two-finger scroll, performance overlay, iPad support.
 
 ## Contributing
 

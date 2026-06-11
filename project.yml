@@ -19,6 +19,7 @@ targets:
       path: Mac/Info.plist
       properties:
         NSPrincipalClass: NSApplication
+        CFBundleDisplayName: $(BUNDLE_DISPLAY_NAME)
         LSUIElement: true
         NSLocalNetworkUsageDescription: OpenSidecar connects to your iPad or iPhone over the local network in WiFi mode.
         NSBonjourServices: ["_opensidecar._tcp"]
@@ -27,9 +28,20 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: sh.peet.opensidecar.mac
         PRODUCT_NAME: OpenSidecar
+        BUNDLE_DISPLAY_NAME: OpenSidecar
         SWIFT_OBJC_BRIDGING_HEADER: Mac/OpenSidecarMac-Bridging-Header.h
         ENABLE_HARDENED_RUNTIME: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        # Local dev builds get their own identity: TCC keys permission
+        # grants by bundle ID + code signature, so a Debug build sharing
+        # the release bundle ID knocks out the release app's Screen
+        # Recording/Accessibility grants every time the binary changes.
+        # The distinct display name keeps the two telling apart in the
+        # System Settings permission lists.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: sh.peet.opensidecar.mac.debug
+          BUNDLE_DISPLAY_NAME: OpenSidecar Dev
   OpenSidecariOS:
     type: application
     platform: iOS
