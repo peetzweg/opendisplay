@@ -161,7 +161,9 @@ struct PerfOverlay: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 14) {
+            // Metrics wrap onto extra rows when the width doesn't fit —
+            // portrait iPhone is ~390pt, far less than one full row.
+            FlowLayout(hSpacing: 14, vSpacing: 8) {
                 // Transport badge — the question "is this cable or WiFi?"
                 Text(stats.transport)
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -207,18 +209,27 @@ struct PerfOverlay: View {
                 }
                 metric("res", "\(Int(videoSize.width))×\(Int(videoSize.height))")
             }
-            HStack(spacing: 14) {
-                graph("latency ms (cap→display)",
-                      BarGraph(samples: stats.e2eSamples, ceiling: 80,
-                               good: 25, warn: 40, reference: nil))
-                graph("frame interval ms",
-                      BarGraph(samples: stats.samples, ceiling: 60,
-                               good: 25, warn: 50, reference: 16.7))
+            // Two graphs side by side where they fit (landscape), stacked
+            // where they don't (portrait).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) { graphs }
+                VStack(spacing: 8) { graphs }
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 8)
+    }
+
+    @ViewBuilder
+    private var graphs: some View {
+        graph("latency ms (cap→display)",
+              BarGraph(samples: stats.e2eSamples, ceiling: 80,
+                       good: 25, warn: 40, reference: nil))
+        graph("frame interval ms",
+              BarGraph(samples: stats.samples, ceiling: 60,
+                       good: 25, warn: 50, reference: 16.7))
     }
 
     private func metric(_ label: String, _ value: String) -> some View {
@@ -238,6 +249,50 @@ struct PerfOverlay: View {
             Text(label)
                 .font(.system(size: 8, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+}
+
+/// Left-aligned wrapping row: children flow onto as many rows as the
+/// proposed width requires. Keeps the perf overlay inside the screen in
+/// portrait instead of clipping off both edges.
+struct FlowLayout: Layout {
+    var hSpacing: CGFloat = 14
+    var vSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews,
+                      cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0
+        var rowHeight: CGFloat = 0, width: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + vSpacing
+                rowHeight = 0
+            }
+            x += size.width + hSpacing
+            rowHeight = max(rowHeight, size.height)
+            width = max(width, x - hSpacing)
+        }
+        return CGSize(width: width, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,
+                       subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + vSpacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += size.width + hSpacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }
