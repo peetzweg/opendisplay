@@ -68,6 +68,9 @@ struct PhoneInfo: Decodable {
     let pixelsHigh: Int
     let scale: Double
     let device: String?   // "iPad" / "iPhone" (older receivers omit it)
+    let id: String?       // per-install identity (older receivers omit it) —
+                          // lets the controller match the same physical device
+                          // across USB and WiFi
 
     var kind: String { device ?? "device" }
 }
@@ -90,6 +93,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // recording indicator all torn down) instead of dialing forever or
     // silently coming back over a different transport.
     @MainActor var onDisconnected: (() -> Void)?
+    // Fired on every hello — carries the receiver's install id so the
+    // controller can deduplicate USB/WiFi sessions to the same device.
+    @MainActor var onHello: ((PhoneInfo) -> Void)?
 
     private var stream: SCStream?
     private var encoder: VTCompressionSession?
@@ -242,8 +248,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             ? CGSize(width: 147, height: 68)
             : CGSize(width: 68, height: 147)
 
-        let vd = await MainActor.run { [endpointName, displaySerial] in
-            VirtualDisplay(name: "OpenSidecar — \(endpointName)",
+        // USB sessions can start before lockdown resolves the device name —
+        // fall back to the kind from the hello rather than the generic label.
+        let displayName = endpointName.hasPrefix("iPhone / iPad")
+            ? "OpenSidecar — \(info.kind)"
+            : "OpenSidecar — \(endpointName)"
+        let vd = await MainActor.run { [displaySerial] in
+            VirtualDisplay(name: displayName,
                            pointsWide: pointsWide, pointsHigh: pointsHigh,
                            sizeInMillimeters: mm, serialNum: displaySerial)
         }
@@ -696,6 +707,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let info = try? JSONDecoder().decode(PhoneInfo.self, from: payload) {
                 let previous = lastHello
                 lastHello = info
+                Task { @MainActor in self.onHello?(info) }
                 if let continuation = helloContinuation {
                     helloContinuation = nil
                     continuation.resume(returning: info)

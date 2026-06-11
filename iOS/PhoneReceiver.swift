@@ -144,6 +144,27 @@ final class PhoneReceiver: ObservableObject {
     // the real name host-side via lockdownd regardless.
     var serviceName = "OpenSidecar"
 
+    // Stable per-install identity, advertised in the Bonjour TXT record and
+    // sent in every hello. The Mac uses it to recognize "same device, other
+    // transport" — the service name can't serve that role since it's
+    // user-editable, and iOS offers no public API for the hardware UDID
+    // that usbmuxd reports.
+    static let installID: String = {
+        if let existing = UserDefaults.standard.string(forKey: "installID") {
+            return existing
+        }
+        let fresh = UUID().uuidString
+        UserDefaults.standard.set(fresh, forKey: "installID")
+        return fresh
+    }()
+
+    private var advertisedService: NWListener.Service {
+        var txt = NWTXTRecord()
+        txt["id"] = Self.installID
+        return NWListener.Service(name: serviceName, type: "_opensidecar._tcp",
+                                  domain: nil, txtRecord: txt)
+    }
+
     /// Update the advertised name and re-publish if already listening.
     func setServiceName(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -152,8 +173,7 @@ final class PhoneReceiver: ObservableObject {
             guard resolved != self.serviceName else { return }
             self.serviceName = resolved
             if self.listener != nil {
-                self.listener?.service = NWListener.Service(
-                    name: resolved, type: "_opensidecar._tcp")
+                self.listener?.service = self.advertisedService
                 Log.info("re-advertising as \"\(resolved)\"")
             }
         }
@@ -228,7 +248,7 @@ final class PhoneReceiver: ObservableObject {
         }
         // Advertise on the local network so the Mac can discover us for WiFi
         // mode (USB/usbmux connects straight to the port and ignores this).
-        listener?.service = NWListener.Service(name: serviceName, type: "_opensidecar._tcp")
+        listener?.service = advertisedService
         listener?.newConnectionHandler = { [weak self] conn in
             guard let self else { return }
             Log.info("new connection from \(String(describing: conn.endpoint))")
@@ -368,6 +388,7 @@ final class PhoneReceiver: ObservableObject {
             "pixelsHigh": devicePixelsHigh,
             "scale": deviceScale,
             "device": UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
+            "id": Self.installID,
         ], on: conn)
         Log.info("hello sent")
     }

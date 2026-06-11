@@ -111,6 +111,9 @@ final class DeviceSession: ObservableObject, Identifiable {
     @Published var status = "Starting…"
     @Published var framesSent = 0
     @Published var mbps = 0.0
+    // Receiver's per-install identity (from hello) — the key for matching
+    // the same physical device across USB and WiFi.
+    var deviceID: String?
 
     init(id: String, target: ConnectionTarget, name: String, sender: MacSender) {
         self.id = id
@@ -168,6 +171,11 @@ final class SenderController: ObservableObject {
     private let autoConnectEnabled = UserDefaults.standard.object(forKey: "autostart") == nil
         || UserDefaults.standard.bool(forKey: "autostart")
 
+    // Bonjour usually reports devices before usbmuxd does — hold WiFi
+    // auto-connects briefly at launch so a cabled device is dialed over
+    // USB first instead of connecting via WiFi and migrating a second later.
+    private var wifiAutoConnectArmed = false
+
     init() {
         startBrowsing()
         usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
@@ -175,10 +183,16 @@ final class SenderController: ObservableObject {
             self.usbDevices = devices
             self.autoConnect()
         }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            self.wifiAutoConnectArmed = true
+            self.autoConnect()
+        }
     }
 
     private func startBrowsing() {
-        let browser = NWBrowser(for: .bonjour(type: "_opensidecar._tcp", domain: nil), using: .tcp)
+        // TXT records carry the receiver's install id (new receivers).
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_opensidecar._tcp", domain: nil), using: .tcp)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -195,11 +209,46 @@ final class SenderController: ObservableObject {
         for device in usbDevices where !usbDisabled.contains("usb:\(device.udid)") {
             connect(to: .usb(udid: device.udid))
         }
+        // The same physical device can be reachable over both transports —
+        // its Bonjour service name equals its lockdown DeviceName. The
+        // receiver accepts ONE connection (new replaces old), so dialing
+        // both makes the transports steal the link from each other forever.
+        // Prefer USB; WiFi auto-connect waits until all wired names are
+        // resolved (lockdown is async) so a cabled device is never grabbed
+        // over WiFi in the launch race.
+        // Reconcile: a WiFi session whose device is now cabled (names resolve
+        // async, so this can be discovered late) hands over to USB.
+        for session in sessions where reachableOverUSB(session.target) {
+            Log.info("\(session.id) is reachable over USB — handing over to the cable")
+            end(session, keepRemembered: true)
+        }
+        guard wifiAutoConnectArmed,
+              !usbDevices.contains(where: { $0.name == nil }) else { return }
         for result in discovered {
             let target = ConnectionTarget.wifi(result)
-            if wifiRemembered.contains(target.sessionID) {
+            if wifiRemembered.contains(target.sessionID), !reachableOverUSB(target) {
                 connect(to: target)
             }
+        }
+    }
+
+    /// True when a WiFi target is the same physical device as one already
+    /// served over the cable. Strong match: install id from the Bonjour TXT
+    /// record vs the id the USB session's hello announced (survives renamed
+    /// services). Fallback for old receivers: lockdown device name equals
+    /// the service name.
+    private func reachableOverUSB(_ target: ConnectionTarget) -> Bool {
+        guard case .wifi(let result) = target,
+              case .service(let name, _, _, _) = result.endpoint else { return false }
+        if case .bonjour(let txt) = result.metadata, let installID = txt["id"],
+           sessions.contains(where: { session in
+               if case .usb = session.target { return session.deviceID == installID }
+               return false
+           }) {
+            return true
+        }
+        return usbDevices.contains {
+            $0.name == name && !usbDisabled.contains("usb:\($0.udid)")
         }
     }
 
@@ -234,6 +283,17 @@ final class SenderController: ObservableObject {
         let id = target.sessionID
         guard session(for: id) == nil else { return }
 
+        // One session per physical device: a WiFi dial to a device that's
+        // already streaming over the cable would steal its connection.
+        if reachableOverUSB(target) { return }
+        // Conversely, plugging in a device that streams over WiFi upgrades
+        // it to USB: drop the WiFi session, the cable takes over.
+        if case .usb(let udid?) = target,
+           let usbName = usbDevices.first(where: { $0.udid == udid })?.name,
+           let wifiSession = sessions.first(where: { $0.id == "wifi:\(usbName)" }) {
+            end(wifiSession, keepRemembered: true)
+        }
+
         // Reconnecting a device clears its "don't auto-connect" state.
         switch target {
         case .usb: usbDisabled.remove(id)
@@ -262,6 +322,12 @@ final class SenderController: ObservableObject {
         sender.onStatus = { [weak session] text in
             session?.status = text
             Log.info("status[\(id)]: \(text)")
+        }
+        sender.onHello = { [weak self, weak session] info in
+            session?.deviceID = info.id
+            // A USB session learning its identity may reveal a WiFi
+            // duplicate to hand over — reconcile.
+            self?.autoConnect()
         }
         sender.onStats = { [weak session] frames, mbps in
             session?.framesSent = frames
@@ -304,6 +370,9 @@ final class SenderController: ObservableObject {
     private func end(_ session: DeviceSession, keepRemembered: Bool) {
         session.sender.stop()
         sessions.removeAll { $0.id == session.id }
+        // A USB session ending may unblock the WiFi fallback for the same
+        // device (and vice versa) — re-run the policy.
+        if keepRemembered { autoConnect() }
     }
 
     /// Mode/quality apply per-pipeline at construction — rebuild every session.
@@ -339,6 +408,10 @@ final class SenderController: ObservableObject {
         for result in discovered {
             let target = ConnectionTarget.wifi(result)
             guard !seen.contains(target.sessionID) else { continue }
+            // Same physical device as an attached USB entry: one row only —
+            // the wired one. The WiFi row reappears as a fallback the moment
+            // the cable is gone.
+            if reachableOverUSB(target) { continue }
             entries.append(DeviceEntry(id: target.sessionID, name: label(for: target), target: target))
             seen.insert(target.sessionID)
         }
