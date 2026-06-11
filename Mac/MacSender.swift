@@ -423,6 +423,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         everConnected = true
         disconnectedSince = nil
         needsKeyframe = true   // new peer needs SPS/PPS + IDR
+        // A reconnect can recreate the phone's video view with no cursor
+        // sprite; the sprite is otherwise only sent on shape change, so the
+        // cursor would stay invisible until the user hovers something that
+        // changes it. Reset the dedup state to re-send sprite + position to
+        // the fresh peer — the cursor analogue of forcing a keyframe.
+        lastCursorPNGHash = 0
+        lastCursorSent = (-1, -1, false)
         lastReceived = Date()  // fresh grace period for the watchdog
         receiveControl(on: conn)
         Task { await self.status("Connected to \(self.endpointName)") }
