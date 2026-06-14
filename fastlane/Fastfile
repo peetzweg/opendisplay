@@ -18,6 +18,13 @@ platform :mac do
       app_identifier: "com.peetzweg.opensidecar.mac",
       readonly:       is_ci
     )
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path:                  "OpenSidecar.xcodeproj",
+      code_sign_identity:    "Developer ID Application",
+      profile_name:          "match Direct com.peetzweg.opensidecar.mac",
+      targets:               ["OpenSidecarMac"]
+    )
     build_mac_app(
       project:          "OpenSidecar.xcodeproj",
       scheme:           "OpenSidecarMac",
@@ -43,6 +50,13 @@ platform :ios do
       app_identifier: "com.peetzweg.opensidecar.ios",
       api_key:        key,
       readonly:       is_ci
+    )
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path:                  "OpenSidecar.xcodeproj",
+      code_sign_identity:    "Apple Distribution",
+      profile_name:          "match AppStore com.peetzweg.opensidecar.ios",
+      targets:               ["OpenSidecariOS"]
     )
     build_app(
       project:          "OpenSidecar.xcodeproj",
