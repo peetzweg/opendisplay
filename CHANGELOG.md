@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/peetzweg/opensidecar/compare/v0.6.2...v0.6.3) (2026-06-14)
+
+
+### Bug Fixes
+
+* use manual code signing for iOS Release to work with match ([200f665](https://github.com/peetzweg/opensidecar/commit/200f66571f159aff875543cbf87db3f5ffbc0752))
+
 ## [0.6.2](https://github.com/peetzweg/opensidecar/compare/v0.6.1...v0.6.2) (2026-06-14)
 
 
