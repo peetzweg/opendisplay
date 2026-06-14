@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/peetzweg/opensidecar/compare/v0.6.1...v0.6.2) (2026-06-14)
+
+
+### Bug Fixes
+
+* add explicit schemes to project.yml and restore SSH deploy key workflow ([9262883](https://github.com/peetzweg/opensidecar/commit/9262883fb656062054887479fa9fee7496dec1cd))
+
 ## [0.6.1](https://github.com/peetzweg/opensidecar/compare/v0.6.0...v0.6.1) (2026-06-14)
 
 
