@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.4](https://github.com/peetzweg/opensidecar/compare/v0.6.3...v0.6.4) (2026-06-14)
+
+
+### Bug Fixes
+
+* wire match profiles to xcodebuild via update_code_signing_settings ([ea0fcdd](https://github.com/peetzweg/opensidecar/commit/ea0fcddad566170d892391287dc1c83d349d5b71))
+
 ## [0.6.3](https://github.com/peetzweg/opensidecar/compare/v0.6.2...v0.6.3) (2026-06-14)
 
 
