@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/peetzweg/opensidecar/compare/v0.6.0...v0.6.1) (2026-06-14)
+
+
+### Bug Fixes
+
+* trigger release build with split CI jobs ([99100a6](https://github.com/peetzweg/opensidecar/commit/99100a6087d41db461bf45b674f84f60a94ddb81))
+
 ## [0.6.0](https://github.com/peetzweg/opensidecar/compare/v0.5.0...v0.6.0) (2026-06-14)
 
 
