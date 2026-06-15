@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.11](https://github.com/peetzweg/opensidecar/compare/v0.6.10...v0.6.11) (2026-06-15)
+
+
+### Bug Fixes
+
+* combined icon format with rendering-intent + CFBundleIconName ([9b606c1](https://github.com/peetzweg/opensidecar/commit/9b606c1646626cac1d48bd6b73344281cbb7e63f))
+
 ## [0.6.10](https://github.com/peetzweg/opensidecar/compare/v0.6.9...v0.6.10) (2026-06-15)
 
 
