@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.13](https://github.com/peetzweg/opensidecar/compare/v0.6.12...v0.6.13) (2026-06-15)
+
+
+### Bug Fixes
+
+* add standalone legacy icon PNGs to fix altool 90022/90023/90713 ([783ecdd](https://github.com/peetzweg/opensidecar/commit/783ecddc5c214e8b385399159b935262af0fbb6f))
+
 ## [0.6.12](https://github.com/peetzweg/opensidecar/compare/v0.6.11...v0.6.12) (2026-06-15)
 
 
