@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.9](https://github.com/peetzweg/opensidecar/compare/v0.6.8...v0.6.9) (2026-06-15)
+
+
+### Bug Fixes
+
+* add universal ios-marketing icon alongside per-size entries ([0075d95](https://github.com/peetzweg/opensidecar/commit/0075d95ba31c8286106e106a0591fc48ecbc6dd8))
+
 ## [0.6.8](https://github.com/peetzweg/opensidecar/compare/v0.6.7...v0.6.8) (2026-06-15)
 
 
