@@ -17,6 +17,11 @@ settings:
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.9"
+    # Version defaults for local builds. CI overrides both via xcargs:
+    # MARKETING_VERSION from the release tag, CURRENT_PROJECT_VERSION from
+    # the GitHub Actions run number (monotonic, keeps TestFlight builds unique).
+    MARKETING_VERSION: "0.0.0"
+    CURRENT_PROJECT_VERSION: "1"
 targets:
   OpenSidecarMac:
     type: application
@@ -29,6 +34,8 @@ targets:
       properties:
         NSPrincipalClass: NSApplication
         CFBundleDisplayName: $(BUNDLE_DISPLAY_NAME)
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         NSLocalNetworkUsageDescription: OpenSidecar connects to your iPad or iPhone over the local network in WiFi mode.
         NSBonjourServices: ["_opensidecar._tcp"]
@@ -63,6 +70,8 @@ targets:
       properties:
         CFBundleDisplayName: OpenSidecar
         CFBundleIconName: AppIcon
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         UIRequiresFullScreen: true
         NSLocalNetworkUsageDescription: OpenSidecar advertises itself on the local network so your Mac can connect over WiFi.

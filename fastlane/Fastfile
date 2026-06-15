@@ -7,6 +7,18 @@ def asc_api_key
   )
 end
 
+# CI passes the release version + a monotonic build number through the
+# environment; turn them into xcodebuild overrides. Empty when unset, so
+# local builds fall back to the defaults in project.yml.
+def version_xcargs
+  args = []
+  version = ENV["APP_MARKETING_VERSION"].to_s
+  build   = ENV["APP_BUILD_NUMBER"].to_s
+  args << "MARKETING_VERSION=#{version}" unless version.empty?
+  args << "CURRENT_PROJECT_VERSION=#{build}" unless build.empty?
+  args.join(" ")
+end
+
 platform :mac do
   desc "Build Developer ID-signed, notarized macOS app for direct distribution"
   lane :build_release do
@@ -32,7 +44,8 @@ platform :mac do
       configuration:    "Release",
       export_method:    "developer-id",
       output_directory: "build/export",
-      output_name:      "OpenSidecar"
+      output_name:      "OpenSidecar",
+      xcargs:           version_xcargs
     )
     notarize(
       package:   "build/export/OpenSidecar.app",
@@ -66,7 +79,8 @@ platform :ios do
       configuration:    "Release",
       export_method:    "app-store",
       output_directory: "build/export",
-      output_name:      "OpenSidecariOS"
+      output_name:      "OpenSidecariOS",
+      xcargs:           version_xcargs
     )
     upload_to_testflight(
       api_key:                           key,
