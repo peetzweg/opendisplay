@@ -8,6 +8,12 @@ permissions:
   contents: write
   pull-requests: write
 
+# Serialize release runs on the same ref so two quick merges can't race two
+# uploads. Never cancel an in-flight run — it may be mid-upload to TestFlight.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
@@ -15,7 +21,7 @@ jobs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: rp
         with:
           release-type: simple
@@ -25,7 +31,7 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -41,7 +47,7 @@ jobs:
         run: xcodegen generate
 
       - name: Set up SSH for match certs repo
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.MATCH_DEPLOY_KEY }}
 
@@ -53,14 +59,18 @@ jobs:
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
-        run: bundle exec fastlane ios beta
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          APP_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          export APP_MARKETING_VERSION="${TAG_NAME#v}"
+          bundle exec fastlane ios beta
 
   build-mac:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -76,7 +86,7 @@ jobs:
         run: xcodegen generate
 
       - name: Set up SSH for match certs repo
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.MATCH_DEPLOY_KEY }}
 
@@ -88,7 +98,11 @@ jobs:
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
-        run: bundle exec fastlane mac build_release
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          APP_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          export APP_MARKETING_VERSION="${TAG_NAME#v}"
+          bundle exec fastlane mac build_release
 
       - name: Zip notarized macOS app
         run: |
