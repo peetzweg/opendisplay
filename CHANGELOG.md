@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.8](https://github.com/peetzweg/opensidecar/compare/v0.6.7...v0.6.8) (2026-06-15)
+
+
+### Bug Fixes
+
+* use Xcode 16+ universal app icon format for iOS ([fdcf118](https://github.com/peetzweg/opensidecar/commit/fdcf11894f4962d288fd54e1a6b3c16c8a551e5a))
+
 ## [0.6.7](https://github.com/peetzweg/opensidecar/compare/v0.6.6...v0.6.7) (2026-06-15)
 
 
