@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.14](https://github.com/peetzweg/opensidecar/compare/v0.6.13...v0.6.14) (2026-06-15)
+
+
+### Bug Fixes
+
+* add CFBundleIcons with both IconName and IconFiles to resolve 90022/90023 ([271bd7a](https://github.com/peetzweg/opensidecar/commit/271bd7a5edf4277730dc3da4cc7f73c3f9398848))
+* move legacy icons to iOS/ root, drop CFBundleIcons ([10e5b51](https://github.com/peetzweg/opensidecar/commit/10e5b51a1d313f8b43ff49efe4ed5f7e5f42ef3a))
+
 ## [0.6.13](https://github.com/peetzweg/opensidecar/compare/v0.6.12...v0.6.13) (2026-06-15)
 
 
