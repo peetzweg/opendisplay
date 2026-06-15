@@ -40,6 +40,11 @@ targets:
         NSLocalNetworkUsageDescription: OpenSidecar connects to your iPad or iPhone over the local network in WiFi mode.
         NSBonjourServices: ["_opensidecar._tcp"]
         LSApplicationCategoryType: public.app-category.utilities
+        # Export compliance: the app uses no non-exempt encryption. It ships no
+        # proprietary crypto, and any transport security it gains (planned TLS via
+        # NWProtocolTLS — see issue #16) is the standard encryption provided by the
+        # operating system, which is exempt. See docs/export-compliance.html.
+        ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac
@@ -76,6 +81,11 @@ targets:
         UIRequiresFullScreen: true
         NSLocalNetworkUsageDescription: OpenSidecar advertises itself on the local network so your Mac can connect over WiFi.
         NSBonjourServices: ["_opensidecar._tcp"]
+        # Export compliance: the app uses no non-exempt encryption. It ships no
+        # proprietary crypto, and any transport security it gains (planned TLS via
+        # NWProtocolTLS — see issue #16) is the standard encryption provided by the
+        # operating system, which is exempt. See docs/export-compliance.html.
+        ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
