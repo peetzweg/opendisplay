@@ -63,6 +63,16 @@ targets:
       properties:
         CFBundleDisplayName: OpenSidecar
         CFBundleIconName: AppIcon
+        CFBundleIcons:
+          CFBundlePrimaryIcon:
+            CFBundleIconFiles:
+              - AppIcon60x60
+            CFBundleIconName: AppIcon
+        "CFBundleIcons~ipad":
+          CFBundlePrimaryIcon:
+            CFBundleIconFiles:
+              - AppIcon76x76
+            CFBundleIconName: AppIcon
         UILaunchScreen: {}
         UIRequiresFullScreen: true
         NSLocalNetworkUsageDescription: OpenSidecar advertises itself on the local network so your Mac can connect over WiFi.
