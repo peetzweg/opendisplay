@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.15](https://github.com/peetzweg/opensidecar/compare/v0.6.14...v0.6.15) (2026-06-15)
+
+
+### Bug Fixes
+
+* use full explicit iOS app icon set for TestFlight validation ([42569e3](https://github.com/peetzweg/opensidecar/commit/42569e381538eceaf8c8c070332b4939788d0338))
+
 ## [0.6.14](https://github.com/peetzweg/opensidecar/compare/v0.6.13...v0.6.14) (2026-06-15)
 
 
