@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.12](https://github.com/peetzweg/opensidecar/compare/v0.6.11...v0.6.12) (2026-06-15)
+
+
+### Bug Fixes
+
+* try universal/ios without size or rendering-intent ([d3fa276](https://github.com/peetzweg/opensidecar/commit/d3fa2769ee607b3c6803810aa549c769803b5778))
+
 ## [0.6.11](https://github.com/peetzweg/opensidecar/compare/v0.6.10...v0.6.11) (2026-06-15)
 
 
