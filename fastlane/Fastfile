@@ -10,6 +10,7 @@ end
 platform :mac do
   desc "Build Developer ID-signed, notarized macOS app for direct distribution"
   lane :build_release do
+    setup_ci if is_ci
     key = asc_api_key
     # Developer ID certs can't be managed via ASC API key — Apple limitation.
     # CI uses readonly: true so it just reads from the git repo, no Apple auth needed.
@@ -22,7 +23,7 @@ platform :mac do
       use_automatic_signing: false,
       path:                  "OpenSidecar.xcodeproj",
       code_sign_identity:    "Developer ID Application",
-      profile_name:          "match Direct com.peetzweg.opensidecar.mac",
+      profile_name:          "match Direct com.peetzweg.opensidecar.mac macos",
       targets:               ["OpenSidecarMac"]
     )
     build_mac_app(
@@ -44,6 +45,7 @@ end
 platform :ios do
   desc "Build and upload to TestFlight"
   lane :beta do
+    setup_ci if is_ci
     key = asc_api_key
     match(
       type:           "appstore",
