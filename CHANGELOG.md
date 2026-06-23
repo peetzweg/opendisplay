@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/peetzweg/opensidecar/compare/v0.7.1...v0.7.2) (2026-06-23)
+
+
+### Bug Fixes
+
+* cd the DMG shell block to the repo root instead of expanding paths ([557bbf9](https://github.com/peetzweg/opensidecar/commit/557bbf9f5d7f9d75cd32b763a3c1347a843d6fa5))
+
 ## [0.7.1](https://github.com/peetzweg/opensidecar/compare/v0.7.0...v0.7.1) (2026-06-23)
 
 
