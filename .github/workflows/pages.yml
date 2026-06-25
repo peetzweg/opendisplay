@@ -4,7 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "docs/**"
+      - "src/**"
+      - "public/**"
+      - "tools/prerender.mjs"
+      - "index.html"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "vite.config.ts"
+      - "tsconfig.json"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -25,6 +32,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -804,6 +804,13 @@ final class PhoneReceiver: ObservableObject {
     private func setConnected(_ value: Bool) {
         DispatchQueue.main.async { self.connected = value }
         if !value { setStatus("Listening on :9000") }
-        else { setStatus("Connected") }
+        else {
+            setStatus("Connected")
+            // Remember the first ever successful connection to a Mac so the
+            // first-run onboarding hint never reappears (issue #49).
+            if !UserDefaults.standard.bool(forKey: "hasConnectedBefore") {
+                UserDefaults.standard.set(true, forKey: "hasConnectedBefore")
+            }
+        }
     }
 }

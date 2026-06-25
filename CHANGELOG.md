@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.7.2](https://github.com/peetzweg/opensidecar/compare/v0.7.1...v0.7.2) (2026-06-23)
+
+
+### Bug Fixes
+
+* cd the DMG shell block to the repo root instead of expanding paths ([557bbf9](https://github.com/peetzweg/opensidecar/commit/557bbf9f5d7f9d75cd32b763a3c1347a843d6fa5))
+
+## [0.7.1](https://github.com/peetzweg/opensidecar/compare/v0.7.0...v0.7.1) (2026-06-23)
+
+
+### Bug Fixes
+
+* use absolute paths when packaging the macOS DMG ([04860c7](https://github.com/peetzweg/opensidecar/commit/04860c7cf3549cbfb5b2e881cd017a3493df8c6e))
+
+## [0.7.0](https://github.com/peetzweg/opensidecar/compare/v0.6.16...v0.7.0) (2026-06-23)
+
+
+### Features
+
+* **iOS:** first-run onboarding hint that the Mac app is required ([3d012f3](https://github.com/peetzweg/opensidecar/commit/3d012f30024f946b04064716f143bdf60762820a)), closes [#49](https://github.com/peetzweg/opensidecar/issues/49)
+* new app icon + branding (laptop + display, happy-Mac faces) ([65dabce](https://github.com/peetzweg/opensidecar/commit/65dabce97541a0c470f5eadd3942e09eae664190))
+* ship notarized .dmg + wire TestFlight link ([#48](https://github.com/peetzweg/opensidecar/issues/48)) ([1c10ce9](https://github.com/peetzweg/opensidecar/commit/1c10ce964a62180a4aea427ecf8965ab706b9045))
+* ship notarized .dmg, wire TestFlight link ([#48](https://github.com/peetzweg/opensidecar/issues/48)) ([e902f14](https://github.com/peetzweg/opensidecar/commit/e902f14f30404f0b84600bb307591c7c6491af70))
+
+
+### Bug Fixes
+
+* **docs:** restore horizontal padding on mobile for hero and table ([7b10044](https://github.com/peetzweg/opensidecar/commit/7b100441433b94680972fd8e2473e66ddb36240e))
+
+## [0.6.16](https://github.com/peetzweg/opensidecar/compare/v0.6.15...v0.6.16) (2026-06-15)
+
+
+### Bug Fixes
+
+* inject release version and unique build number into app builds ([924b464](https://github.com/peetzweg/opensidecar/commit/924b464f43d1170808b77e48448b6e2ecdd61ab4))
+
 ## [0.6.15](https://github.com/peetzweg/opensidecar/compare/v0.6.14...v0.6.15) (2026-06-15)
 
 

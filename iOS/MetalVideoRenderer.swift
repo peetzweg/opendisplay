@@ -148,9 +148,14 @@ final class MetalVideoRenderer {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
 
+        // CAMetalDrawable's presented handler is device-only; the Simulator
+        // SDK omits it. The handler only feeds the experimental Metal path's
+        // glass-time telemetry, so skipping it in the Simulator is harmless.
+        #if !targetEnvironment(simulator)
         drawable.addPresentedHandler { [weak self] d in
             self?.onPresented?(d.presentedTime, captureMs)
         }
+        #endif
         // Keep the source textures alive until the GPU is done with them.
         cmd.addCompletedHandler { _ in _ = cvY; _ = cvCbCr }
         cmd.present(drawable)

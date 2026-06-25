@@ -1,0 +1,221 @@
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #666666;
+  --faint: #999999;
+  --line: #e5e5e5;
+  --line-strong: #111111;
+  --accent: #0090fc;        /* logo blue */
+  --maxw: 1040px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.55;
+  font-size: 16px; -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+a { color: var(--fg); text-decoration: underline; text-underline-offset: 2px;
+    text-decoration-thickness: 1px; text-decoration-color: var(--line-strong); }
+a:hover { text-decoration-thickness: 2px; }
+
+/* ---- top nav ---- */
+nav { border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 10; }
+nav .wrap { display: flex; align-items: center; justify-content: space-between;
+  height: 60px; }
+nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 600;
+  letter-spacing: -0.01em; text-decoration: none; }
+nav .brand img { width: 26px; height: 26px; }
+nav .links { display: flex; gap: 22px; font-size: 0.9rem; }
+nav .links a { text-decoration: none; color: var(--muted); }
+nav .links a:hover { color: var(--fg); }
+nav .links a.gh { display: inline-flex; align-items: center; gap: 6px; }
+nav .gh-logo { width: 16px; height: 16px; fill: currentColor; display: block; }
+nav .gh-stars { font-variant-numeric: tabular-nums; }
+@media (max-width: 680px) { nav .links { display: none; } }
+
+/* ---- section scaffolding ---- */
+section { border-top: 1px solid var(--line); }
+section:first-of-type { border-top: 0; }
+/* Vertical only — horizontal padding comes from .wrap. Using the padding
+   shorthand here would reset .wrap's left/right padding to 0 (same
+   specificity, later rule wins), making content run edge-to-edge on mobile. */
+.sec { padding-top: 84px; padding-bottom: 84px; }
+.eyebrow { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 20px; }
+h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); line-height: 1.04;
+  letter-spacing: -0.035em; font-weight: 600; }
+h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.02em;
+  font-weight: 600; }
+
+/* ---- hero ---- */
+.hero { padding-top: 92px; padding-bottom: 84px; }   /* vertical only — see .sec note */
+.hero h1 { max-width: 30ch; }
+/* two fixed lines: "Use your <pill>" then a stable "as your Mac's second monitor."
+   l1 stays on one line (nowrap) so the rotating word's width never pushes l2 around */
+.hero h1 .l1 { display: block; white-space: nowrap; }
+.hero h1 .l2 { display: block; }
+/* straight brand-blue underline, thick with rounded tips */
+.hero h1 .u {
+  text-decoration: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='18' viewBox='0 0 300 18' preserveAspectRatio='none'%3E%3Cpath d='M4,9 L296,9' fill='none' stroke='%230090fc' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 100%;
+  background-size: 100% 0.4em;
+  padding-bottom: 0.1em;
+}
+.hero .tagline { font-size: 1.15rem; color: var(--muted); max-width: 64ch;
+  margin: 26px 0 0; }
+.meta { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
+  margin-top: 18px; letter-spacing: 0.02em; }
+.hero-support { margin-top: 16px; }
+.hero-support a { font-size: 0.9rem; color: var(--muted); text-decoration-color: var(--line); }
+.hero-support a:hover { color: var(--fg); text-decoration-color: var(--line-strong); }
+
+/* ---- rotating hero word (fancy TextRotate) ---- */
+/* minimal utility classes the component expects (we don't ship Tailwind) */
+.flex { display: flex; }
+.inline-flex { display: inline-flex; }
+.inline-block { display: inline-block; }
+.flex-wrap { flex-wrap: wrap; }
+.flex-col { flex-direction: column; }
+.w-full { width: 100%; }
+.whitespace-pre-wrap { white-space: pre-wrap; }
+.whitespace-pre { white-space: pre; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+/* the blue pill — note: must win over .flex's display, so it comes after */
+.rotator-pill { display: inline-flex; vertical-align: baseline;
+  background: var(--accent); color: #fff; border-radius: 0.16em;
+  padding: 0 0.18em; margin: 0 0.04em; overflow: hidden;
+  /* nudge the box so the white text sits optically centred on the line */
+  transform: translateY(0.06em); }
+/* each split level clips the sliding characters */
+.rotator-line { overflow: hidden; padding-bottom: 0.08em; }
+
+/* ---- download blocks ---- */
+.needs-both { margin-top: 44px; color: var(--muted); font-size: 0.98rem; }
+.needs-both strong { color: var(--fg); }
+.downloads { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+  margin-top: 18px; border: 1px solid var(--line); }
+.downloads > div { padding: 28px; }
+.downloads > div + div { border-left: 1px solid var(--line); }
+@media (max-width: 720px) {
+  .downloads { grid-template-columns: 1fr; }
+  .downloads > div + div { border-left: 0; border-top: 1px solid var(--line); }
+}
+.dl-head { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 6px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dl-head .step { color: var(--fg); border: 1px solid var(--line-strong); border-radius: 3px;
+  padding: 2px 7px; letter-spacing: 0.06em; }
+.dl-head .ver { color: var(--fg); text-transform: none; letter-spacing: 0; }
+.dl-sub { color: var(--muted); font-size: 0.86rem; margin-bottom: 18px; }
+
+.btn { display: inline-flex; align-items: center; gap: 8px; font: inherit;
+  font-weight: 600; font-size: 0.95rem; padding: 12px 22px; border-radius: 3px;
+  text-decoration: none; border: 1px solid var(--line-strong); cursor: pointer; }
+.btn.primary { background: var(--fg); color: var(--bg); }
+.btn.primary:hover { background: #000; }
+.btn.ghost { background: transparent; color: var(--fg); }
+.btn.ghost:hover { background: var(--fg); color: var(--bg); }
+.note { font-size: 0.84rem; color: var(--muted); margin-top: 14px; line-height: 1.5; }
+.note a { color: var(--muted); text-decoration-color: var(--line); }
+.sub { display: block; font-size: 0.84rem; color: var(--muted); margin-top: 12px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+
+/* App Store / TestFlight cluster */
+.ios-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.badge-wrap { display: inline-flex; flex-direction: column; gap: 4px; }
+.appstore-badge { height: 44px; width: auto; display: block; }
+.badge-wrap.disabled .appstore-badge { opacity: 0.32; filter: grayscale(1); }
+.badge-wrap .cap { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--faint); }
+.btn.disabled { opacity: 0.5; cursor: not-allowed; border-style: dashed; }
+
+/* ---- feature grid ---- */
+.fgrid { display: grid; grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--line); border-left: 1px solid var(--line);
+  margin-top: 36px; }
+.fcell { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  padding: 24px; }
+.fcell .n { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
+  display: block; margin-bottom: 12px; }
+.fcell h3 { font-size: 1.02rem; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
+.fcell p { color: var(--muted); font-size: 0.92rem; }
+@media (max-width: 860px) { .fgrid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .fgrid { grid-template-columns: 1fr; } }
+
+/* ---- "why" comparison rows ---- */
+.compare { border-top: 1px solid var(--line); margin-top: 28px; }
+/* 24px horizontal padding = the boxed OpenSidecar row's 2px border + 22px padding,
+   so every product name and description lines up with the highlighted one */
+.compare .row { display: grid; grid-template-columns: 150px 1fr; gap: 24px;
+  padding: 22px 24px; border-bottom: 1px solid var(--line); align-items: start; }
+.compare .row p { color: var(--muted); max-width: 80ch; }
+.compare .row .name { font-weight: 600; color: var(--fg); }
+.compare .row.highlight { border: 2px solid var(--accent); border-radius: 4px;
+  background: #fafafa; padding: 22px; margin-top: 10px; }
+@media (max-width: 560px) { .compare .row { grid-template-columns: 1fr; gap: 6px; } }
+.tbl-head { margin: 48px 0 16px; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; }
+
+/* ---- code ---- */
+pre { border: 1px solid var(--line); border-radius: 3px; padding: 20px;
+  overflow-x: auto; font-size: 0.84rem; line-height: 1.55; background: #fafafa;
+  margin-top: 8px; }
+code { font-family: var(--mono); }
+p code { font-size: 0.88em; background: #f2f2f2; padding: 1px 5px; border-radius: 3px; }
+
+/* ---- comparison table ---- */
+/* no outer frame — keep only the inner row lines (and the boxed OpenSidecar column) */
+.tbl-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.92rem; min-width: 660px; }
+th, td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+th:first-child, td:first-child { white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+/* product headers: same treatment as the product names in the compare rows above */
+thead th { text-align: center; font-size: 1rem; color: var(--fg); font-weight: 600; }
+tbody td:first-child { color: var(--muted); }
+.mark-yes { color: var(--fg); font-weight: 600; }
+.mark-no { color: var(--faint); }
+/* highlight the OpenSidecar column — framed in brand blue */
+th.os, td.os { border-left: 2px solid var(--accent); border-right: 2px solid var(--accent);
+  background: #fafafa; }
+thead th.os { border-top: 2px solid var(--accent); color: var(--fg); }
+tbody tr:last-child td.os { border-bottom: 2px solid var(--accent); }
+
+/* ---- FAQ ---- */
+.faq { border-top: 1px solid var(--line); }
+details { border-bottom: 1px solid var(--line); }
+summary { cursor: pointer; font-weight: 600; padding: 22px 0; list-style: none;
+  display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; font-family: var(--mono); color: var(--faint);
+  font-weight: 400; font-size: 1.2rem; }
+details[open] summary::after { content: "–"; }
+details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
+
+/* ---- support / ko-fi ---- */
+.support { text-align: center; }
+.support h2 { max-width: 22ch; margin: 0 auto; }
+.support p { color: var(--muted); max-width: 62ch; margin: 20px auto 30px; }
+
+/* ---- footer ---- */
+footer { border-top: 1px solid var(--line); padding: 48px 0 64px;
+  color: var(--muted); font-size: 0.9rem; }
+footer .links { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 14px; }
+footer .links a { color: var(--muted); text-decoration-color: var(--line); }
+footer .fine { color: var(--faint); font-size: 0.84rem; }
+
+/* ---- mobile: tighter gutters + less vertical air ---- */
+@media (max-width: 560px) {
+  .wrap { padding: 0 20px; }
+  .sec { padding-top: 56px; padding-bottom: 56px; }
+  .hero { padding-top: 56px; padding-bottom: 60px; }
+  .hero h1 .l1 { white-space: normal; }   /* let the long words wrap on small screens */
+  .downloads > div { padding: 22px; }
+  .fcell { padding: 20px; }
+}

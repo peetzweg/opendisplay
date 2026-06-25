@@ -1,0 +1,25 @@
+{
+  "name": "opensidecar-site",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "OpenSidecar landing page (Vite + React + motion). Builds into docs/ for GitHub Pages.",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr --emptyOutDir && node tools/prerender.mjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "motion": "^12.41.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.0"
+  }
+}

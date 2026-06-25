@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/icon.png" width="128" alt="OpenSidecar app icon" />
+<img src="public/icon.png" width="128" alt="OpenSidecar app icon" />
 
 # OpenSidecar
 
@@ -86,29 +86,18 @@ You need **two apps**: a Mac app (captures and sends) and an iOS app
 
 ### Prebuilt downloads (Mac)
 
-Grab `OpenSidecar-macOS.zip` from the
+Grab `OpenSidecar.dmg` from the
 [latest release](https://github.com/peetzweg/opensidecar/releases/latest).
-The app is ad-hoc signed (no paid developer certificate), so on first launch
-macOS will warn about an unidentified developer — **right-click → Open**, or:
-
-```sh
-xattr -d com.apple.quarantine OpenSidecar.app
-```
+The app is signed with a Developer ID certificate and notarized by Apple, so it
+opens with a plain double-click on macOS 14+ — no Gatekeeper warning. Open the
+`.dmg` and drag the app to Applications.
 
 ### iPhone app
 
-Apple doesn't allow distributing installable iOS builds without a paid
-developer program, so pick one:
-
-- **Build from source** (recommended): open the project in Xcode, select your
-  free Apple ID under Signing, hit Run. Takes ~2 minutes.
-- **Sideload the release `.ipa`**: each release includes
-  `OpenSidecar-iOS-unsigned.ipa`, which tools like
-  [AltStore](https://altstore.io) or Sideloadly can sign with your own
-  Apple ID and install.
-
-Free-account sideloads expire after 7 days and need a re-deploy; a paid
-account ($99/yr) removes that limit.
+- **TestFlight** (recommended): join the public beta at
+  [testflight.apple.com/join/3NYaY11c](https://testflight.apple.com/join/3NYaY11c).
+- **Build from source**: open the project in Xcode, select your free Apple ID
+  under Signing, hit Run. Takes ~2 minutes.
 
 ## Quick start (from source)
 

@@ -11,50 +11,77 @@
   <style>
     :root {
       --bg: #ffffff;
-      --bg2: #f5f5f7;
-      --fg: #1d1d1f;
-      --muted: #6e6e73;
-      --accent: #0071e3;
-      --card: #f5f5f7;
-      --border: #d2d2d7;
+      --fg: #111111;
+      --muted: #666666;
+      --faint: #999999;
+      --line: #e5e5e5;
+      --line-strong: #111111;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { -webkit-text-size-adjust: 100%; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg); color: var(--fg); line-height: 1.65;
+      background: var(--bg); color: var(--fg); line-height: 1.6;
+      font-size: 16px; -webkit-font-smoothing: antialiased;
     }
-    .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
-    header { padding: 64px 0 32px; text-align: center;
-      background: linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%); }
-    header img.logo { width: 72px; height: 72px; margin-bottom: 16px; }
-    h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); letter-spacing: -0.02em; }
-    .updated { color: var(--muted); font-size: 0.9rem; margin-top: 10px; }
-    main { padding: 40px 0 24px; }
-    h2 { font-size: 1.35rem; margin: 36px 0 12px; letter-spacing: -0.01em; }
-    p, li { color: var(--fg); margin-bottom: 12px; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 0 28px; }
+    a { color: var(--fg); text-decoration: underline; text-underline-offset: 2px;
+        text-decoration-thickness: 1px; text-decoration-color: var(--line-strong); }
+    a:hover { text-decoration-thickness: 2px; }
+
+    nav { border-bottom: 1px solid var(--line); }
+    nav .wrap { display: flex; align-items: center; gap: 10px; height: 60px; }
+    nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 600;
+      letter-spacing: -0.01em; text-decoration: none; }
+    nav .brand img { width: 26px; height: 26px; }
+
+    header { padding: 72px 0 36px; border-bottom: 1px solid var(--line); }
+    .eyebrow { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.14em;
+      text-transform: uppercase; color: var(--faint); margin-bottom: 18px; }
+    h1 { font-size: clamp(2rem, 5vw, 2.8rem); letter-spacing: -0.03em; font-weight: 600;
+      line-height: 1.05; }
+    .updated { color: var(--muted); font-size: 0.9rem; margin-top: 14px; }
+    main { padding: 16px 0 24px; }
+    h2 { font-size: 1.3rem; margin: 44px 0 14px; letter-spacing: -0.015em; font-weight: 600;
+      padding-top: 24px; border-top: 1px solid var(--line); }
+    p, li { color: var(--muted); margin-bottom: 12px; }
+    main > .wrap > p strong, li strong { color: var(--fg); }
     ul { padding-left: 22px; margin-bottom: 12px; }
     li { margin-bottom: 6px; }
-    .tldr { background: var(--card); border-radius: 14px; padding: 22px; margin-bottom: 8px; }
-    .tldr p { margin-bottom: 0; font-weight: 500; }
-    .note { background: var(--card); border-left: 3px solid var(--accent);
-      border-radius: 8px; padding: 14px 18px; color: var(--muted); font-size: 0.95rem; }
-    code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9em;
-      background: var(--bg2); padding: 1px 5px; border-radius: 5px; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin-bottom: 12px; }
-    th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; }
-    a { color: var(--accent); }
-    footer { padding: 40px 0 56px; text-align: center; color: var(--muted); font-size: 0.9rem;
-      border-top: 1px solid var(--border); margin-top: 48px; }
-    footer a { color: var(--accent); }
+    .tldr { border: 1px solid var(--line-strong); border-radius: 3px; padding: 24px;
+      margin: 28px 0 8px; }
+    .tldr p { margin-bottom: 0; color: var(--fg); }
+    .note { border: 1px solid var(--line); border-left: 3px solid var(--line-strong);
+      border-radius: 3px; padding: 16px 20px; color: var(--muted); font-size: 0.95rem; }
+    .note p { margin-bottom: 0; }
+    code { font-family: var(--mono); font-size: 0.88em;
+      background: #f2f2f2; padding: 1px 5px; border-radius: 3px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.93rem; margin-bottom: 12px; }
+    th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--faint); font-weight: 600; }
+    footer { padding: 44px 0 56px; color: var(--muted); font-size: 0.9rem;
+      border-top: 1px solid var(--line); margin-top: 52px; }
+    footer .links { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
+    footer a { color: var(--muted); text-decoration-color: var(--line); }
+    footer .fine { color: var(--faint); font-size: 0.84rem; }
   </style>
 </head>
 <body>
 
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <img src="icon-256.png" alt="" /> OpenSidecar
+    </a>
+  </div>
+</nav>
+
 <header>
   <div class="wrap">
-    <a href="index.html"><img class="logo" src="icon-256.png" alt="OpenSidecar icon" /></a>
-    <h1>Privacy</h1>
+    <p class="eyebrow">Privacy policy</p>
+    <h1>No accounts. No analytics. No servers.</h1>
     <p class="updated">Effective June 11, 2026 · applies to the OpenSidecar Mac and iOS apps and this website</p>
   </div>
 </header>
@@ -162,13 +189,14 @@
 
 <footer>
   <div class="wrap">
-    <p>
-      <a href="index.html">OpenSidecar</a> ·
-      <a href="export-compliance.html">Encryption</a> ·
-      <a href="https://github.com/peetzweg/opensidecar">GitHub</a> ·
+    <div class="links">
+      <a href="index.html">Home</a>
+      <a href="export-compliance.html">Encryption</a>
+      <a href="https://github.com/peetzweg/opensidecar">GitHub</a>
+      <a href="https://github.com/peetzweg/opensidecar/issues">Issues</a>
       <a href="https://github.com/peetzweg/opensidecar/blob/main/LICENSE">GPL-3.0 License</a>
-    </p>
-    <p style="margin-top: 8px;">OpenSidecar — use your iPhone or iPad as a second monitor for your Mac. Free forever, private by design.</p>
+    </div>
+    <p class="fine">OpenSidecar — use your iPhone or iPad as a second monitor for your Mac. Free forever, private by design.</p>
   </div>
 </footer>
 

@@ -6,6 +6,9 @@ import Combine
 /// "iPad" or "iPhone" — so UI copy names the device the user is holding.
 let deviceKind = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
 
+/// Landing page — hosts the Mac app download and explains the two-app setup.
+let macAppURL = URL(string: "https://peetzweg.github.io/opensidecar/")!
+
 @main
 struct OpenSidecarPhoneApp: App {
     var body: some Scene {
@@ -35,9 +38,14 @@ extension UIWindow {
 struct ReceiverScreen: View {
     @StateObject private var model = ReceiverModel()
     @State private var showSettings = false
+    @State private var showOnboarding = false
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    // First-run onboarding (issue #49): explain the Mac app is required.
+    // Shown until either the user dismisses it or the device connects once.
+    @AppStorage("hasConnectedBefore") private var hasConnectedBefore = false
+    @AppStorage("onboardingDismissed") private var onboardingDismissed = false
 
     // Streaming = connected and the video format is known.
     private var isStreaming: Bool {
@@ -71,6 +79,9 @@ struct ReceiverScreen: View {
             .onChange(of: geo.size) { _, size in
                 model.receiver.setOrientation(portrait: size.height > size.width)
             }
+            .sheet(isPresented: $showOnboarding) {
+                OnboardingView { onboardingDismissed = true }
+            }
         }
         .ignoresSafeArea(edges: isStreaming ? .all : [])
         .statusBarHidden(isStreaming)
@@ -85,9 +96,21 @@ struct ReceiverScreen: View {
             // iOS may tear the listener down while suspended — recover.
             if phase == .active { model.receiver.ensureListening() }
         }
+        .onChange(of: model.receiver.connected) { _, isConnected in
+            // The first valid connection retires the onboarding hint for good.
+            if isConnected {
+                hasConnectedBefore = true
+                showOnboarding = false
+            }
+        }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             model.start()
+            // Show the first-run hint unless the device has connected before
+            // or the user already dismissed it.
+            if !hasConnectedBefore && !onboardingDismissed {
+                showOnboarding = true
+            }
         }
     }
 }
@@ -102,9 +125,10 @@ struct IdleView: View {
         VStack(spacing: 28) {
             Spacer()
 
-            Image(systemName: "rectangle.on.rectangle")
-                .font(.system(size: 56, weight: .light))
-                .foregroundStyle(.tint)
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 132)
 
             VStack(spacing: 6) {
                 Text("OpenSidecar")
@@ -150,6 +174,74 @@ struct IdleView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
+    }
+}
+
+// MARK: - First-run onboarding (the Mac app is required to connect)
+
+/// Shown on first launch / while the device has never connected: OpenSidecar
+/// is two apps, and the iOS side is useless without the Mac app running.
+struct OnboardingView: View {
+    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 28) {
+                    Image(systemName: "laptopcomputer.and.iphone")
+                        .font(.system(size: 56, weight: .light))
+                        .foregroundStyle(.tint)
+                        .padding(.top, 24)
+
+                    VStack(spacing: 10) {
+                        Text("One more app to go")
+                            .font(.title2.bold())
+                            .multilineTextAlignment(.center)
+                        Text("OpenSidecar turns this \(deviceKind) into a second screen for your Mac — but it needs the **OpenSidecar Mac app** running on a Mac connected by the same USB cable or on the same WiFi network.")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Install the OpenSidecar Mac app on your Mac", systemImage: "1.circle.fill")
+                        Label("Connect the \(deviceKind) by USB, or join the same WiFi", systemImage: "2.circle.fill")
+                        Label("Keep this app open — streaming starts on its own", systemImage: "3.circle.fill")
+                    }
+                    .font(.subheadline)
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.secondarySystemBackground),
+                                in: RoundedRectangle(cornerRadius: 16))
+
+                    Link(destination: macAppURL) {
+                        Label("Get the Mac app", systemImage: "arrow.down.circle")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Text("You can find this link again anytime in Settings — shake the \(deviceKind) to open it.")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+            }
+            .navigationTitle("Welcome")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Close") {
+                        onClose()
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -402,12 +494,20 @@ struct SettingsView: View {
                     Text("How to connect")
                 }
 
+                Section {
+                    Link(destination: macAppURL) {
+                        Label("Get the Mac app", systemImage: "arrow.down.circle")
+                    }
+                } footer: {
+                    Text("OpenSidecar needs the Mac app running on a Mac on the same cable or WiFi network. Download it here if you haven't yet.")
+                }
+
                 Section("About") {
                     LabeledContent("Version", value: version)
                     Link(destination: URL(string: "https://github.com/peetzweg/opensidecar")!) {
                         Label("GitHub — peetzweg/opensidecar", systemImage: "link")
                     }
-                    Link(destination: URL(string: "https://peetzweg.github.io/opensidecar/")!) {
+                    Link(destination: macAppURL) {
                         Label("Website", systemImage: "globe")
                     }
                 }
