@@ -10,6 +10,13 @@ schemes:
     build:
       targets:
         OpenSidecariOS: all
+    run:
+      # Use the bundled StoreKit configuration so the support / tip in-app
+      # purchases can be exercised in the simulator WITHOUT App Store Connect.
+      # In production builds StoreKit ignores this and talks to the real App
+      # Store. See iOS/Support/SupportStore.swift for the product IDs to create
+      # in App Store Connect.
+      storeKitConfiguration: iOS/Support/Support.storekit
 # DEVELOPMENT_TEAM comes from the environment (see generate.sh / .env) so no
 # personal team ID lives in the repo. Unset = unsigned, fine for CI.
 settings:

@@ -502,6 +502,16 @@ struct SettingsView: View {
                     Text("OpenSidecar needs the Mac app running on a Mac on the same cable or WiFi network. Download it here if you haven't yet.")
                 }
 
+                Section {
+                    NavigationLink {
+                        SupportView()
+                    } label: {
+                        Label("Support OpenSidecar ♥", systemImage: "heart")
+                    }
+                } footer: {
+                    Text("OpenSidecar is free and open source. An optional in-app tip helps fund development — it unlocks nothing, every feature stays free.")
+                }
+
                 Section("About") {
                     LabeledContent("Version", value: version)
                     Link(destination: URL(string: "https://github.com/peetzweg/opensidecar")!) {
