@@ -1,6 +1,16 @@
 name: OpenSidecar
 options:
   createIntermediateGroups: true
+# Swift Package Manager dependencies. Sparkle powers the macOS app's
+# out-of-store auto-update (issue #52); it's an embedded open-source
+# framework + CLI tooling, not a hosted service — the appcast feed and the
+# DMG are served from infrastructure we already own (GitHub Pages + Releases).
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    # 2.x is the current major (latest 2.9.x as of 2026-06) and the first
+    # Sparkle line to support SPM. `from:` allows compatible 2.x updates.
+    from: "2.6.0"
 schemes:
   OpenSidecarMac:
     build:
@@ -29,6 +39,8 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - Mac
+    dependencies:
+      - package: Sparkle
     info:
       path: Mac/Info.plist
       properties:
@@ -40,6 +52,20 @@ targets:
         NSLocalNetworkUsageDescription: OpenSidecar connects to your iPad or iPhone over the local network in WiFi mode.
         NSBonjourServices: ["_opensidecar._tcp"]
         LSApplicationCategoryType: public.app-category.utilities
+        # --- Sparkle auto-update (issue #52) ---
+        # The appcast feed is hosted on the existing GitHub Pages site
+        # (per maintainer decision). The release workflow publishes
+        # appcast.xml so this URL resolves — see .github/workflows/release.yml.
+        SUFeedURL: https://peetzweg.github.io/opensidecar/appcast.xml
+        # PLACEHOLDER — auto-update will NOT verify/install until this is set.
+        # The MAINTAINER must run Sparkle's `generate_keys` (ships with the
+        # Sparkle SPM artifact / release tarball), then paste the printed
+        # PUBLIC EdDSA key here, and add the matching PRIVATE key as the
+        # `SPARKLE_PRIVATE_KEY` GitHub Actions secret (used to sign the
+        # appcast in CI). The private key must NEVER be committed.
+        SUPublicEDKey: REPLACE_WITH_SUPUBLICEDKEY_FROM_generate_keys
+        # Check for updates automatically in the background on a schedule.
+        SUEnableAutomaticChecks: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac

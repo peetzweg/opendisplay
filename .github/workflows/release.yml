@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # Lets the build-mac job dispatch the Pages deploy after committing the
+  # Sparkle appcast (a GITHUB_TOKEN push won't auto-trigger pages.yml).
+  actions: write
 
 # Serialize release runs on the same ref so two quick merges can't race two
 # uploads. Never cancel an in-flight run — it may be mid-upload to TestFlight.
@@ -110,3 +113,67 @@ jobs:
         run: |
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
             build/export/OpenSidecar.dmg
+
+      # --- Sparkle auto-update: generate + publish the appcast (issue #52) ---
+      # Builds appcast.xml from the just-released, notarized DMG and commits it
+      # to public/appcast.xml on main. The Pages workflow (pages.yml) triggers
+      # on public/** changes, copies public/ into docs/ via the Vite build, and
+      # deploys it — so https://peetzweg.github.io/opensidecar/appcast.xml (the
+      # SUFeedURL in project.yml) resolves.
+      #
+      # No-ops gracefully until the maintainer adds the SPARKLE_PRIVATE_KEY
+      # secret (the EdDSA private key from Sparkle's `generate_keys`), so this
+      # never hard-fails a release before auto-update is switched on.
+      - name: Publish Sparkle appcast to GitHub Pages
+        if: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          # Sparkle release that ships the generate_appcast / sign_update tools.
+          SPARKLE_TOOLS_VERSION: "2.6.4"
+        run: |
+          set -euo pipefail
+
+          # Sparkle's CLI tools (generate_appcast, sign_update) ship in the
+          # official release tarball — download the matching version.
+          curl -fsSL -o /tmp/sparkle.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_TOOLS_VERSION}/Sparkle-${SPARKLE_TOOLS_VERSION}.tar.xz"
+          mkdir -p /tmp/sparkle && tar -xf /tmp/sparkle.tar.xz -C /tmp/sparkle
+          GEN_APPCAST="$(find /tmp/sparkle -name generate_appcast -type f | head -1)"
+          echo "Using $GEN_APPCAST"
+
+          # The EdDSA private key (CI secret) → file for --ed-key-file.
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_ed_priv
+
+          # generate_appcast wants a directory of update archives. Point the
+          # download links at the GitHub Release assets where the DMG lives.
+          mkdir -p /tmp/appcast-updates
+          cp build/export/OpenSidecar.dmg /tmp/appcast-updates/
+
+          "$GEN_APPCAST" \
+            --ed-key-file /tmp/sparkle_ed_priv \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/" \
+            -o /tmp/appcast-updates/appcast.xml \
+            /tmp/appcast-updates
+
+          # Commit the feed into public/ on main; Pages picks it up from there.
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          mkdir -p public
+          cp /tmp/appcast-updates/appcast.xml public/appcast.xml
+          rm -f /tmp/sparkle_ed_priv
+          if ! git diff --quiet -- public/appcast.xml; then
+            git add public/appcast.xml
+            git commit -m "chore(release): publish Sparkle appcast for ${TAG_NAME} [skip ci]"
+            git push origin main
+            # Pushes made with GITHUB_TOKEN do NOT trigger other workflows
+            # (GitHub blocks recursive runs), so kick the Pages deploy
+            # explicitly via its workflow_dispatch entry point.
+            gh workflow run pages.yml --ref main || \
+              echo "could not dispatch pages.yml — deploy it manually"
+          else
+            echo "appcast.xml unchanged — nothing to publish"
+          fi

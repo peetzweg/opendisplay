@@ -1,5 +1,7 @@
 import SwiftUI
 import Network
+import Combine
+import Sparkle
 
 /// How the app presents itself. One bundle, switched at runtime via the
 /// activation policy — like Raycast/Hammerspoon style background agents.
@@ -25,7 +27,7 @@ struct OpenSidecarMacApp: App {
             get: { controller.presentation == .menuBar },
             set: { _ in }
         )) {
-            ContentView(controller: controller)
+            ContentView(controller: controller, updater: appDelegate.updater)
         } label: {
             Image(systemName: controller.running
                   ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle")
@@ -35,7 +37,18 @@ struct OpenSidecarMacApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    // Sparkle's standard updater. `startingUpdater: true` boots the updater
+    // immediately so scheduled background checks (SUEnableAutomaticChecks)
+    // run; the menu item drives manual "Check for Updates…". Held for the
+    // app's lifetime here so every window (menu bar + control window) shares
+    // one updater instance.
+    let updater = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hand the updater to the control window, which is built outside the
+        // SwiftUI App scene (NSHostingView), so it can offer the same button.
+        MainWindow.updater = updater
         let presentation = SenderController.shared.presentation
         NSApp.setActivationPolicy(presentation == .dock ? .regular : .accessory)
         if presentation != .menuBar {
@@ -56,6 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 enum MainWindow {
     private static var window: NSWindow?
+    // Set once at launch by AppDelegate so the control window can share the
+    // app's single Sparkle updater.
+    static var updater: SPUStandardUpdaterController?
 
     static func show() {
         if window == nil {
@@ -65,7 +81,8 @@ enum MainWindow {
                 backing: .buffered, defer: false)
             w.title = "OpenSidecar"
             w.contentView = NSHostingView(
-                rootView: ContentView(controller: SenderController.shared))
+                rootView: ContentView(controller: SenderController.shared,
+                                      updater: updater))
             w.isReleasedWhenClosed = false
             w.center()
             window = w
@@ -587,6 +604,9 @@ final class PermissionMonitor: ObservableObject {
 struct ContentView: View {
     @ObservedObject var controller: SenderController
     @StateObject private var permissions = PermissionMonitor()
+    // Optional so the view still compiles/previews without an updater (e.g.
+    // if Sparkle ever fails to start); the button just disables itself then.
+    let updater: SPUStandardUpdaterController?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -736,6 +756,9 @@ struct ContentView: View {
                     .font(.callout)
                     .lineLimit(1)
                 Spacer()
+                if let updater {
+                    CheckForUpdatesView(updater: updater)
+                }
                 Button("Quit") { NSApp.terminate(nil) }
                     .controlSize(.small)
             }
@@ -774,6 +797,36 @@ struct ContentView: View {
                 .controlSize(.small)
             }
         }
+    }
+}
+
+/// "Check for Updates…" button wired to Sparkle. Follows Sparkle 2's
+/// documented SwiftUI pattern: a small view model publishes the updater's
+/// `canCheckForUpdates` so the button disables itself while a check is
+/// already running (or the updater isn't ready).
+@MainActor
+final class CheckForUpdatesViewModel: ObservableObject {
+    @Published var canCheckForUpdates = false
+
+    init(updater: SPUUpdater) {
+        updater.publisher(for: \.canCheckForUpdates)
+            .assign(to: &$canCheckForUpdates)
+    }
+}
+
+struct CheckForUpdatesView: View {
+    @ObservedObject private var viewModel: CheckForUpdatesViewModel
+    private let updater: SPUUpdater
+
+    init(updater: SPUStandardUpdaterController) {
+        self.updater = updater.updater
+        self.viewModel = CheckForUpdatesViewModel(updater: updater.updater)
+    }
+
+    var body: some View {
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .controlSize(.small)
+            .disabled(!viewModel.canCheckForUpdates)
     }
 }
 

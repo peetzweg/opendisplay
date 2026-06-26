@@ -247,13 +247,56 @@ Tracked as [roadmap issues](https://github.com/peetzweg/opensidecar/issues?q=is%
 
 Done: prebuilt releases, built-in USB connectivity (no helper tools), WiFi via Bonjour, portrait mode, touch + two-finger scroll, performance overlay, iPad support, multiple devices at once ([#8](https://github.com/peetzweg/opensidecar/issues/8) — every connected device becomes its own extended display).
 
+## Auto-update (macOS app)
+
+The macOS app updates itself with [Sparkle](https://sparkle-project.org) —
+an open-source framework, **not** a hosted service. Update checks hit only
+our own infrastructure:
+
+- The app reads an **appcast** feed hosted on this GitHub Pages site:
+  `https://peetzweg.github.io/opensidecar/appcast.xml` (`SUFeedURL` in
+  `project.yml`).
+- The release workflow (`.github/workflows/release.yml`, `build-mac` job)
+  runs Sparkle's `generate_appcast` against the notarized
+  `OpenSidecar.dmg`, signs it with the EdDSA key, commits the result to
+  `public/appcast.xml`, and dispatches the Pages deploy — so the published
+  feed points download links at the GitHub Release assets.
+- Sparkle verifies both the EdDSA signature and Apple's notarization before
+  installing. The app checks automatically in the background
+  (`SUEnableAutomaticChecks`) and offers a manual **"Check for Updates…"**
+  button next to **Quit** in the menu-bar window.
+
+### Maintainer prerequisites (before auto-update goes live)
+
+Auto-update is **scaffolded but inert** until the signing keys are in place.
+The private signing key is **never** committed — it lives only as a CI
+secret. To switch it on:
+
+1. **Generate the key pair.** Run Sparkle's `generate_keys` once (it ships
+   in the Sparkle SPM artifact bundle and in the release tarball at
+   `bin/generate_keys`). It prints a **public** key and stores the
+   **private** key in your login keychain.
+2. **Public key →** paste it into `SUPublicEDKey` in `project.yml` (replace
+   the `REPLACE_WITH_SUPUBLICEDKEY_FROM_generate_keys` placeholder), then
+   re-run `xcodegen generate` and commit.
+3. **Private key →** add it as the `SPARKLE_PRIVATE_KEY` GitHub Actions
+   secret (export it with `generate_keys -x private_key.pem` if needed). The
+   appcast step in `release.yml` no-ops gracefully while this secret is
+   absent, so releases keep working until you're ready.
+4. The **first appcast publishes on the next release** after both keys are
+   set. Confirm `https://peetzweg.github.io/opensidecar/appcast.xml`
+   resolves, then **test the full update flow on a real signed/notarized
+   build** (check → download → verify → relaunch) — this can't be validated
+   in CI.
+
 ## Contributing
 
 Issues and PRs are very welcome — especially for the roadmap items above.
-The codebase is intentionally small: ~4 Swift files per platform, no
-dependencies. The [How it works](#how-it-works) section above is the
-architecture doc; see `Mac/CGVirtualDisplayPrivate.h` for the private API
-surface.
+The codebase is intentionally small: ~4 Swift files per platform, with
+[Sparkle](https://sparkle-project.org) (SPM) as the macOS app's only
+runtime dependency, for auto-update. The [How it works](#how-it-works)
+section above is the architecture doc; see `Mac/CGVirtualDisplayPrivate.h`
+for the private API surface.
 
 Releases are automated with
 [release-please](https://github.com/googleapis/release-please): use
