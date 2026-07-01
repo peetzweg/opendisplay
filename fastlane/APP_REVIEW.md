@@ -34,7 +34,7 @@ setup steps and the Mac app download link under App Review Information, and a
 demo video recorded on a physical iPad showing the initial USB/Wi-Fi pairing
 with the Mac app and the full workflow:
 
-Demo video: <PASTE VIDEO LINK>
+Demo video: https://www.youtube.com/watch?v=wyEUkMgH3zw
 
 No account or login is required. Please let us know if you need anything else.
 Thank you!
@@ -56,7 +56,7 @@ Mac app download (free, open source): https://peetzweg.github.io/opendisplay
 4. The device appears as an extended display; drag windows onto it, use
    touch and two-finger scroll, rotate portrait/landscape.
 
-Demo video (real device + pairing + full workflow): <PASTE VIDEO LINK>
+Demo video (real device + pairing + full workflow): https://www.youtube.com/watch?v=wyEUkMgH3zw
 No account or login is required.
 ```
 
@@ -68,6 +68,6 @@ No account or login is required.
 - [x] Listing texts updated in App Store Connect
 - [x] **Screenshots** re-exported: no "free"/price text, no "OpenSidecar"/"Sidecar" wording
 - [ ] **New build** uploaded (on-device name change needs a new binary) and selected for the version
-- [ ] **Demo video** recorded on a physical device and linked above + in App Review Information
+- [x] **Demo video** recorded on a physical device and linked above + in App Review Information
 - [ ] **App Review Notes** filled in (companion Mac app + download link)
 - [ ] Resolution Center reply sent
