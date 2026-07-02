@@ -179,15 +179,15 @@ export default function App() {
           <p className="eyebrow">Features</p>
           <h2>A true extended display, the way it should be.</h2>
           <div className="fgrid">
-            <div className="fcell"><span className="n">001</span><h3>True extension</h3><p>macOS treats your phone as a real monitor via a virtual display — arrange it in System Settings, drag windows onto it. Mirroring is available too.</p></div>
-            <div className="fcell"><span className="n">002</span><h3>USB-wired, lowest latency</h3><p>Streams over your charging cable via usbmux. No network, no jitter — and your phone charges while it works.</p></div>
-            <div className="fcell"><span className="n">003</span><h3>WiFi, zero config</h3><p>The phone advertises itself with Bonjour; pick it from a dropdown. No IP addresses to type.</p></div>
-            <div className="fcell"><span className="n">004</span><h3>Retina sharp</h3><p>The virtual display matches your device panel pixel-for-pixel at HiDPI (@2x). Text looks like it should.</p></div>
-            <div className="fcell"><span className="n">005</span><h3>Touch &amp; scroll</h3><p>Tap to click, drag to drag, two-finger pan to scroll. A tiny touchscreen for your Mac.</p></div>
-            <div className="fcell"><span className="n">006</span><h3>Portrait mode</h3><p>Rotate the phone and the virtual display rebuilds as a vertical monitor — perfect for chat, logs, or docs.</p></div>
-            <div className="fcell"><span className="n">007</span><h3>Low-latency pipeline</h3><p>Hardware H.264 (VideoToolbox real-time mode), TCP_NODELAY, frame-dropping backpressure with instant keyframe recovery.</p></div>
-            <div className="fcell"><span className="n">008</span><h3>Private by design</h3><p>One direct TCP connection between your devices. No servers, no accounts, no telemetry. Read the code.</p></div>
-            <div className="fcell"><span className="n">009</span><h3>No account, ever</h3><p>No sign-up, no email, no login — and no Apple ID pairing. Download both apps and go. Most alternatives make you register first.</p></div>
+            <div className="fcell"><span className="n">001</span><h3>No account, ever</h3><p>No sign-up, no email, no login. And unlike Apple Sidecar — which only works between devices on the <em>same</em> Apple ID — OpenDisplay pairs across different Apple IDs, so you can use a partner's or friend's iPad. Download both apps and go.</p></div>
+            <div className="fcell"><span className="n">002</span><h3>Low-latency pipeline</h3><p>Up to 60 FPS over USB. Hardware H.264 (VideoToolbox real-time mode), TCP_NODELAY, and frame-dropping backpressure with instant keyframe recovery keep it responsive.</p></div>
+            <div className="fcell"><span className="n">003</span><h3>Retina sharp</h3><p>Native Retina resolution — the virtual display matches your device panel pixel-for-pixel at HiDPI (@2x), so text looks exactly like it should.</p></div>
+            <div className="fcell"><span className="n">004</span><h3>True extension</h3><p>macOS treats your phone as a real monitor via a virtual display — arrange it in System Settings, drag windows onto it. Mirroring is available too.</p></div>
+            <div className="fcell"><span className="n">005</span><h3>USB-wired, lowest latency</h3><p>Streams over your charging cable via usbmux. No network, no jitter — and your phone charges while it works.</p></div>
+            <div className="fcell"><span className="n">006</span><h3>WiFi, zero config</h3><p>The phone advertises itself with Bonjour; pick it from a dropdown. No IP addresses to type.</p></div>
+            <div className="fcell"><span className="n">007</span><h3>Touch &amp; scroll</h3><p>Tap to click, drag to drag, two-finger pan to scroll. A tiny touchscreen for your Mac.</p></div>
+            <div className="fcell"><span className="n">008</span><h3>Portrait mode</h3><p>Rotate the phone and the virtual display rebuilds as a vertical monitor — perfect for chat, logs, or docs.</p></div>
+            <div className="fcell"><span className="n">009</span><h3>Private by design</h3><p>One direct TCP connection between your devices. No servers, no accounts, no telemetry. Read the code.</p></div>
           </div>
         </div>
       </section>
