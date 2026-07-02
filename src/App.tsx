@@ -47,6 +47,7 @@ export default function App() {
             <img src="icon-256.png" alt="" /> OpenDisplay
           </a>
           <div className="links">
+            <a href="#demo">Demo</a>
             <a href="#features">Features</a>
             <a href="#contribute">Contribute</a>
             <a href="#why">Compare</a>
@@ -158,6 +159,22 @@ export default function App() {
                 .
               </p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="demo">
+        <div className="wrap sec">
+          <p className="eyebrow">Demo</p>
+          <h2>See it in action.</h2>
+          <div className="video-embed">
+            <iframe
+              src="https://www.youtube-nocookie.com/embed/wyEUkMgH3zw"
+              title="OpenDisplay demo — use your iPad as a second monitor for your Mac"
+              loading="lazy"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+            />
           </div>
         </div>
       </section>
