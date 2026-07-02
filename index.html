@@ -15,16 +15,16 @@
   <meta property="og:title" content="OpenDisplay — free, open-source Sidecar/Duet alternative" />
   <meta property="og:description" content="Use your iPhone or iPad as a second monitor for your Mac. A true extended display over USB or WiFi — Retina-sharp, low latency, with touch and scroll. No subscription, no dongle, no account." />
   <meta property="og:url" content="https://opendisplay.app/" />
-  <meta property="og:image" content="https://opendisplay.app/icon.png" />
+  <meta property="og:image" content="https://opendisplay.app/og.png" />
   <meta property="og:image:type" content="image/png" />
-  <meta property="og:image:width" content="2048" />
-  <meta property="og:image:height" content="2048" />
-  <meta property="og:image:alt" content="OpenDisplay app icon" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="OpenDisplay — use your partner's iPad as your Mac's second monitor. Free, open source, macOS &amp; iOS." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="OpenDisplay — free, open-source Sidecar/Duet alternative" />
   <meta name="twitter:description" content="Use your iPhone or iPad as a second monitor for your Mac. True extended display over USB or WiFi — Retina-sharp, low latency, with touch. No subscription, no dongle, no account." />
-  <meta name="twitter:image" content="https://opendisplay.app/icon.png" />
-  <meta name="twitter:image:alt" content="OpenDisplay app icon" />
+  <meta name="twitter:image" content="https://opendisplay.app/og.png" />
+  <meta name="twitter:image:alt" content="OpenDisplay — use your partner's iPad as your Mac's second monitor. Free, open source, macOS &amp; iOS." />
 
   <script type="application/ld+json">
   {
@@ -57,6 +57,73 @@
       "name": "peetzweg",
       "url": "https://github.com/peetzweg"
     }
+  }
+  </script>
+
+  <!-- FAQPage structured data. Keep the questions/answers below in sync with the
+       <details> FAQ in src/App.tsx (section#faq); this is a plain-text mirror. -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "How does it actually work?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The Mac creates a virtual display with the private CGVirtualDisplay API (the same technique used by BetterDisplay and DeskPad), captures it with ScreenCaptureKit, hardware-encodes H.264 with VideoToolbox, and streams it over a single TCP connection — through the USB cable via usbmux, or over WiFi. The phone decodes and renders with AVSampleBufferDisplayLayer and sends touch coordinates back, which the Mac injects as mouse events."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is this on the App Store?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes — the iPhone & iPad receiver is live on the App Store. The Mac app ships as a signed, notarized direct download rather than through the Mac App Store because it relies on CGVirtualDisplay, a private API — that's the deal for every virtual-display product: use it or ship a dongle. You can also build either app from source with your own (free) Apple developer account in a few minutes."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Why do I see the purple screen-recording indicator on my Mac?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "macOS shows that privacy indicator for every app that captures the screen — Duet, Luna, OBS and Zoom included. Apple Sidecar avoids it only because it's built into the OS. It's a feature, not a bug: you always know a capture is running."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "WiFi mode can't find my iPhone — why?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "WiFi discovery needs the Local Network permission on both sides, and macOS/iOS deny it silently if the prompt was missed: check System Settings → Privacy & Security → Local Network on the Mac, and Settings → Privacy & Security → Local Network on the iPhone. Both devices must be on the same WiFi and the iPhone app must be open. The Mac app shows a live permission panel, and the iPhone app has a settings screen (shake the phone) that links straight there. USB mode needs none of this."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "iPad support?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The receiver is a universal iOS app — it runs on iPad today. Run the Mac, an iPhone and an iPad at once for a second and a third screen. iPad-specific features (Apple Pencil, pressure) are on the roadmap."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is any of my screen data sent to a server?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. One direct TCP connection between your Mac and your device. No accounts, no analytics, no cloud. The full story — what the apps store locally, which permissions they use and why, and the one current caveat about unencrypted WiFi transport — is on the privacy page."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What's the license? Can I fork it or use it commercially?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "OpenDisplay is licensed under GPL-3.0. You can use, study, and adapt it freely — including commercially. If you distribute a modified version, it must remain open source under the same license with the original attribution intact, so improvements flow back to everyone instead of into closed forks. (Releases up to v0.4.x were MIT-licensed and remain available under those terms.)"
+        }
+      }
+    ]
   }
   </script>
 
