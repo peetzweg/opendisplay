@@ -3,4 +3,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://peetzweg.github.io/opendisplay/sitemap.xml
+Sitemap: https://opendisplay.app/sitemap.xml
