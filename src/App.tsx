@@ -133,9 +133,10 @@ export default function App() {
               </div>
               <p className="dl-sub">The receiver — displays the stream and sends touch back.</p>
               <div className="ios-row">
-                {/* TODO: when the App Store listing is live, wrap this badge in <a href="…"> and
-                    remove class "disabled" + the "Coming soon" caption. */}
-                <span className="badge-wrap disabled" title="Coming soon to the App Store">
+                <a
+                  className="badge-wrap"
+                  href="https://apps.apple.com/app/id6780264891"
+                >
                   <img
                     className="appstore-badge"
                     src="app-store-badge.svg"
@@ -143,17 +144,16 @@ export default function App() {
                     width="120"
                     height="40"
                   />
-                  <span className="cap">Coming soon</span>
-                </span>
+                </a>
               </div>
               <p className="sub">
-                <a id="testflight" href="https://testflight.apple.com/join/3NYaY11c">
+                Want early builds? <a id="testflight" href="https://testflight.apple.com/join/3NYaY11c">
                   Join the TestFlight beta
                 </a>
                 ,<br />
-                or get started now by{" "}
+                or{" "}
                 <a href="https://github.com/peetzweg/opendisplay#quick-start">
-                  compiling it from source ↗
+                  compile it from source ↗
                 </a>
                 .
               </p>
@@ -274,11 +274,13 @@ export default function App() {
               injects as mouse events.</p>
             </details>
             <details>
-              <summary>Why isn't this on the App Store yet?</summary>
-              <p><code>CGVirtualDisplay</code> is a private API. That's the deal: every
-              virtual-display product either uses it or ships a dongle. A{" "}
-              <a href="https://testflight.apple.com/join/3NYaY11c">TestFlight beta is available now</a>;
-              or build from source with your own (free) Apple developer account in a few minutes.</p>
+              <summary>Is this on the App Store?</summary>
+              <p>Yes — the iPhone &amp; iPad receiver is{" "}
+              <a href="https://apps.apple.com/app/id6780264891">live on the App Store</a>. The Mac
+              app ships as a signed, notarized direct download rather than through the Mac App Store
+              because it relies on <code>CGVirtualDisplay</code>, a private API — that's the deal for
+              every virtual-display product: use it or ship a dongle. You can also build either app
+              from source with your own (free) Apple developer account in a few minutes.</p>
             </details>
             <details>
               <summary>Why do I see the purple screen-recording indicator on my Mac?</summary>
