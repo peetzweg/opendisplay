@@ -56,6 +56,39 @@ export default function App() {
       .catch(() => {})
   }, [])
 
+  // Scroll-spy: keep the URL fragment in sync with the section at the top of
+  // the viewport so any section is directly shareable. replaceState avoids
+  // both a scroll jump and flooding the back button with history entries.
+  useEffect(() => {
+    const sections = Array.from(document.querySelectorAll("section"))
+    if (!sections.length) return
+    let raf = 0
+    const sync = () => {
+      raf = 0
+      // Trigger line just below the 60px sticky nav.
+      const line = 72
+      let current = ""
+      for (const s of sections) {
+        if (s.getBoundingClientRect().top <= line) current = s.id
+      }
+      const hash = current ? `#${current}` : ""
+      if (hash !== window.location.hash) {
+        // Empty hash → drop the fragment entirely (keeps the base path/query).
+        const url = hash || window.location.pathname + window.location.search
+        window.history.replaceState(null, "", url)
+      }
+    }
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(sync)
+    }
+    sync()
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => {
+      window.removeEventListener("scroll", onScroll)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [])
+
   return (
     <>
       <nav>
@@ -84,11 +117,11 @@ export default function App() {
           </a>
           <div className="links">
             <a href="#demo">Demo</a>
+            <a href="#support">Support</a>
             <a href="#features">Features</a>
-            <a href="#contribute">Contribute</a>
             <a href="#why">Compare</a>
             <a href="#faq">FAQ</a>
-            <a href="#support">Support</a>
+            <a href="#contribute">Contribute</a>
             <a
               className="gh"
               href="https://github.com/peetzweg/opendisplay"
@@ -227,12 +260,33 @@ export default function App() {
       <section id="support">
         <div className="wrap sec support">
           <p className="eyebrow">Support the project</p>
+          <img className="kofi-logo" src="kofi-logo.png" alt="Ko-fi" width="200" height="61" />
           <h2>If OpenDisplay saved you a monitor, consider buying me a coffee.</h2>
-          <p>
-            Free, open source, and funded out of my own pocket — including the Apple Developer
-            membership behind signed, one-click installs. If it helps you, a tip keeps it going.
-          </p>
-          <a className="btn primary" href="https://ko-fi.com/peetzweg">Support on Ko-fi</a>
+          <div className="support-note">
+            <p>
+              OpenDisplay is a one-person labour of love, built and maintained by me,
+              Philip. It's not a company. It's just me.
+            </p>
+            <p>
+              It's free, open source, and funded out of my own pocket. The fixed costs
+              are modest but real: <strong>$99 a year</strong> for the Apple Developer
+              membership behind the signed, one-click installs, and <strong>$11 a year</strong>{" "}
+              for the domain. On top of that go a lot of unpaid evenings and weekends.
+            </p>
+            <p>
+              Supporting me on Ko-fi keeps OpenDisplay well maintained and free for
+              everyone, including the people who can't afford to chip in. My goal is to
+              make this the greatest display companion app there is for your iPad.
+            </p>
+            <p>
+              If it saved you from buying a monitor, a small tip helps keep it going.
+              Thank you.
+            </p>
+          </div>
+          <a className="btn kofi" href="https://ko-fi.com/peetzweg">
+            <img className="kofi-mark" src="kofi-mark.webp" alt="" width="28" height="28" />
+            Support on Ko-fi
+          </a>
         </div>
       </section>
 
@@ -251,29 +305,6 @@ export default function App() {
             <div className="fcell"><span className="n">008</span><h3>Portrait mode</h3><p>Rotate the phone and the virtual display rebuilds as a vertical monitor — perfect for chat, logs, or docs.</p></div>
             <div className="fcell"><span className="n">009</span><h3>Private by design</h3><p>One direct TCP connection between your devices. No servers, no accounts, no telemetry. Read the code.</p></div>
           </div>
-        </div>
-      </section>
-
-      <section id="contribute">
-        <div className="wrap sec">
-          <p className="eyebrow">Contribute</p>
-          <h2>Open source, and built in the open.</h2>
-          <p style={{ color: "var(--muted)", maxWidth: "72ch", marginTop: "8px" }}>
-            OpenDisplay is GPL-3.0 and developed entirely on GitHub — the whole stack, from Mac
-            capture and H.264 encoding to the iOS receiver, is yours to read, build, and improve.
-            Bug reports, feature ideas, and pull requests are all welcome. Build-and-run instructions
-            live in the README.
-          </p>
-          <div className="btn-row">
-            <a className="btn primary" href="https://github.com/peetzweg/opendisplay">View on GitHub ↗</a>
-            <a className="btn ghost" href="https://github.com/peetzweg/opendisplay/issues">Open an issue ↗</a>
-          </div>
-          <p className="sub">
-            New here? Start with the{" "}
-            <a href="https://github.com/peetzweg/opendisplay#quick-start">README quick-start</a>{" "}
-            to build both apps, or browse the{" "}
-            <a href="https://github.com/peetzweg/opendisplay/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22">good first issues</a>.
-          </p>
         </div>
       </section>
 
@@ -382,6 +413,29 @@ export default function App() {
               to v0.4.x were MIT-licensed and remain available under those terms.)</p>
             </details>
           </div>
+        </div>
+      </section>
+
+      <section id="contribute">
+        <div className="wrap sec">
+          <p className="eyebrow">Contribute</p>
+          <h2>Open source, and built in the open.</h2>
+          <p style={{ color: "var(--muted)", maxWidth: "72ch", marginTop: "8px" }}>
+            OpenDisplay is GPL-3.0 and developed entirely on GitHub — the whole stack, from Mac
+            capture and H.264 encoding to the iOS receiver, is yours to read, build, and improve.
+            Bug reports, feature ideas, and pull requests are all welcome. Build-and-run instructions
+            live in the README.
+          </p>
+          <div className="btn-row">
+            <a className="btn primary" href="https://github.com/peetzweg/opendisplay">View on GitHub ↗</a>
+            <a className="btn ghost" href="https://github.com/peetzweg/opendisplay/issues">Open an issue ↗</a>
+          </div>
+          <p className="sub">
+            New here? Start with the{" "}
+            <a href="https://github.com/peetzweg/opendisplay#quick-start">README quick-start</a>{" "}
+            to build both apps, or browse the{" "}
+            <a href="https://github.com/peetzweg/opendisplay/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22">good first issues</a>.
+          </p>
         </div>
       </section>
 

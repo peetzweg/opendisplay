@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="public/icon.png" width="128" alt="OpenDisplay app icon" />
+<img src="public/logo.png" width="128" alt="OpenDisplay app icon" />
 
 # OpenDisplay
 
