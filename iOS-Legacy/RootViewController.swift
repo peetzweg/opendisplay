@@ -192,6 +192,8 @@ final class RootViewController: UIViewController, PhoneReceiverLegacyDelegate {
     }
 
     @objc func presentSettings() {
-        // SettingsViewController arrives in Task 4.
+        let settings = SettingsViewController(receiver: receiver)
+        let nav = UINavigationController(rootViewController: settings)
+        present(nav, animated: true)
     }
 }
