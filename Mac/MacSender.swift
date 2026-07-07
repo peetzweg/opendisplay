@@ -331,7 +331,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// The virtual display takes a moment to show up in shareable content.
     private func findSCDisplay(id: CGDirectDisplayID) async throws -> SCDisplay {
-        for _ in 0..<20 {
+        // 5s (20 * 250ms) measured too tight on some machines — a freshly
+        // created CGVirtualDisplay can take longer than that to show up in
+        // SCShareableContent, especially after rapid create/destroy churn
+        // from reconnects. 15s gives real hardware more headroom without
+        // making a genuine failure hang noticeably longer.
+        for _ in 0..<60 {
             let content = try await SCShareableContent.current
             if let display = content.displays.first(where: { $0.displayID == id }) {
                 return display
