@@ -21,7 +21,7 @@ enum Log {
             if let handle = try? FileHandle(forWritingTo: fileURL) {
                 handle.seekToEndOfFile()
                 handle.write(line.data(using: .utf8)!)
-                try? handle.close()
+                handle.closeFile()
             } else {
                 try? line.write(to: fileURL, atomically: true, encoding: .utf8)
             }
