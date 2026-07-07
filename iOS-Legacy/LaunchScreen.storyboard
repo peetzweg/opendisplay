@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- LaunchScreen.storyboard — iOS 12 fallback for the modern target's
-     UILaunchScreen: {} dict, which is an iOS 13+-only Info.plist key
+     UILaunchScreen: {} dict, which is an iOS 14+-only Info.plist key
      (system-generated blank launch screen). iOS 12 has no equivalent
      dict-based launch screen, so it needs an actual storyboard referenced
      via UILaunchStoryboardName. Kept intentionally blank/white to match
