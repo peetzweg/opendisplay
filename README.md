@@ -99,6 +99,11 @@ opens with a plain double-click on macOS 14+ — no Gatekeeper warning. Open the
 - **Build from source**: open the project in Xcode, select your free Apple ID
   under Signing, hit Run. Takes ~2 minutes.
 
+An iOS-12-compatible variant ("OpenDisplay Legacy", UIKit-based, no
+performance overlay) lives in `iOS-Legacy/` for older devices that can't run
+the SwiftUI-based app above (SwiftUI and Combine both require iOS 13+). Build
+it the same way, selecting the `OpenSidecariOSLegacy` scheme.
+
 ## Quick start (from source)
 
 ### Prerequisites
