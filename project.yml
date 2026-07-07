@@ -20,6 +20,10 @@ schemes:
     build:
       targets:
         OpenSidecariOS: all
+  OpenSidecariOSLegacy:
+    build:
+      targets:
+        OpenSidecariOSLegacy: all
 # DEVELOPMENT_TEAM comes from the environment (see generate.sh / .env) so no
 # personal team ID lives in the repo. Unset = unsigned, fine for CI.
 settings:
@@ -108,5 +112,33 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.ios
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  OpenSidecariOSLegacy:
+    type: application
+    platform: iOS
+    deploymentTarget: "12.0"
+    sources:
+      - iOS-Legacy
+    info:
+      path: iOS-Legacy/Info.plist
+      properties:
+        CFBundleDisplayName: OpenDisplay Legacy
+        CFBundleIconName: AppIcon
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UIViewControllerBasedStatusBarAppearance: true
+        UIRequiresFullScreen: true
+        NSLocalNetworkUsageDescription: OpenDisplay advertises itself on the local network so your Mac can connect over WiFi.
+        NSBonjourServices: ["_opensidecar._tcp"]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationPortraitUpsideDown
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.ios.legacy
+        PRODUCT_NAME: OpenDisplayLegacy
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
