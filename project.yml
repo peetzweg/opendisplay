@@ -129,6 +129,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UIViewControllerBasedStatusBarAppearance: true
         UIRequiresFullScreen: true
+        UILaunchStoryboardName: LaunchScreen
         NSLocalNetworkUsageDescription: OpenDisplay advertises itself on the local network so your Mac can connect over WiFi.
         NSBonjourServices: ["_opensidecar._tcp"]
         UISupportedInterfaceOrientations:
