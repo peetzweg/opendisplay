@@ -15,6 +15,9 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg); color: var(--fg); line-height: 1.55;
   font-size: 16px; -webkit-font-smoothing: antialiased;
+  /* The showcase strip is 100vw wide; on browsers with classic scrollbars
+     that overshoots by the scrollbar width — clip it instead of scrolling. */
+  overflow-x: clip;
 }
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
 a { color: var(--fg); text-decoration: underline; text-underline-offset: 2px;
@@ -135,9 +138,53 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 .btn-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
 
 /* Demo video: responsive 16:9 embed matching the bordered, squared aesthetic. */
-.video-embed { position: relative; aspect-ratio: 16 / 9; margin-top: 28px;
+.video-embed { position: relative; aspect-ratio: 16 / 9;
   border: 1px solid var(--line-strong); background: #000; overflow: hidden; }
 .video-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+/* ---- demo showcase: horizontally snapping strip of demo media ---- */
+/* Items keep fixed widths and the strip scrolls, so future videos and tweets
+   slot in without squeezing the existing ones. The next card peeks in from
+   the right as the scroll affordance. The strip itself breaks out of .wrap
+   to span the full viewport; matching inline padding keeps the first card
+   (and the nav arrows) aligned with the contained headings above. */
+.showcase { margin-top: 28px; width: 100vw; margin-left: calc(50% - 50vw);
+  --bleed-pad: max(28px, calc(50vw - var(--maxw) / 2 + 28px)); }
+.showcase-track { display: flex; gap: 20px; align-items: flex-start;
+  overflow-x: auto; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; padding-inline: var(--bleed-pad);
+  scroll-padding-inline: var(--bleed-pad); }
+.showcase-track::-webkit-scrollbar { display: none; }
+.showcase-item { flex: 0 0 auto; scroll-snap-align: start; }
+.showcase-item.is-video { width: min(84vw, 640px); }
+.showcase-item.is-post { width: min(84vw, 400px); }
+/* Post cards: self-contained, self-hosted renditions of community posts.
+   The whole card is one link to the post on X. */
+a.showcase-item.is-post { display: block; border: 1px solid var(--line);
+  border-radius: 12px; padding: 18px 20px; text-decoration: none;
+  color: var(--fg); background: var(--bg); }
+a.showcase-item.is-post:hover { border-color: var(--line-strong); }
+.post-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.post-avatar { width: 44px; height: 44px; border-radius: 50%; display: block; }
+.post-who { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
+.post-author { font-weight: 600; font-size: 0.95rem; }
+.post-handle { color: var(--muted); font-size: 0.86rem; }
+.post-x { width: 18px; height: 18px; fill: var(--faint); margin-left: auto; flex: none; }
+.showcase-item.is-post:hover .post-x { fill: var(--fg); }
+.post-text { font-size: 0.95rem; margin: 0; }
+.post-photo { display: block; width: 100%; height: auto; border-radius: 8px;
+  margin: 14px 0 12px; border: 1px solid var(--line); }
+.post-date { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em;
+  color: var(--faint); }
+.showcase-item.is-post:hover .post-date { color: var(--muted); }
+.showcase-nav { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end;
+  padding-inline: var(--bleed-pad); }
+.showcase-nav button { font-family: var(--mono); font-size: 1rem; line-height: 1;
+  width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--fg); border: 1px solid var(--line-strong);
+  border-radius: 3px; cursor: pointer; }
+.showcase-nav button:hover:not(:disabled) { background: var(--fg); color: var(--bg); }
+.showcase-nav button:disabled { color: var(--faint); border-color: var(--line); cursor: default; }
 
 /* App Store / TestFlight cluster */
 .ios-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
@@ -237,6 +284,7 @@ footer .fine { color: var(--faint); font-size: 0.84rem; }
 /* ---- mobile: tighter gutters + less vertical air ---- */
 @media (max-width: 560px) {
   .wrap { padding: 0 20px; }
+  .showcase { --bleed-pad: 20px; }   /* match the tighter .wrap gutter */
   .sec { padding-top: 56px; padding-bottom: 56px; }
   .hero { padding-top: 56px; padding-bottom: 60px; }
   .hero h1 .l1 { white-space: normal; }   /* let the long words wrap on small screens */

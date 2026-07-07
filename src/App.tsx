@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
+import Showcase from "./components/Showcase"
 import TextRotate from "./components/TextRotate"
 
 const HERO_WORDS = [
@@ -245,15 +246,12 @@ export default function App() {
         <div className="wrap sec">
           <p className="eyebrow">Demo</p>
           <h2>See it in action.</h2>
-          <div className="video-embed">
-            <iframe
-              src="https://www.youtube-nocookie.com/embed/wyEUkMgH3zw"
-              title="OpenDisplay demo — use your iPad as a second monitor for your Mac"
-              loading="lazy"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-            />
-          </div>
+          <Showcase />
+          <p className="sub">
+            Using OpenDisplay in the wild?{" "}
+            <a href="https://x.com/peetzweg">Tag @peetzweg on X</a> and your setup might
+            end up here.
+          </p>
         </div>
       </section>
 
