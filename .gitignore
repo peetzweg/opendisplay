@@ -18,6 +18,7 @@ xcuserdata/
 PROJECT_BRIEF.md
 CLAUDE.md
 ICON_WORKFLOW.md
+internal-docs/
 
 # Icon source artwork (kept locally; generated assets are committed — see ICON_WORKFLOW.md)
 newicon.svg
