@@ -157,21 +157,26 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 .showcase-track::-webkit-scrollbar { display: none; }
 .showcase-item { flex: 0 0 auto; scroll-snap-align: start; }
 .showcase-item.is-video { width: min(84vw, 640px); }
-.showcase-item.is-tweet { width: min(84vw, 400px); }
-/* widgets.js swaps the blockquote for an iframe; zero the margins of both so
-   the cards top-align with the video. */
-.showcase-item.is-tweet .twitter-tweet { margin: 0 !important; }
-/* Fallback quote card: what renders before widgets.js upgrades the
-   blockquote — or forever, when an ad blocker eats the script. The <img>
-   is our self-hosted copy of the tweet's photo. (Only the raw blockquote
-   matches; the upgraded embed is a div.twitter-tweet-rendered.) */
-.showcase-item.is-tweet blockquote.twitter-tweet { border: 1px solid var(--line);
-  border-radius: 12px; padding: 18px 20px; font-size: 0.95rem; }
-.showcase-item.is-tweet blockquote.twitter-tweet img { display: block; width: 100%;
-  height: auto; border-radius: 8px; margin: 14px 0 12px; border: 1px solid var(--line); }
-.showcase-item.is-tweet blockquote.twitter-tweet,
-.showcase-item.is-tweet blockquote.twitter-tweet a { color: var(--muted);
-  text-decoration-color: var(--line); }
+.showcase-item.is-post { width: min(84vw, 400px); }
+/* Post cards: self-contained, self-hosted renditions of community posts.
+   The whole card is one link to the post on X. */
+a.showcase-item.is-post { display: block; border: 1px solid var(--line);
+  border-radius: 12px; padding: 18px 20px; text-decoration: none;
+  color: var(--fg); background: var(--bg); }
+a.showcase-item.is-post:hover { border-color: var(--line-strong); }
+.post-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.post-avatar { width: 44px; height: 44px; border-radius: 50%; display: block; }
+.post-who { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
+.post-author { font-weight: 600; font-size: 0.95rem; }
+.post-handle { color: var(--muted); font-size: 0.86rem; }
+.post-x { width: 18px; height: 18px; fill: var(--faint); margin-left: auto; flex: none; }
+.showcase-item.is-post:hover .post-x { fill: var(--fg); }
+.post-text { font-size: 0.95rem; margin: 0; }
+.post-photo { display: block; width: 100%; height: auto; border-radius: 8px;
+  margin: 14px 0 12px; border: 1px solid var(--line); }
+.post-date { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em;
+  color: var(--faint); }
+.showcase-item.is-post:hover .post-date { color: var(--muted); }
 .showcase-nav { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end;
   padding-inline: var(--bleed-pad); }
 .showcase-nav button { font-family: var(--mono); font-size: 1rem; line-height: 1;

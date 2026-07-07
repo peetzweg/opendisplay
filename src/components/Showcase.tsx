@@ -1,12 +1,24 @@
 import { useEffect, useRef, useState } from "react"
 
 // The demo section's media strip: the YouTube demo plus posts from people
-// using OpenDisplay in the wild. To showcase something new, add an entry to
-// ITEMS below — for a tweet, grab the blockquote from
-// https://publish.x.com/oembed?url=<tweet-url> so the fallback text matches.
+// using OpenDisplay in the wild. Posts render as self-contained static cards
+// (photos + avatars live in public/showcase/) instead of live X embeds —
+// widgets.js renders unreliably under ad blockers and browser privacy
+// features, and a third-party tracking script sits badly on a page that
+// advertises "no telemetry" anyway. To showcase a new post, add an entry to
+// ITEMS and drop its media into public/showcase/.
 type ShowcaseItem =
   | { kind: "youtube"; id: string; title: string }
-  | { kind: "tweet"; url: string; html: string }
+  | {
+      kind: "post"
+      url: string
+      author: string
+      handle: string
+      avatar: string
+      date: string
+      text: string[] // paragraphs/lines of the post
+      image: { src: string; alt: string; width: number; height: number }
+    }
 
 const ITEMS: ShowcaseItem[] = [
   {
@@ -14,62 +26,57 @@ const ITEMS: ShowcaseItem[] = [
     id: "wyEUkMgH3zw",
     title: "OpenDisplay demo — use your iPad as a second monitor for your Mac",
   },
-  // The <img> inside each blockquote is a self-hosted copy of the tweet's
-  // photo (public/showcase/): ad blockers commonly block widgets.js, and the
-  // styled blockquote + local photo is what those visitors get instead.
   {
-    kind: "tweet",
+    kind: "post",
     url: "https://x.com/eduwass/status/2071902710597583300",
-    html: `<blockquote class="twitter-tweet" data-dnt="true" data-conversation="none"><p lang="en" dir="ltr"><a href="https://x.com/peetzweg?ref_src=twsrc%5Etfw">@peetzweg</a> here&#39;s the setup I&#39;ve been testing OpenSidecar on 😅 <br>- LG Ultrawide<br>- Macbook Pro M1 (built-in screen)<br>- iPad Pro 12.9 x3<br>working like a champ <a href="https://t.co/Fqy0fwHHrm">pic.twitter.com/Fqy0fwHHrm</a></p><img src="showcase/tweet-eduwass.jpg" alt="Desk with an LG ultrawide, a MacBook Pro and three iPad Pros all running as displays" loading="lazy" width="1200" height="675">&mdash; Edu Wass (@eduwass) <a href="https://x.com/eduwass/status/2071902710597583300?ref_src=twsrc%5Etfw">June 30, 2026</a></blockquote>`,
+    author: "Edu Wass",
+    handle: "@eduwass",
+    avatar: "showcase/avatar-eduwass.jpg",
+    date: "Jun 30, 2026",
+    text: [
+      "@peetzweg here's the setup I've been testing OpenSidecar on 😅",
+      "- LG Ultrawide",
+      "- Macbook Pro M1 (built-in screen)",
+      "- iPad Pro 12.9 x3",
+      "working like a champ",
+    ],
+    image: {
+      src: "showcase/tweet-eduwass.jpg",
+      alt: "Desk with an LG ultrawide, a MacBook Pro and three iPad Pros all running as displays",
+      width: 1200,
+      height: 675,
+    },
   },
   {
-    kind: "tweet",
+    kind: "post",
     url: "https://x.com/peetzweg/status/2074416821738815692",
-    html: `<blockquote class="twitter-tweet" data-dnt="true"><p lang="en" dir="ltr">How the magic is happening today. Obviously using OpenDisplay for my Mactendo DS™ setup. <a href="https://t.co/6FEzG9APF8">pic.twitter.com/6FEzG9APF8</a></p><img src="showcase/tweet-peetzweg.jpg" alt="MacBook with an iPhone perched above its screen as a second display — the Mactendo DS setup" loading="lazy" width="1200" height="900">&mdash; peetzweg/ (@peetzweg) <a href="https://x.com/peetzweg/status/2074416821738815692?ref_src=twsrc%5Etfw">July 7, 2026</a></blockquote>`,
+    author: "peetzweg/",
+    handle: "@peetzweg",
+    avatar: "showcase/avatar-peetzweg.jpg",
+    date: "Jul 7, 2026",
+    text: ["How the magic is happening today. Obviously using OpenDisplay for my Mactendo DS™ setup."],
+    image: {
+      src: "showcase/tweet-peetzweg.jpg",
+      alt: "MacBook with an iPhone perched above its screen as a second display — the Mactendo DS setup",
+      width: 1200,
+      height: 900,
+    },
   },
 ]
 
-const WIDGETS_SRC = "https://platform.twitter.com/widgets.js"
-
-declare global {
-  interface Window {
-    twttr?: { widgets: { load: (el?: HTMLElement | null) => void } }
-  }
+// X logomark, shown in the card corner as the "view on X" affordance.
+function XLogo() {
+  return (
+    <svg className="post-x" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  )
 }
 
 export default function Showcase() {
   const trackRef = useRef<HTMLDivElement>(null)
   const [canPrev, setCanPrev] = useState(false)
   const [canNext, setCanNext] = useState(true)
-
-  // Upgrade the prerendered blockquotes into full tweet embeds (with media).
-  // The blockquotes stay as the crawlable fallback — and the visible state
-  // for visitors whose ad blocker eats widgets.js. Polling instead of a
-  // script onload listener sidesteps every already-loading race (HMR,
-  // remounts, a second copy of the script).
-  useEffect(() => {
-    const tryLoad = () => {
-      if (!window.twttr?.widgets) return false
-      window.twttr.widgets.load(trackRef.current)
-      return true
-    }
-    if (tryLoad()) return
-    if (!document.querySelector(`script[src="${WIDGETS_SRC}"]`)) {
-      const script = document.createElement("script")
-      script.src = WIDGETS_SRC
-      script.async = true
-      document.head.appendChild(script)
-    }
-    const timer = window.setInterval(() => {
-      if (tryLoad()) window.clearInterval(timer)
-    }, 250)
-    // Blocked script → twttr never appears; stop polling after a while.
-    const giveUp = window.setTimeout(() => window.clearInterval(timer), 15000)
-    return () => {
-      window.clearInterval(timer)
-      window.clearTimeout(giveUp)
-    }
-  }, [])
 
   // Keep the arrows honest: disable the one pointing at an edge we're on.
   useEffect(() => {
@@ -111,11 +118,28 @@ export default function Showcase() {
               </div>
             </div>
           ) : (
-            <div
-              key={item.url}
-              className="showcase-item is-tweet"
-              dangerouslySetInnerHTML={{ __html: item.html }}
-            />
+            <a key={item.url} className="showcase-item is-post" href={item.url}>
+              <div className="post-head">
+                <img className="post-avatar" src={item.avatar} alt="" width="48" height="48" loading="lazy" />
+                <div className="post-who">
+                  <span className="post-author">{item.author}</span>
+                  <span className="post-handle">{item.handle}</span>
+                </div>
+                <XLogo />
+              </div>
+              {item.text.map((line) => (
+                <p key={line} className="post-text">{line}</p>
+              ))}
+              <img
+                className="post-photo"
+                src={item.image.src}
+                alt={item.image.alt}
+                width={item.image.width}
+                height={item.image.height}
+                loading="lazy"
+              />
+              <span className="post-date">{item.date} · View on X ↗</span>
+            </a>
           )
         )}
       </div>
