@@ -62,6 +62,7 @@ final class VirtualDisplay {
                 // removing the display — never hold it across the sleep.
                 do {
                     guard let self else { return }
+                    self.ensureNotMirrored()
                     if self.selectHiDPIMode(recover: settled) { settled = true }
                 }
                 try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
@@ -97,5 +98,42 @@ final class VirtualDisplay {
         let err = CGCompleteDisplayConfiguration(config, .permanently)
         Log.info("HiDPI mode (re)selected: \(hidpi.width)x\(hidpi.height)@2x (result \(err.rawValue))")
         return err == .success
+    }
+
+    /// An extend-mode virtual display must never sit in a system mirror set.
+    /// macOS can drop it there on its own — e.g. when it misclassifies the
+    /// display as a TV, whose arrangement default is "Mirror Entire Screen"
+    /// (issue #100) — and that arrangement is saved per vendor/product/serial,
+    /// so a stable serial means it's restored every session and the device is
+    /// stuck mirroring. Detaching is enforcement, not a one-shot: like the
+    /// HiDPI mode, re-break it whenever macOS re-mirrors it. Mirror mode never
+    /// builds a VirtualDisplay (it captures the main display instead), so a
+    /// VirtualDisplay in a mirror set is always wrong — safe to always undo.
+    private func ensureNotMirrored() {
+        let id = display.displayID
+        guard CGDisplayIsInMirrorSet(id) != 0 else { return }
+
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success else { return }
+        // Detach the virtual display itself (covers "macOS mirrors the VD onto
+        // the main display")...
+        CGConfigureDisplayMirrorOfDisplay(config, id, kCGNullDirectDisplay)
+        // ...and any display currently mirroring the VD (covers the reporter's
+        // arrangement: the device set as Main, with the built-in mirroring it).
+        var n: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &n)
+        var list = [CGDirectDisplayID](repeating: 0, count: Int(n))
+        CGGetActiveDisplayList(n, &list, &n)
+        for other in list where other != id && CGDisplayMirrorsDisplay(other) == id {
+            CGConfigureDisplayMirrorOfDisplay(config, other, kCGNullDirectDisplay)
+        }
+        // Session scope, NOT permanent: permanent mirror reconfiguration of the
+        // private virtual display is rejected (kCGErrorIllegalArgument) and
+        // silently leaves it mirrored despite a "success" from the mirror call.
+        // Session scope actually dissolves the set, and this runs every ~2s for
+        // the display's lifetime, so it re-overrides whatever mirror arrangement
+        // macOS restores — continuous enforcement, like the HiDPI mode above.
+        let err = CGCompleteDisplayConfiguration(config, .forSession)
+        Log.info("virtual display \(id) was in a mirror set — detached to extend (result \(err.rawValue))")
     }
 }
