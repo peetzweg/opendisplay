@@ -271,13 +271,12 @@ details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
 .btn.kofi:hover { background: #fafafa; }
 .btn.kofi .kofi-mark { height: 22px; width: auto; display: block; }
 /* Ko-fi nudge → scrolls down to #support. Internal jump, so generic wording
-   ("Support me") + a down arrow. Appears twice: `.start` above the downloads
-   (left-aligned), and the base one below them (centered). Desktop: content-width.
+   ("Support me") + a down arrow. Appears twice: above the downloads and at the
+   end of the demo section. Desktop: content-width, centered.
    Mobile: full width, stacked into two centered lines. Coffee mark is the eye-catch. */
 .kofi-banner { display: flex; width: fit-content; margin: 16px auto 0;
   align-items: center; gap: 14px; padding: 10px 18px;
   border: 1px solid var(--line); border-radius: 3px; text-decoration: none; color: var(--fg); }
-.kofi-banner.start { margin-left: 0; margin-right: auto; }
 .kofi-banner:hover { background: #fafafa; }
 .kofi-banner-left { display: inline-flex; align-items: center; gap: 10px; }
 .kofi-banner .kofi-mark { height: 24px; width: auto; display: block; flex: none; }

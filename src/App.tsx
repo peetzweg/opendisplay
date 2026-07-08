@@ -174,7 +174,7 @@ export default function App() {
             scroll. No subscription. No dongle. No account.
           </p>
           <p className="meta">macOS 14+ &nbsp;·&nbsp; iPadOS 17+ &nbsp;·&nbsp; iOS 17+ &nbsp;·&nbsp; GPL-3.0</p>
-          <a className="kofi-banner start" href="#support">
+          <a className="kofi-banner" href="#support">
             <span className="kofi-banner-left">
               <img className="kofi-mark" src="kofi-mark.webp" alt="" width="24" height="24" />
               <span className="kofi-banner-text">Free, and built by one person.</span>
@@ -245,15 +245,6 @@ export default function App() {
               </p>
             </div>
           </div>
-          <a className="kofi-banner" href="#support">
-            <span className="kofi-banner-left">
-              <img className="kofi-mark" src="kofi-mark.webp" alt="" width="24" height="24" />
-              <span className="kofi-banner-text">Free, and built by one person.</span>
-            </span>
-            <span className="kofi-banner-cta">
-              Support me<span className="kofi-banner-arrow">↓</span>
-            </span>
-          </a>
         </div>
       </section>
 
@@ -267,6 +258,15 @@ export default function App() {
             <a href="https://x.com/peetzweg">Tag @peetzweg on X</a> and your setup might
             end up here.
           </p>
+          <a className="kofi-banner" href="#support">
+            <span className="kofi-banner-left">
+              <img className="kofi-mark" src="kofi-mark.webp" alt="" width="24" height="24" />
+              <span className="kofi-banner-text">Free, and built by one person.</span>
+            </span>
+            <span className="kofi-banner-cta">
+              Support me<span className="kofi-banner-arrow">↓</span>
+            </span>
+          </a>
         </div>
       </section>
 
