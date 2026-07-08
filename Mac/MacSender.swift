@@ -222,6 +222,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Encode failures repeat every frame once the session goes bad; throttle
     // the log to one line a second and carry the count.
     private var encodeFailureLogPolicy = ThrottledLogPolicy<OSStatus>()
+    // Same for the encoder output callback rejecting a frame; separate policy
+    // so "submit failed" and "output rejected" stay distinguishable.
+    private var encodeOutputFailureLogPolicy = ThrottledLogPolicy<OSStatus>()
     // A framing desync feeds this garbage at the peer's message rate until the
     // watchdog redials, so it needs the same treatment. Detail is the byte
     // count of the last message that would not parse.
@@ -1205,7 +1208,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.pendingEncodes = max(0, self.pendingEncodes - 1)
                 self.pipelineLock.unlock()
             }
-            guard status == noErr, let buffer else { return }
+            guard status == noErr, let buffer else {
+                // A session rejecting every frame looks healthy in all other
+                // counters — the receiver just stays black. Don't be silent.
+                self.pipelineLock.lock()
+                let logAction = self.encodeOutputFailureLogPolicy.record(
+                    status,
+                    at: ProcessInfo.processInfo.systemUptime
+                )
+                self.pipelineLock.unlock()
+                self.handleEncodeOutputFailureLogAction(logAction)
+                return
+            }
             if let data = self.annexB(from: buffer) {
                 let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
                 var framed = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs)}".utf8)
@@ -1251,6 +1265,33 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func reportEncodeFailures(_ report: ThrottledLogPolicy<OSStatus>.Report) {
         Log.info("VTCompressionSessionEncodeFrame failed: \(report.detail) (\(report.count) since last report)")
+    }
+
+    private func handleEncodeOutputFailureLogAction(_ action: ThrottledLogPolicy<OSStatus>.Action) {
+        switch action {
+        case .report(let report):
+            reportEncodeOutputFailures(report)
+        case .schedule(let delay):
+            queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.flushEncodeOutputFailureLog()
+            }
+        case .none:
+            break
+        }
+    }
+
+    private func flushEncodeOutputFailureLog() {
+        pipelineLock.lock()
+        let report = encodeOutputFailureLogPolicy.flush(at: ProcessInfo.processInfo.systemUptime)
+        pipelineLock.unlock()
+        if let report { reportEncodeOutputFailures(report) }
+    }
+
+    private func reportEncodeOutputFailures(_ report: ThrottledLogPolicy<OSStatus>.Report) {
+        // VideoToolbox can reject a frame with noErr + a nil buffer (e.g.
+        // above the H.264 level pixel-rate ceiling) — call that case out.
+        let cause = report.detail == noErr ? "nil buffer despite noErr" : "status \(report.detail)"
+        Log.info("encoder output rejected: \(cause) (\(report.count) since last report)")
     }
 
     // Runs on `queue`, where the policy and the control connection both live.
