@@ -71,9 +71,6 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
   margin: 26px 0 0; }
 .meta { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
   margin-top: 18px; letter-spacing: 0.02em; }
-.hero-support { margin-top: 16px; }
-.hero-support a { font-size: 0.9rem; color: var(--muted); text-decoration-color: var(--line); }
-.hero-support a:hover { color: var(--fg); text-decoration-color: var(--line-strong); }
 
 /* ---- rotating hero word (fancy TextRotate) ---- */
 /* minimal utility classes the component expects (we don't ship Tailwind) */
@@ -226,7 +223,7 @@ details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
 .btn.kofi { background: #fff; color: var(--fg); }
 .btn.kofi:hover { background: #fafafa; }
 .btn.kofi .kofi-mark { height: 22px; width: auto; display: block; }
-/* Ko-fi nudge under the downloads → scrolls down to #support. Internal jump, so
+/* Ko-fi nudge above the downloads → scrolls down to #support. Internal jump, so
    generic wording ("Support me") + a down arrow. Desktop: content-width, centered.
    Mobile: full width, stacked into two centered lines. Coffee mark is the eye-catch. */
 .kofi-banner { display: flex; width: fit-content; margin: 16px auto 0;
