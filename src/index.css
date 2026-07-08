@@ -41,7 +41,10 @@ nav .gh-stars { font-variant-numeric: tabular-nums; }
 
 /* ---- section scaffolding ---- */
 section { border-top: 1px solid var(--line); }
-section:first-of-type { border-top: 0; }
+/* Hero is the first section on the page — no divider above it. It's nested in
+   .nudge-scope (the sticky-bar containing block), so scope the reset there;
+   an unscoped :first-of-type would also strip #support's top border. */
+.nudge-scope section:first-of-type { border-top: 0; }
 /* Vertical only — horizontal padding comes from .wrap. Using the padding
    shorthand here would reset .wrap's left/right padding to 0 (same
    specificity, later rule wins), making content run edge-to-edge on mobile. */
@@ -54,7 +57,14 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
   font-weight: 600; }
 
 /* ---- hero ---- */
-.hero { padding-top: 48px; padding-bottom: 84px; }   /* vertical only — see .sec note */
+/* Bottom padding is light because the Ko-fi bar + downloads section follow
+   directly; the bar supplies the visual break, not a big hero gap. */
+.hero { padding-top: 48px; padding-bottom: 40px; }   /* vertical only — see .sec note */
+/* Downloads live in their own borderless section so the sticky Ko-fi bar can
+   sit as a full-width sibling between it and the hero. No top divider — the
+   hero → bar → downloads run reads as one block, like before the split. */
+.downloads-sec { border-top: 0; padding: 44px 0 84px; }
+.downloads-sec .needs-both { margin-top: 0; }
 .hero-logo { display: block; width: 160px; height: 160px; margin-bottom: 24px; }
 .hero h1 { max-width: 30ch; }
 /* two fixed lines: "Use your <pill>" then a stable "as your Mac's second monitor."
@@ -74,9 +84,6 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
   margin: 26px 0 0; }
 .meta { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
   margin-top: 18px; letter-spacing: 0.02em; }
-.hero-support { margin-top: 16px; }
-.hero-support a { font-size: 0.9rem; color: var(--muted); text-decoration-color: var(--line); }
-.hero-support a:hover { color: var(--fg); text-decoration-color: var(--line-strong); }
 
 /* ---- rotating hero word (fancy TextRotate) ---- */
 /* minimal utility classes the component expects (we don't ship Tailwind) */
@@ -270,25 +277,33 @@ details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
 .support-note strong { color: var(--fg); }
 .support .kofi-logo { display: block; height: 46px; width: auto; margin: 4px auto 22px; }
 /* Ko-fi CTA: light button so the full-colour logomark stays legible. */
-.btn.kofi { background: #fff; color: var(--fg); }
+.btn.kofi { background: #fff; color: var(--fg); cursor: pointer; }
 .btn.kofi:hover { background: #fafafa; }
 .btn.kofi .kofi-mark { height: 22px; width: auto; display: block; }
-/* Ko-fi nudge under the downloads → scrolls down to #support. Internal jump, so
-   generic wording ("Support me") + a down arrow. Desktop: content-width, centered.
-   Mobile: full width, stacked into two centered lines. Coffee mark is the eye-catch. */
-.kofi-banner { display: flex; width: fit-content; margin: 16px auto 0;
+/* Ko-fi nudge → jumps to #support. <SupportNudge /> renders it as a centered,
+   bordered pill that sits between the hero and the downloads and pins under the
+   sticky nav (top = 60px nav height) once you scroll past it. It lives inside
+   .nudge-scope, whose box ends at #support, so the pill stops sticking exactly
+   when the real support section arrives. Solid bg so content scrolls behind it
+   cleanly. Mobile: full width, stacked into two centered lines. */
+.support-nudge { position: sticky; top: 60px; z-index: 9;
+  display: flex; width: fit-content; margin: 0 auto;
   align-items: center; gap: 14px; padding: 10px 18px;
-  border: 1px solid var(--line); border-radius: 3px; text-decoration: none; color: var(--fg); }
-.kofi-banner:hover { background: #fafafa; }
-.kofi-banner-left { display: inline-flex; align-items: center; gap: 10px; }
-.kofi-banner .kofi-mark { height: 24px; width: auto; display: block; flex: none; }
+  border: 1px solid var(--line); border-radius: 3px;
+  background: var(--bg); text-decoration: none; color: var(--fg); }
+.support-nudge:hover { background: #fafafa; }
+.kofi-banner-left { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.support-nudge .kofi-mark { height: 24px; width: auto; display: block; flex: none; }
 .kofi-banner-text { font-size: 0.9rem; color: var(--muted); }
 .kofi-banner-cta { font-size: 0.92rem; font-weight: 600; white-space: nowrap; }
 .kofi-banner-arrow { display: inline-block; margin-left: 6px; color: var(--faint);
   transition: transform 0.15s ease; }
-.kofi-banner:hover .kofi-banner-arrow { transform: translateY(3px); }
+.support-nudge:hover .kofi-banner-arrow { transform: translateY(3px); }
 @media (max-width: 560px) {
-  .kofi-banner { width: auto; flex-direction: column; gap: 6px; text-align: center; }
+  /* Full-width band: drop the side borders (and now-orphaned corner radius) so
+     only the top/bottom rules remain. */
+  .support-nudge { width: auto; flex-direction: column; gap: 6px; text-align: center;
+    border-left: 0; border-right: 0; border-radius: 0; }
 }
 
 /* ---- footer ---- */
