@@ -117,6 +117,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Kept tight: at 60fps each queued send is ~17ms of added latency.
     private var pendingSends = 0
     private let maxPendingSends = 3
+    // Encoder saturation gate (see the capture callback): frames handed to
+    // VTCompressionSession whose output handler hasn't fired yet.
+    private var pendingEncodes = 0
     private var dropsThisWindow = 0
     private var needsKeyframe = true
     private var connectionReady = false
@@ -568,6 +571,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         connection?.cancel()
         connection = nil
         pendingSends = 0
+        pendingEncodes = 0
         queue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.connect()
         }
@@ -801,6 +805,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: - Encoder setup
 
     private func setupEncoder(width: Int, height: Int) {
+        // Reset the in-flight gate on every (re)build so callbacks the old
+        // session swallowed can't wedge it shut.
+        queue.async { self.pendingEncodes = 0 }
         // Low-latency rate control: the hardware encoder emits every frame
         // immediately instead of pipelining. (`-lowlatency NO` for A/B.)
         let lowLatency = UserDefaults.standard.object(forKey: "lowlatency") == nil
@@ -862,6 +869,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             return
         }
 
+        // Encoder saturation gate: a hardware encode is not free, and
+        // VTCompressionSessionEncodeFrame happily QUEUES what the encoder
+        // can't keep up with — queued frames are pure latency (measured on a
+        // 120Hz fork of this pipeline: capture→socket 62ms under sustained
+        // load vs 14ms idle, exactly ~5 queued frames). Keep at most 2 in
+        // flight and skip the rest: delivered fps becomes whatever the
+        // encoder sustains, at ~1 frame of latency instead of 5.
+        if pendingEncodes >= 2 {
+            dropsThisWindow += 1
+            dropsTotal += 1
+            return
+        }
+
         encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
     }
 
@@ -873,7 +893,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary
             needsKeyframe = false
         }
-        VTCompressionSessionEncodeFrame(
+        pendingEncodes += 1
+        let status = VTCompressionSessionEncodeFrame(
             encoder,
             imageBuffer: pixelBuffer,
             presentationTimeStamp: pts,
@@ -881,7 +902,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             frameProperties: frameProperties,
             infoFlagsOut: nil
         ) { [weak self] status, _, buffer in
-            guard status == noErr, let buffer, let self else { return }
+            guard let self else { return }
+            // The handler runs on VideoToolbox's thread; the counter lives
+            // on `queue`.
+            self.queue.async { self.pendingEncodes = max(0, self.pendingEncodes - 1) }
+            guard status == noErr, let buffer else { return }
             if let data = self.annexB(from: buffer) {
                 // Telemetry prefix before the first start code — the receiver
                 // parses it and skips to the H.264 payload. cap = capture time,
@@ -891,6 +916,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 framed.append(data)
                 self.sendFramed(framed)
             }
+        }
+        if status != noErr {
+            // Call failed synchronously — the handler never fires. max(0,·)
+            // keeps a rare double-decrement from wedging the gate shut.
+            pendingEncodes = max(0, pendingEncodes - 1)
         }
     }
 
