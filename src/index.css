@@ -226,6 +226,23 @@ details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
 .btn.kofi { background: #fff; color: var(--fg); }
 .btn.kofi:hover { background: #fafafa; }
 .btn.kofi .kofi-mark { height: 22px; width: auto; display: block; }
+/* Ko-fi nudge under the downloads → scrolls down to #support. Internal jump, so
+   generic wording ("Support me") + a down arrow. Desktop: content-width, centered.
+   Mobile: full width, stacked into two centered lines. Coffee mark is the eye-catch. */
+.kofi-banner { display: flex; width: fit-content; margin: 16px auto 0;
+  align-items: center; gap: 14px; padding: 10px 18px;
+  border: 1px solid var(--line); border-radius: 3px; text-decoration: none; color: var(--fg); }
+.kofi-banner:hover { background: #fafafa; }
+.kofi-banner-left { display: inline-flex; align-items: center; gap: 10px; }
+.kofi-banner .kofi-mark { height: 24px; width: auto; display: block; flex: none; }
+.kofi-banner-text { font-size: 0.9rem; color: var(--muted); }
+.kofi-banner-cta { font-size: 0.92rem; font-weight: 600; white-space: nowrap; }
+.kofi-banner-arrow { display: inline-block; margin-left: 6px; color: var(--faint);
+  transition: transform 0.15s ease; }
+.kofi-banner:hover .kofi-banner-arrow { transform: translateY(3px); }
+@media (max-width: 560px) {
+  .kofi-banner { width: auto; flex-direction: column; gap: 6px; text-align: center; }
+}
 
 /* ---- footer ---- */
 footer { border-top: 1px solid var(--line); padding: 48px 0 64px;
