@@ -57,7 +57,14 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
   font-weight: 600; }
 
 /* ---- hero ---- */
-.hero { padding-top: 48px; padding-bottom: 84px; }   /* vertical only — see .sec note */
+/* Bottom padding is light because the Ko-fi bar + downloads section follow
+   directly; the bar supplies the visual break, not a big hero gap. */
+.hero { padding-top: 48px; padding-bottom: 40px; }   /* vertical only — see .sec note */
+/* Downloads live in their own borderless section so the sticky Ko-fi bar can
+   sit as a full-width sibling between it and the hero. No top divider — the
+   hero → bar → downloads run reads as one block, like before the split. */
+.downloads-sec { border-top: 0; padding: 44px 0 84px; }
+.downloads-sec .needs-both { margin-top: 0; }
 .hero-logo { display: block; width: 160px; height: 160px; margin-bottom: 24px; }
 .hero h1 { max-width: 30ch; }
 /* two fixed lines: "Use your <pill>" then a stable "as your Mac's second monitor."

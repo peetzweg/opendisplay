@@ -148,8 +148,6 @@ export default function App() {
       {/* Sticky-scope: the Ko-fi bar sticks under the nav through the hero and
           demo, then releases where this div ends — right before #support. */}
       <div className="nudge-scope">
-        <SupportNudge />
-
       <section>
         <div className="wrap hero">
           <img ref={heroLogoRef} className="hero-logo" src="logo.png" alt="OpenDisplay" width="160" height="160" />
@@ -180,7 +178,15 @@ export default function App() {
             scroll. No subscription. No dongle. No account.
           </p>
           <p className="meta">macOS 14+ &nbsp;·&nbsp; iPadOS 17+ &nbsp;·&nbsp; iOS 17+ &nbsp;·&nbsp; GPL-3.0</p>
+        </div>
+      </section>
 
+      {/* Full-width Ko-fi bar between the hero pitch and the downloads. It sits
+          in flow here and pins under the nav once you scroll past it. */}
+      <SupportNudge />
+
+      <section className="downloads-sec">
+        <div className="wrap">
           <p className="needs-both">
             OpenDisplay is <strong>two apps that work together</strong> — install both to get going.
           </p>
