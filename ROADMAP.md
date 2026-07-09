@@ -1,7 +1,8 @@
 # Roadmap
 
-This roadmap is for the Android/CN fork. It is intentionally practical: keep
-the current working path stable, then improve polish and maintainability.
+This roadmap is for the OpenDisplay Mac/Android CN fork. It is intentionally
+practical: keep the current working path stable, then improve polish and
+maintainability.
 
 ## Priority 1: Stabilize The Android Receiver
 

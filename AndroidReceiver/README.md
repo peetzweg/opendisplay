@@ -1,6 +1,6 @@
 # OpenDisplay Android Receiver
 
-Android WiFi receiver for the OpenDisplay Android/CN fork.
+Android WiFi receiver for the OpenDisplay Mac/Android CN fork.
 
 This module lets an Android tablet act as a receiver for the Mac sender. It
 uses the same OpenDisplay receiver contract as the iOS app: Bonjour-compatible

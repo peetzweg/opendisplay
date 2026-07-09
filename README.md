@@ -2,7 +2,7 @@
 
 <img src="public/logo.png" width="128" alt="OpenDisplay app icon" />
 
-# OpenDisplay Android/CN Fork
+# OpenDisplay Mac/Android CN
 
 **Use an Android tablet, iPhone, or iPad as an extra Mac display.**
 
@@ -32,10 +32,10 @@ input fixes for touch, cursor, and scrolling.
 
 ## English Summary
 
-This is a focused OpenDisplay fork for Android tablet support and Chinese
-localization. The original project already provides a low-latency Mac sender
-and iOS receiver. This fork adds an Android receiver that implements the same
-receiver-side contract over local WiFi, plus UI and input improvements for
+This is a focused OpenDisplay fork for Mac-to-Android tablet support and
+Chinese localization. The original project already provides a low-latency Mac
+sender and iOS receiver. This fork adds an Android receiver that implements the
+same receiver-side contract over local WiFi, plus UI and input improvements for
 day-to-day use.
 
 The project is useful if you want to explore:
@@ -139,6 +139,7 @@ when reporting problems.
 - [SUPPORT.md](SUPPORT.md): how to report issues with useful context
 - [SECURITY.md](SECURITY.md): local-network security model and disclosure policy
 - [AndroidReceiver/README.md](AndroidReceiver/README.md): Android receiver details
+- [BUILD_IOS_WITH_FREE_APPLE_ID.md](BUILD_IOS_WITH_FREE_APPLE_ID.md): iOS self-signing guide
 - [CHANGELOG.md](CHANGELOG.md): upstream history plus fork-specific changes
 
 ## Relationship To Upstream
