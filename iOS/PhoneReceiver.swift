@@ -44,7 +44,7 @@ struct PerfStats: Equatable {
 
 final class PhoneReceiver: ObservableObject {
 
-    @Published var status = "Starting…"
+    @Published var status = "正在启动…"
     @Published var fps = 0
     @Published var connected = false
     @Published var videoSize = CGSize.zero   // for touch coordinate mapping
@@ -243,7 +243,7 @@ final class PhoneReceiver: ObservableObject {
             params.serviceClass = .interactiveVideo
             listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
         } catch {
-            setStatus("Listener failed: \(error.localizedDescription)")
+            setStatus("监听失败：\(error.localizedDescription)")
             return
         }
         // Advertise on the local network so the Mac can discover us for WiFi
@@ -280,11 +280,11 @@ final class PhoneReceiver: ObservableObject {
             switch state {
             case .ready:
                 self.listenerHealthy = true
-                self.setStatus("Listening on :\(self.port)")
+                self.setStatus("正在监听 :\(self.port)")
             case .failed(let error):
                 Log.info("listener failed: \(error) — restarting in 1s")
                 self.listenerHealthy = false
-                self.setStatus("Listener failed — restarting…")
+                self.setStatus("监听失败，正在重启…")
                 self.queue.asyncAfter(deadline: .now() + 1) { self.restartListener() }
             case .cancelled:
                 self.listenerHealthy = false
@@ -551,7 +551,7 @@ final class PhoneReceiver: ObservableObject {
                     DispatchQueue.main.async {
                         self.videoSize = CGSize(width: Int(dims.width), height: Int(dims.height))
                     }
-                    setStatus("Receiving \(dims.width)×\(dims.height)")
+                    setStatus("正在接收 \(dims.width)×\(dims.height)")
                 } else {
                     Log.info("format description FAILED: \(status)")
                 }
@@ -803,9 +803,9 @@ final class PhoneReceiver: ObservableObject {
 
     private func setConnected(_ value: Bool) {
         DispatchQueue.main.async { self.connected = value }
-        if !value { setStatus("Listening on :9000") }
+        if !value { setStatus("正在监听 :9000") }
         else {
-            setStatus("Connected")
+            setStatus("已连接")
             // Remember the first ever successful connection to a Mac so the
             // first-run onboarding hint never reappears (issue #49).
             if !UserDefaults.standard.bool(forKey: "hasConnectedBefore") {

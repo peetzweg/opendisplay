@@ -144,11 +144,11 @@ struct IdleView: View {
             }
 
             VStack(alignment: .leading, spacing: 14) {
-                Label("Plug in the USB cable and start the Mac app",
+                Label("连接 USB 线，并启动 Mac 端 app",
                       systemImage: "cable.connector")
-                Label("Or choose this \(deviceKind) under WiFi in the Mac app",
+                Label("或在 Mac 端的 WiFi 列表中选择这台 \(deviceKind)",
                       systemImage: "wifi")
-                Label("Keep this app open — streaming starts automatically",
+                Label("保持此 app 打开，画面会自动开始传输",
                       systemImage: "play.circle")
             }
             .font(.subheadline)
@@ -162,11 +162,11 @@ struct IdleView: View {
             Button {
                 showSettings = true
             } label: {
-                Label("Settings & Help", systemImage: "gearshape")
+                Label("设置与帮助", systemImage: "gearshape")
             }
             .buttonStyle(.bordered)
 
-            Text("Tip: shake the \(deviceKind) to open settings anytime")
+            Text("提示：随时摇一摇这台 \(deviceKind) 即可打开设置")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 8)
@@ -195,10 +195,10 @@ struct OnboardingView: View {
                         .padding(.top, 24)
 
                     VStack(spacing: 10) {
-                        Text("One more app to go")
+                        Text("还需要安装 Mac 端")
                             .font(.title2.bold())
                             .multilineTextAlignment(.center)
-                        Text("OpenDisplay turns this \(deviceKind) into a second screen for your Mac — but it needs the **OpenDisplay Mac app** running on a Mac connected by the same USB cable or on the same WiFi network.")
+                        Text("OpenDisplay 可以把这台 \(deviceKind) 变成 Mac 的第二块屏幕，但需要在通过同一根 USB 线连接、或处于同一 WiFi 网络的 Mac 上运行 **OpenDisplay Mac 端 app**。")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -206,9 +206,9 @@ struct OnboardingView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Install the OpenDisplay Mac app on your Mac", systemImage: "1.circle.fill")
-                        Label("Connect the \(deviceKind) by USB, or join the same WiFi", systemImage: "2.circle.fill")
-                        Label("Keep this app open — streaming starts on its own", systemImage: "3.circle.fill")
+                        Label("在 Mac 上安装 OpenDisplay Mac 端 app", systemImage: "1.circle.fill")
+                        Label("用 USB 连接这台 \(deviceKind)，或加入同一 WiFi", systemImage: "2.circle.fill")
+                        Label("保持此 app 打开，串流会自动开始", systemImage: "3.circle.fill")
                     }
                     .font(.subheadline)
                     .padding(20)
@@ -217,25 +217,25 @@ struct OnboardingView: View {
                                 in: RoundedRectangle(cornerRadius: 16))
 
                     Link(destination: macAppURL) {
-                        Label("Get the Mac app", systemImage: "arrow.down.circle")
+                        Label("获取 Mac 端 app", systemImage: "arrow.down.circle")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Text("You can find this link again anytime in Settings — shake the \(deviceKind) to open it.")
+                    Text("之后也可以在设置里找到这个链接，摇一摇这台 \(deviceKind) 即可打开设置。")
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
                 }
                 .padding()
             }
-            .navigationTitle("Welcome")
+            .navigationTitle("欢迎")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Close") {
+                    Button("关闭") {
                         onClose()
                         dismiss()
                     }
@@ -268,38 +268,38 @@ struct PerfOverlay: View {
                     .foregroundStyle(.white)
 
                 if stats.e2eP50 > 0 {
-                    metric("latency", String(format: "%.0f ms", stats.e2eP50))
+                    metric("延迟", String(format: "%.0f ms", stats.e2eP50))
                     metric("p95", String(format: "%.0f ms", stats.e2eP95))
-                    metric("encode", String(format: "%.0f ms", stats.encodeP50))
+                    metric("编码", String(format: "%.0f ms", stats.encodeP50))
                 }
                 if stats.decodeP50 > 0 {
-                    metric("decode", String(format: "%.1f ms", stats.decodeP50))
+                    metric("解码", String(format: "%.1f ms", stats.decodeP50))
                 }
                 if stats.photonP50 > 0 {
                     // True capture→glass latency (Metal presented handler) —
                     // the only number that includes display vsync.
-                    metric("photon", String(format: "%.0f ms", stats.photonP50))
+                    metric("上屏", String(format: "%.0f ms", stats.photonP50))
                 }
                 if stats.inputP50 > 0 {
                     // touch→CGEvent on the Mac; full touch-to-photon adds
                     // the render+capture wait and one e2e on top.
-                    metric("input", String(format: "%.0f ms", stats.inputP50))
+                    metric("输入", String(format: "%.0f ms", stats.inputP50))
                 }
                 metric("rtt", String(format: "%.0f ms", stats.rttMs))
                 metric("FPS", "\(stats.fps)")
                 if stats.capFps > 0 {
-                    metric("Mac cap", "\(stats.capFps)")
+                    metric("Mac 捕获", "\(stats.capFps)")
                 }
                 metric("Mbit/s", String(format: "%.1f", stats.mbps))
-                metric("stalls", "\(stats.stalls)")
-                metric("drops", "\(stats.macDrops)")
+                metric("卡顿", "\(stats.stalls)")
+                metric("丢帧", "\(stats.macDrops)")
                 if stats.macPending > 0 {
-                    metric("queue", "\(stats.macPending)")
+                    metric("队列", "\(stats.macPending)")
                 }
                 if stats.decodeFlushes > 0 {
-                    metric("flushes", "\(stats.decodeFlushes)")
+                    metric("刷新", "\(stats.decodeFlushes)")
                 }
-                metric("res", "\(Int(videoSize.width))×\(Int(videoSize.height))")
+                metric("分辨率", "\(Int(videoSize.width))×\(Int(videoSize.height))")
             }
             // Two graphs side by side where they fit (landscape), stacked
             // where they don't (portrait).
@@ -316,10 +316,10 @@ struct PerfOverlay: View {
 
     @ViewBuilder
     private var graphs: some View {
-        graph("latency ms (cap→display)",
+        graph("延迟 ms（捕获→显示）",
               BarGraph(samples: stats.e2eSamples, ceiling: 80,
                        good: 25, warn: 40, reference: nil))
-        graph("frame interval ms",
+        graph("帧间隔 ms",
               BarGraph(samples: stats.samples, ceiling: 60,
                        good: 25, warn: 50, reference: 16.7))
     }
@@ -437,12 +437,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Status") {
-                    LabeledContent("Listening", value: "Port 9000")
-                    LabeledContent("Connection",
-                                   value: receiver.connected ? "Connected" : "Waiting for Mac")
+                Section("状态") {
+                    LabeledContent("监听", value: "端口 9000")
+                    LabeledContent("连接",
+                                   value: receiver.connected ? "已连接" : "正在等待 Mac")
                     if receiver.videoSize != .zero {
-                        LabeledContent("Stream",
+                        LabeledContent("画面",
                                        value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
                     }
                 }
@@ -455,60 +455,60 @@ struct SettingsView: View {
                     // the receiver, so it survives those rebuilds.
                     DeviceNameField { receiver.setServiceName($0) }
                 } header: {
-                    Text("Name")
+                    Text("名称")
                 } footer: {
-                    Text("Shown in the Mac app's WiFi connection menu. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
+                    Text("此名称会显示在 Mac 端的 WiFi 连接菜单里。iOS 不允许 app 读取这台 \(deviceKind) 的真实设备名，所以请在这里设置一次。")
                 }
 
                 Section {
-                    Toggle("Performance overlay", isOn: $showAnalytics)
-                    Toggle("Metal renderer (experimental)", isOn: $metalRenderer)
+                    Toggle("性能浮层", isOn: $showAnalytics)
+                    Toggle("Metal 渲染器（实验性）", isOn: $metalRenderer)
                 } header: {
-                    Text("Analytics")
+                    Text("性能分析")
                 } footer: {
-                    Text("The overlay shows FPS, bitrate, frame timing, stalls, and latency graphs at the bottom of the screen while streaming. The experimental Metal renderer decodes and presents frames manually — it adds decode and true on-glass latency metrics to the overlay, but in our measurements the system video layer displays frames faster. Leave it off unless you're debugging.")
+                    Text("性能浮层会在串流时显示 FPS、码率、帧间隔、卡顿和延迟图表。实验性 Metal 渲染器会手动解码并显示帧，可额外显示解码和真实上屏延迟；但实测系统视频层更快，除非调试，否则建议关闭。")
                 }
 
                 Section {
-                    Button("Open iOS Settings for OpenDisplay") {
+                    Button("打开 OpenDisplay 的 iOS 设置") {
                         if let url = URL(string: UIApplication.openSettingsURLString) {
                             UIApplication.shared.open(url)
                         }
                     }
                 } header: {
-                    Text("Permissions")
+                    Text("权限")
                 } footer: {
-                    Text("WiFi mode needs Local Network access. If your Mac can't find this \(deviceKind), enable it under Settings → Privacy & Security → Local Network → OpenDisplay. USB mode works without it.")
+                    Text("WiFi 模式需要“本地网络”权限。如果 Mac 找不到这台 \(deviceKind)，请到“设置”→“隐私与安全性”→“本地网络”中允许 OpenDisplay。USB 模式不需要此权限。")
                 }
 
                 Section {
-                    Label("USB: plug in the cable, run the Mac app — it connects automatically through the wire (lowest latency).",
+                    Label("USB：插上线并运行 Mac 端 app，它会自动通过线缆连接，延迟最低。",
                           systemImage: "cable.connector")
-                    Label("WiFi: both devices on the same network, then pick this \(deviceKind) in the Mac app's Connection menu.",
+                    Label("WiFi：两台设备连接到同一网络，然后在 Mac 端连接菜单中选择这台 \(deviceKind)。",
                           systemImage: "wifi")
-                    Label("Rotate the \(deviceKind) for a vertical second monitor.",
+                    Label("旋转这台 \(deviceKind)，即可作为竖屏第二显示器使用。",
                           systemImage: "rectangle.portrait.rotate")
-                    Label("Touch: tap to click, drag to drag, two-finger pan to scroll.",
+                    Label("触摸：轻点=点击，拖动=拖拽，双指滑动=滚动。",
                           systemImage: "hand.tap")
                 } header: {
-                    Text("How to connect")
+                    Text("如何连接")
                 }
 
                 Section {
                     Link(destination: macAppURL) {
-                        Label("Get the Mac app", systemImage: "arrow.down.circle")
+                        Label("获取 Mac 端 app", systemImage: "arrow.down.circle")
                     }
                 } footer: {
-                    Text("OpenDisplay needs the Mac app running on a Mac on the same cable or WiFi network. Download it here if you haven't yet.")
+                    Text("OpenDisplay 需要 Mac 端 app 在同一根线缆或同一 WiFi 网络中的 Mac 上运行。如果还没有安装，可以从这里下载。")
                 }
 
-                Section("About") {
-                    LabeledContent("Version", value: version)
+                Section("关于") {
+                    LabeledContent("版本", value: version)
                     Link(destination: URL(string: "https://github.com/peetzweg/opendisplay")!) {
                         Label("GitHub — peetzweg/opendisplay", systemImage: "link")
                     }
                     Link(destination: macAppURL) {
-                        Label("Website", systemImage: "globe")
+                        Label("官网", systemImage: "globe")
                     }
                 }
             }
@@ -516,7 +516,7 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("完成") { dismiss() }
                 }
             }
         }
@@ -531,7 +531,7 @@ private struct DeviceNameField: View {
     let onChange: (String) -> Void
 
     var body: some View {
-        TextField("Device name", text: $deviceName)
+        TextField("设备名称", text: $deviceName)
             .textInputAutocapitalization(.words)
             .autocorrectionDisabled()
             .focused($focused)

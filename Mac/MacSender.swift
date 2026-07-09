@@ -48,17 +48,17 @@ enum StreamQuality: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .best: return "Best (native)"
-        case .balanced: return "Balanced (75%)"
-        case .fast: return "Fast (50%)"
+        case .best: return "最佳（原生）"
+        case .balanced: return "均衡（75%）"
+        case .fast: return "流畅（50%）"
         }
     }
 
     var explanation: String {
         switch self {
-        case .best: return "Pixel-perfect at the device's native resolution. Highest bandwidth and latency."
-        case .balanced: return "75% capture resolution — noticeably lower latency, slight softness."
-        case .fast: return "Half resolution — lowest latency and bandwidth, visibly softer. Good for WiFi."
+        case .best: return "按设备原生分辨率像素级显示。带宽占用最高，延迟也最高。"
+        case .balanced: return "以 75% 分辨率捕获，延迟更低，画面会略微软一些。"
+        case .fast: return "以半分辨率捕获，延迟和带宽最低，画面会更软，适合 WiFi。"
         }
     }
 }
@@ -72,7 +72,7 @@ struct PhoneInfo: Decodable {
                           // lets the controller match the same physical device
                           // across USB and WiFi
 
-    var kind: String { device ?? "device" }
+    var kind: String { device ?? "设备" }
 }
 
 /// How the sender reaches the receiver. Reconnects re-dial from scratch, so
@@ -83,7 +83,7 @@ enum SenderTransport {
 }
 
 @available(macOS 14.0, *)
-final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
+final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
 
     // Status surfaced to the UI (updated on main thread).
     @MainActor var onStatus: ((String) -> Void)?
@@ -199,7 +199,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // launch — the permission panel's Grant button triggers the system
         // dialog, so the request always has visible context.
         if !CGPreflightScreenCaptureAccess() {
-            await status("Screen Recording permission needed — see Permissions below")
+            await status("需要屏幕录制权限，请在下方“权限”中授权")
             Log.info("Screen Recording permission missing — waiting for grant via the permission panel")
             while !CGPreflightScreenCaptureAccess() {
                 try await Task.sleep(for: .seconds(2))
@@ -213,32 +213,37 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let content = try await SCShareableContent.current
             guard let display = content.displays.first else {
                 throw NSError(domain: "MacSender", code: 1,
-                              userInfo: [NSLocalizedDescriptionKey: "no displays found"])
+                              userInfo: [NSLocalizedDescriptionKey: "未找到可捕获的显示器"])
             }
             // SCDisplay reports points; capture at point resolution for M1.
             let captureW = (Int(Double(display.width) * quality.scale)) & ~1
             let captureH = (Int(Double(display.height) * quality.scale)) & ~1
             try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
+            inputInjector = InputInjector(displayID: display.displayID)
+            try await waitForAccessibilityIfNeeded(statusText: "正在镜像，请授权“辅助功能”以启用触摸输入")
 
         case .extend:
-            await status("Waiting for the device to connect…")
+            await status("正在等待设备连接…")
             let info = try await waitForHello()
             try await setupExtend(info)
 
             // Touch back-channel (Milestone 3). Needs Accessibility trust;
             // streaming works without it, so don't interrupt with a prompt —
             // the permission panel's Grant button asks when the user is ready.
-            if !AXIsProcessTrusted() {
-                await status("Extending — grant Accessibility for touch input")
-                // Event posting is trust-checked per-post, so it starts working
-                // the moment the user grants — poll just to log/report it.
-                while !AXIsProcessTrusted() {
-                    try await Task.sleep(for: .seconds(2))
-                    if stopped { return }
-                }
-                Log.info("Accessibility permission granted — touch input live")
-            }
+            try await waitForAccessibilityIfNeeded(statusText: "正在扩展，请授权“辅助功能”以启用触摸输入")
         }
+    }
+
+    private func waitForAccessibilityIfNeeded(statusText: String) async throws {
+        guard !AXIsProcessTrusted() else { return }
+        await status(statusText)
+        // Event posting is trust-checked per-post, so it starts working
+        // the moment the user grants — poll just to log/report it.
+        while !AXIsProcessTrusted() {
+            try await Task.sleep(for: .seconds(2))
+            if stopped { return }
+        }
+        Log.info("Accessibility permission granted — touch input live")
     }
 
     /// Build (or rebuild) the virtual display + capture for the announced
@@ -275,7 +280,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         guard let vd else {
             throw NSError(domain: "MacSender", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "CGVirtualDisplay creation failed"])
+                          userInfo: [NSLocalizedDescriptionKey: "创建虚拟显示器失败"])
         }
         virtualDisplay = vd
         inputInjector = InputInjector(displayID: vd.displayID)
@@ -317,7 +322,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 try await setupExtend(target)
             } catch {
                 Log.info("reconfigure failed: \(error)")
-                await status("Rotation failed: \(error.localizedDescription)")
+                await status("旋转失败：\(error.localizedDescription)")
                 return
             }
             if let latest = lastHello,
@@ -339,7 +344,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             try await Task.sleep(for: .milliseconds(250))
         }
         throw NSError(domain: "MacSender", code: 3,
-                      userInfo: [NSLocalizedDescriptionKey: "virtual display never appeared in SCShareableContent"])
+                      userInfo: [NSLocalizedDescriptionKey: "虚拟显示器未出现在 ScreenCaptureKit 可捕获列表中"])
     }
 
     private func startCapture(display: SCDisplay, pixelsWide: Int, pixelsHigh: Int) async throws {
@@ -373,8 +378,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastCursorSent = (-1, -1, false)
         startCursorEcho()
         Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) mode \(mode.rawValue) localCursor=\(localCursor)")
-        let kind = lastHello?.kind ?? "device"
-        await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
+        let kind = lastHello?.kind ?? "设备"
+        await status("\(mode == .extend ? "正在扩展到" : "正在镜像到") \(kind)（\(pixelsWide)×\(pixelsHigh)）")
     }
 
     func stop() {
@@ -410,7 +415,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         Log.info("stream stopped with error: \(error)")
-        Task { await status("Capture stopped: \(error.localizedDescription)") }
+        Task { await status("捕获已停止：\(error.localizedDescription)") }
         // E.g. display sleep can tear the virtual display down underneath the
         // stream — rebuild instead of sitting dead until an app restart.
         guard !stopped, mode == .extend else { return }
@@ -463,7 +468,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastCursorSent = (-1, -1, false)
         lastReceived = Date()  // fresh grace period for the watchdog
         receiveControl(on: conn)
-        Task { await self.status("Connected to \(self.endpointName)") }
+        Task { await self.status("已连接到 \(self.endpointName)") }
     }
 
     private func connectTCP(_ endpoint: NWEndpoint) {
@@ -487,7 +492,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // waiting as failure and poll by reconnecting.
                 Log.info("connection waiting: \(error) — will retry")
                 self.connectionReady = false
-                Task { await self.status("Waiting for receiver at \(self.endpointName)…") }
+                Task { await self.status("正在等待 \(self.endpointName) 上的接收端…") }
                 self.scheduleReconnect()
             case .cancelled:
                 self.connectionReady = false
@@ -533,12 +538,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 let hint: String
                 switch error as? Usbmux.Failure {
                 case .noDevice:
-                    hint = "Waiting for a USB device — plug in the iPhone or iPad…"
+                    hint = "正在等待 USB 设备，请连接 iPhone 或 iPad…"
                 case .refused:
-                    hint = "Device found — open the OpenDisplay app on it…"
+                    hint = "已发现设备，请在设备上打开 OpenDisplay…"
                 default:
                     Log.info("usb dial failed: \(error)")
-                    hint = "USB connection failed: \(error.localizedDescription)"
+                    hint = "USB 连接失败：\(error.localizedDescription)"
                 }
                 queue.async {
                     guard generation == self.dialGeneration, !self.stopped else { return }
@@ -560,7 +565,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             } else {
                 disconnectedSince = Date()
-                Task { await status("Connection lost — retrying for \(Int(disconnectGraceSeconds))s…") }
+                Task { await status("连接已断开，正在重试 \(Int(disconnectGraceSeconds)) 秒…") }
             }
         }
         connectionReady = false
@@ -598,7 +603,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let self, !self.stopped else { return }
             if self.connectionReady, Date().timeIntervalSince(self.lastReceived) > 5 {
                 Log.info("watchdog: nothing from the phone for >5s — reconnecting")
-                Task { await self.status("Connection stale — reconnecting…") }
+                Task { await self.status("连接无响应，正在重新连接…") }
                 self.scheduleReconnect()
             }
             // A reconnect on a static screen produces no capture frames, so

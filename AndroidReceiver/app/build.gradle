@@ -1,0 +1,16 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "app.opendisplay.android"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "app.opendisplay.android"
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName "0.1"
+    }
+}
