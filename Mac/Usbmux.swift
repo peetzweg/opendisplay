@@ -24,6 +24,22 @@ struct UsbmuxDevice: Hashable, Identifiable {
     var label: String { "\(name ?? "iPhone / iPad") (USB)" }
 }
 
+private final class OneShotResume: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resume(_ body: () -> Void) {
+        lock.lock()
+        guard !didResume else {
+            lock.unlock()
+            return
+        }
+        didResume = true
+        lock.unlock()
+        body()
+    }
+}
+
 enum Usbmux {
     static let socketPath = "/var/run/usbmuxd"
     // lockdownd, the device-side service that answers GetValue queries.
@@ -37,10 +53,10 @@ enum Usbmux {
 
         var errorDescription: String? {
             switch self {
-            case .noDevice: return "no USB device attached"
-            case .refused: return "the device is not listening on the port"
-            case .result(let code): return "usbmuxd result \(code)"
-            case .protocolError(let detail): return "usbmuxd protocol error: \(detail)"
+            case .noDevice: return "未连接 USB 设备"
+            case .refused: return "设备端尚未监听该端口"
+            case .result(let code): return "usbmuxd 返回结果 \(code)"
+            case .protocolError(let detail): return "usbmuxd 协议错误：\(detail)"
             }
         }
     }
@@ -138,19 +154,20 @@ enum Usbmux {
     static func open(queue: DispatchQueue) async throws -> NWConnection {
         let conn = NWConnection(to: .unix(path: socketPath), using: .tcp)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            var resumed = false   // the handler fires on `queue` (serial)
+            let gate = OneShotResume()
             conn.stateUpdateHandler = { state in
-                guard !resumed else { return }
                 switch state {
                 case .ready:
-                    resumed = true
-                    cont.resume()
+                    gate.resume {
+                        cont.resume()
+                    }
                 case .failed(let error), .waiting(let error):
                     // No path updates on a Unix socket — .waiting would hang
                     // forever, so treat it as failure and let callers retry.
-                    resumed = true
-                    conn.cancel()
-                    cont.resume(throwing: error)
+                    gate.resume {
+                        conn.cancel()
+                        cont.resume(throwing: error)
+                    }
                 default:
                     break
                 }

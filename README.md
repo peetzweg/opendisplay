@@ -2,16 +2,15 @@
 
 <img src="public/logo.png" width="128" alt="OpenDisplay app icon" />
 
-# OpenDisplay
+# OpenDisplay Mac/Android CN
 
-**Turn your spare Apple devices into second monitors for your Mac — free, open source, no subscription.**
+**Use an Android tablet, iPhone, or iPad as an extra Mac display.**
 
-iPhone and iPad today, spare MacBooks on the roadmap. A self-hosted
-alternative to Apple Sidecar, Duet Display, and Luna Display: true extended
-display (not just mirroring), Retina-sharp, over USB or WiFi, with touch and
-scroll input.
+This fork extends [peetzweg/opendisplay](https://github.com/peetzweg/opendisplay)
+with an Android WiFi receiver, Chinese UI copy, Mac Dock/window polish, and
+input fixes for touch, cursor, and scrolling.
 
-[Website](https://peetzweg.github.io/opendisplay/) · [Quick start](#quick-start) · [How it works](#how-it-works) · [FAQ](#faq) · [Contributing](#contributing)
+[Architecture](ARCHITECTURE.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
 
 <br />
 
@@ -23,304 +22,145 @@ scroll input.
 
 ---
 
-## Why OpenDisplay exists
+## 中文概览
 
-Turning an iPhone or iPad into an external display for a Mac is a solved
-problem — but every existing option has a catch:
+这个仓库是 OpenDisplay 的增强 fork，目标是让更多闲置设备成为 Mac 的第二块屏幕。
 
-- **Apple Sidecar** is free but requires both devices on the *same Apple ID*,
-  doesn't support iPhones at all, and only works on supported hardware pairs.
-- **Duet Display** moved to a subscription.
-- **Luna Display** requires a hardware dongle.
+当前重点：
 
-OpenDisplay is the missing option: a **free, open-source, no-account,
-no-dongle** way to use the iOS device you already own as a true second
-display. If you were about to write your own — don't! Contribute here
-instead; the hard parts (virtual display creation, low-latency H.264
-pipeline, USB transport, input injection) are already working.
+- **Android 平板接收端**：通过 WiFi 被 Mac 端发现，接收 H.264 画面并显示为镜像或扩展屏。
+- **Mac/iOS 中文化**：主要界面、权限提示、状态说明、性能浮层已改为中文。
+- **Mac 桌面体验改进**：默认显示在程序坞，保留主窗口，避免菜单栏图标被淹没。
+- **输入链路修复**：Android 端支持鼠标位置显示、轻点、拖拽、双指滚动，并修复触摸导致退出的问题。
+- **调试与维护文稿**：补齐架构、路线图、贡献、安全和支持说明，方便后续继续维护。
 
-## Features
+本 fork 仍然保留原项目的核心价值：本地传输、自托管、开源、无需账号服务器。
 
-- 🖥️ **True display extension** — macOS treats the device as a real second
-  monitor (drag windows to it, arrange it in System Settings), not a mirror.
-  Mirroring is also available as a mode.
-- 🔌 **USB-wired for lowest latency** — streams over the Lightning/USB-C
-  cable via macOS's built-in `usbmuxd`; plug in and go, no network, no
-  WiFi jitter, no helper tools.
-- 📶 **WiFi with zero config** — the iPhone advertises itself via Bonjour;
-  pick it from a dropdown on the Mac.
-- 🔍 **Retina / HiDPI** — the virtual display matches the device panel
-  pixel-for-pixel (@2x), so text is sharp.
-- 👆 **Touch input built in** — your iPhone becomes a touchscreen for macOS:
-  **tap to click**, **drag to drag**, and **two-finger scroll** that feels
-  like a trackpad. (Apple Pencil support is on the roadmap.)
-- 🔄 **Portrait or landscape** — rotate the device and the virtual display
-  rebuilds itself as a vertical monitor at native resolution.
-- ⚡ **Low-latency pipeline** — hardware H.264 encode (VideoToolbox,
-  real-time mode, no B-frames), TCP_NODELAY, frame-drop backpressure with
-  keyframe recovery, decode-and-render via `AVSampleBufferDisplayLayer`.
-- 🔒 **Self-hosted & private** — your screen never touches anyone's server.
-  Two small apps, one TCP connection, that's it.
+## English Summary
 
-## How it works
+This is a focused OpenDisplay fork for Mac-to-Android tablet support and
+Chinese localization. The original project already provides a low-latency Mac
+sender and iOS receiver. This fork adds an Android receiver that implements the
+same receiver-side contract over local WiFi, plus UI and input improvements for
+day-to-day use.
 
-```
-MAC (sender)                                      iPHONE / iPAD (receiver)
-CGVirtualDisplay  ← macOS believes a monitor is attached
-   → ScreenCaptureKit (capture the virtual display)
-   → VideoToolbox H.264 (hardware, real-time)
-   → TCP  [4-byte length][Annex B frame]  ═══════→  NWListener :9000
-                                                      → AVSampleBufferDisplayLayer
-   ← JSON control messages (hello, touch, scroll) ═══
-   → CGEvent injection (click / drag / scroll)
-```
+The project is useful if you want to explore:
 
-The **phone listens and the Mac connects** — that ordering is what makes the
-exact same code work over USB (via the `usbmuxd` daemon built into every
-macOS install) and WiFi. The phone
-announces its native panel size; the Mac creates a `CGVirtualDisplay` at
-exactly half that in points (@2x HiDPI) and streams the pixels back.
+- macOS virtual displays through `CGVirtualDisplay`
+- ScreenCaptureKit capture and VideoToolbox H.264 streaming
+- Android `MediaCodec` rendering to `SurfaceView`
+- touch and scroll control messages from a tablet back to macOS
+- a practical Sidecar-like workflow without closed services
 
-`CGVirtualDisplay` is a **private CoreGraphics API** (the same one used by
-BetterDisplay and DeskPad) — which is precisely why this project can't ship
-on the App Store and lives on GitHub instead.
+## What This Fork Adds
 
-## Install
+| Area | Status | Notes |
+|---|---:|---|
+| Android receiver | Working prototype | WiFi discovery, H.264 decode, cursor overlay, touch and scroll input |
+| iOS receiver | Localized | Chinese onboarding, settings, permission copy, and performance overlay labels |
+| Mac sender | Localized and polished | Chinese UI, Dock/main window mode, mirror-mode input injection fix |
+| Input | Improved | Tap deferral avoids two-finger scroll mis-clicks; scroll direction adjusted |
+| Quality controls | Added | Android can advertise native, balanced, or fast display profiles |
+| Distribution | Source-first | Free Apple ID and local Xcode builds are supported; notarized public release is not configured for this fork |
 
-You need **two apps**: a Mac app (captures and sends) and an iOS app
-(receives and displays).
+## Scope
 
-### Prebuilt downloads (Mac)
+In scope:
 
-Grab `OpenDisplay.dmg` from the
-[latest release](https://github.com/peetzweg/opendisplay/releases/latest).
-The app is signed with a Developer ID certificate and notarized by Apple, so it
-opens with a plain double-click on macOS 14+ — no Gatekeeper warning. Open the
-`.dmg` and drag the app to Applications.
+- local USB/WiFi display streaming for Mac to iOS/iPadOS
+- WiFi streaming from Mac to Android tablets
+- Chinese-language product copy and user-facing status text
+- local development through Xcode and Android tooling
+- documentation that makes the fork understandable and maintainable
 
-### iPhone app
+Out of scope for now:
 
-- **TestFlight** (recommended): join the public beta at
-  [testflight.apple.com/join/3NYaY11c](https://testflight.apple.com/join/3NYaY11c).
-- **Build from source**: open the project in Xcode, select your free Apple ID
-  under Signing, hit Run. Takes ~2 minutes.
+- App Store or Play Store distribution
+- notarized public macOS releases for this fork
+- remote access over the internet
+- audio forwarding
+- production-grade encrypted pairing
 
-## Quick start (from source)
+## How It Works
 
-### Prerequisites
-
-```sh
-brew install xcodegen   # project generation
+```text
+Mac sender
+  CGVirtualDisplay / mirror display
+  ScreenCaptureKit capture
+  VideoToolbox H.264 encode
+  TCP length-prefixed frames
+        |
+        | local USB or WiFi
+        v
+iOS / Android receiver
+  length-prefixed protocol
+  H.264 decode
+  display surface
+  touch / scroll / cursor messages
+        |
+        v
+Mac input injection
 ```
 
-Xcode 15+ and a free or paid Apple developer account (to sideload the iOS
-app onto your device).
+The receiver listens on port `9000` and advertises `_opensidecar._tcp` for
+WiFi discovery. After the Mac connects, the receiver sends a JSON `hello`
+message with display metadata. Video frames and JSON control messages then
+share the same length-prefixed transport.
 
-### Build
+For a deeper technical map, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-```sh
-git clone https://github.com/peetzweg/opendisplay.git
-cd opendisplay
-echo "DEVELOPMENT_TEAM=YOURTEAMID" > .env   # your Apple team ID, for signing
-./generate.sh                               # runs xcodegen with your .env
-xcodebuild -project OpenSidecar.xcodeproj -scheme OpenSidecarMac \
-  -configuration Debug -derivedDataPath build build
-xcodebuild -project OpenSidecar.xcodeproj -scheme OpenSidecariOS \
-  -configuration Debug -destination 'generic/platform=iOS' \
-  -derivedDataPath build -allowProvisioningUpdates build
+## Project Layout
+
+```text
+Mac/                 macOS sender app
+iOS/                 iPhone/iPad receiver app
+AndroidReceiver/     Android tablet WiFi receiver
+script/              local helper launcher/build scripts
+project.yml          XcodeGen project definition
+generate.sh          regenerates OpenSidecar.xcodeproj
 ```
 
-(Or open `OpenSidecar.xcodeproj` in Xcode and hit Run on each target. Your
-team ID is shown at [developer.apple.com/account](https://developer.apple.com/account)
-under Membership, or just pick your team in Xcode's Signing pane.)
+When `project.yml` changes, regenerate the Xcode project with `./generate.sh`
+before building through Xcode.
 
-### Run (USB — recommended)
+## Current Validation
 
-1. Install + open **OpenDisplay** on the iPhone (it listens on port 9000).
-2. On the Mac, run `./run.sh` (or just open the app) — it talks to macOS's
-   built-in `usbmuxd` directly and auto-connects over the cable. No tunnel
-   tools needed.
-3. Grant **Screen Recording** (for capture) and **Accessibility** (for touch)
-   when macOS asks — one time each.
-4. Drag a window onto your new display. Done.
+The current branch has been verified locally with:
 
-### Run (WiFi)
+- macOS Debug build for `OpenSidecarMac`
+- iOS Simulator Debug build for `OpenSidecariOS`
+- Android debug APK build
+- Android protocol self-test
+- real Android tablet connection over WiFi for mirror/extend, cursor display,
+  and touch stability
 
-Open the iPhone app, then pick **"iPhone (WiFi)"** from the Connection menu
-in the Mac app. Discovery is automatic via Bonjour. USB has lower latency;
-WiFi has no cable.
+See [SUPPORT.md](SUPPORT.md) for the diagnostic information that is useful
+when reporting problems.
 
-### Permissions checklist
+## Documentation
 
-macOS and iOS gate several things this app needs — most prompt on first use,
-but some **fail silently** if denied or missed. The Mac app shows a live
-permission status panel; the iPhone app has a settings screen (shake the
-phone, or tap Settings & Help when idle).
+- [ARCHITECTURE.md](ARCHITECTURE.md): system design, protocol, and component boundaries
+- [ROADMAP.md](ROADMAP.md): maintenance priorities and future work
+- [CONTRIBUTING.md](CONTRIBUTING.md): contribution workflow and verification expectations
+- [SUPPORT.md](SUPPORT.md): how to report issues with useful context
+- [SECURITY.md](SECURITY.md): local-network security model and disclosure policy
+- [AndroidReceiver/README.md](AndroidReceiver/README.md): Android receiver details
+- [BUILD_IOS_WITH_FREE_APPLE_ID.md](BUILD_IOS_WITH_FREE_APPLE_ID.md): iOS self-signing guide
+- [CHANGELOG.md](CHANGELOG.md): upstream history plus fork-specific changes
 
-| Where | Permission | Needed for | If missing |
-|---|---|---|---|
-| Mac | Screen Recording | capturing the display | black screen on the phone |
-| Mac | Accessibility | touch/scroll input | taps do nothing |
-| Mac | **Local Network** | WiFi discovery | no device in the Connection menu |
-| iPhone | **Local Network** | WiFi discovery | Mac can't find the phone |
+## Relationship To Upstream
 
-All live under **Privacy & Security** in System Settings (Mac) / Settings
-(iPhone). The Local Network ones are only needed for WiFi mode — USB works
-without them. If the prompt never appeared, toggle the entry manually or
-force-quit and reopen the app.
+This fork is based on [peetzweg/opendisplay](https://github.com/peetzweg/opendisplay).
+The upstream project remains the canonical source for OpenDisplay's original
+Mac/iOS implementation and releases.
 
-## FAQ
+Changes in this fork are intended to be clear enough to either:
 
-**Why do I see the purple screen-recording indicator in the menu bar?**
-That's a macOS privacy indicator shown for *any* app that captures the
-screen — Duet, Luna, OBS, and Zoom trigger it too. Apple Sidecar doesn't,
-only because it's implemented inside the OS rather than on public capture
-APIs. It cannot (and shouldn't) be hidden by an app; it's how macOS tells
-you a capture is running.
-
-**The Mac app doesn't show my iPhone in the Connection menu (WiFi).**
-Both sides need **Local Network** permission, and both fail *silently*
-without it: check Privacy & Security → Local Network on the Mac **and** on
-the iPhone, make sure both are on the same WiFi network, and keep the
-iPhone app open in the foreground. USB mode is unaffected.
-
-**Does it support iPad?** The receiver app is universal (iPhone + iPad);
-iPad is the same codebase. iPad-specific polish (Pencil, pressure) is on the
-roadmap.
-
-**Why H.264 and not HEVC/AV1?** Hardware H.264 encode/decode is universally
-fast and the latency is excellent. HEVC is a planned option for better
-quality-per-bit.
-
-**Is my screen content sent anywhere?** No. One direct TCP connection
-between your Mac and your device, over your cable or your LAN. No servers,
-no accounts, no analytics. Full details — including what the apps store
-locally and the current WiFi-encryption caveat — on the
-[privacy page](https://peetzweg.github.io/opendisplay/privacy.html).
-
-**What's the license? Can I fork it or use it commercially?**
-[GPL-3.0](LICENSE). Use, study, and adapt it freely — commercially too. If
-you distribute a modified version it must stay open source under the same
-license with the original attribution intact, so improvements flow back
-instead of into closed forks. (Releases up to v0.4.x were MIT-licensed and
-remain available under those terms.)
-
-**Will it break on a macOS update?** Possibly — `CGVirtualDisplay` is
-private API. The same risk applies to every virtual-display product.
-The capture/streaming pipeline itself uses only public APIs.
-
-**Audio?** Out of scope for now.
-
-## Comparison
-
-| | OpenDisplay | Apple Sidecar | Duet Display | Luna Display |
-|---|---|---|---|---|
-| Price | **Free, open source** | Free | Subscription | $$$ + dongle |
-| iPhone as display | ✅ | ❌ (iPad only) | ✅ | ✅ |
-| Different Apple IDs | ✅ | ❌ | ✅ | ✅ |
-| Wired (USB) | ✅ | ✅ | ✅ | ❌ |
-| True extension | ✅ | ✅ | ✅ | ✅ |
-| Touch input | ✅ | ✅ | ✅ | ✅ |
-| Self-hosted / auditable | ✅ | — | ❌ | ❌ |
-
-## Roadmap
-
-Tracked as [roadmap issues](https://github.com/peetzweg/opendisplay/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap) — pick one up if you'd like to contribute!
-
-**Connectivity & distribution**
-- [#16](https://github.com/peetzweg/opendisplay/issues/16) Encrypted WiFi transport with pairing code
-- [ ] App Store release of the iOS app + notarized Mac downloads
-
-**Input**
-- [#4](https://github.com/peetzweg/opendisplay/issues/4) Apple Pencil with pressure and tilt
-- [#5](https://github.com/peetzweg/opendisplay/issues/5) Right-click and multi-touch gestures
-- [#6](https://github.com/peetzweg/opendisplay/issues/6) Hardware keyboard passthrough
-- [#7](https://github.com/peetzweg/opendisplay/issues/7) On-screen modifier key sidebar
-
-**Display & media**
-- [#9](https://github.com/peetzweg/opendisplay/issues/9) Resolution & quality settings
-- [#10](https://github.com/peetzweg/opendisplay/issues/10) HEVC encoding
-- [#12](https://github.com/peetzweg/opendisplay/issues/12) Audio forwarding
-- [#17](https://github.com/peetzweg/opendisplay/issues/17) macOS receiver — use another Mac as a display
-
-**Experience**
-- [#11](https://github.com/peetzweg/opendisplay/issues/11) Menu bar app mode with auto-connect
-- [#13](https://github.com/peetzweg/opendisplay/issues/13) Battery & lifecycle awareness
-
-**Exploratory**
-- [#14](https://github.com/peetzweg/opendisplay/issues/14) Remote access beyond the local network
-- [#15](https://github.com/peetzweg/opendisplay/issues/15) Additional client platforms
-
-Done: prebuilt releases, built-in USB connectivity (no helper tools), WiFi via Bonjour, portrait mode, touch + two-finger scroll, performance overlay, iPad support, multiple devices at once ([#8](https://github.com/peetzweg/opendisplay/issues/8) — every connected device becomes its own extended display).
-
-## Auto-update (macOS app)
-
-The macOS app updates itself with [Sparkle](https://sparkle-project.org) —
-an open-source framework, **not** a hosted service. Update checks hit only
-our own infrastructure:
-
-- The app reads an **appcast** feed hosted on the landing-page site:
-  `https://opendisplay.app/appcast.xml` (`SUFeedURL` in `project.yml`).
-- The release workflow (`.github/workflows/release.yml`, `build-mac` job)
-  runs Sparkle's `generate_appcast` against the notarized `OpenDisplay.dmg`,
-  signs it with the EdDSA key, commits the result to `public/appcast.xml`,
-  and dispatches the Pages deploy — so the published feed points download
-  links at the GitHub Release assets.
-- Sparkle verifies both the EdDSA signature and Apple's notarization before
-  installing. The app checks automatically in the background
-  (`SUEnableAutomaticChecks`) and offers a manual **"Check for Updates…"**
-  button next to **Quit** in the menu-bar window.
-
-### Maintainer prerequisites (before auto-update goes live)
-
-Auto-update is **scaffolded but inert** until the signing keys are in place.
-The private signing key is **never** committed — it lives only as a CI
-secret. To switch it on:
-
-1. **Generate the key pair.** Run Sparkle's `generate_keys` once (it ships
-   in the Sparkle SPM artifact bundle and in the release tarball at
-   `bin/generate_keys`). It prints a **public** key and stores the
-   **private** key in your login keychain.
-2. **Public key →** paste it into `SUPublicEDKey` in `project.yml` (replace
-   the `REPLACE_WITH_SUPUBLICEDKEY_FROM_generate_keys` placeholder), then
-   re-run `xcodegen generate` and commit.
-3. **Private key →** add it as the `SPARKLE_PRIVATE_KEY` GitHub Actions
-   secret (export it with `generate_keys -x private_key.pem` if needed). The
-   appcast step in `release.yml` no-ops gracefully while this secret is
-   absent, so releases keep working until you're ready.
-4. The **first appcast publishes on the next release** after both keys are
-   set. Confirm `https://opendisplay.app/appcast.xml` resolves, then **test
-   the full update flow on a real signed/notarized build** (check → download
-   → verify → relaunch) — this can't be validated in CI.
-
-## Contributing
-
-Issues and PRs are very welcome — especially for the roadmap items above.
-The codebase is intentionally small: ~4 Swift files per platform, with
-[Sparkle](https://sparkle-project.org) (SPM) as the macOS app's only
-runtime dependency, for auto-update. The [How it works](#how-it-works)
-section above is the architecture doc; see `Mac/CGVirtualDisplayPrivate.h`
-for the private API surface.
-
-Releases are automated with
-[release-please](https://github.com/googleapis/release-please): use
-[Conventional Commits](https://www.conventionalcommits.org) (`feat:`,
-`fix:`, `docs:`, …) and a release PR with a generated changelog appears
-automatically — merging it tags the release and attaches prebuilt
-artifacts.
+- remain as a practical Android/CN branch, or
+- be split into focused pull requests back to upstream.
 
 ## License
 
-[GPL-3.0](LICENSE) — Copyright (c) 2026 Philip Poloczek.
-
-Free to use, study, and adapt. If you distribute a modified version it
-must remain open source under the same license, with the original
-attribution intact — improvements flow back to everyone instead of into
-closed forks. (Versions up to v0.4.x were MIT-licensed; those releases
-remain available under MIT.)
-
----
-
-*Keywords: iPhone second monitor Mac, iPad external display, free Sidecar
-alternative, Duet Display alternative, open source screen extension macOS,
-use iPhone as extra screen, virtual display Mac, USB second display.*
+OpenDisplay is licensed under [GPL-3.0](LICENSE). This fork keeps the same
+license and attribution. If you distribute modified builds, keep the source
+available under the same license.

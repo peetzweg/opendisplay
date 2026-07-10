@@ -10,9 +10,9 @@ enum AppPresentation: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .menuBar: return "Menu bar"
-        case .dock: return "Dock"
-        case .background: return "Background only"
+        case .menuBar: return "菜单栏"
+        case .dock: return "程序坞"
+        case .background: return "仅后台运行"
         }
     }
 }
@@ -119,7 +119,7 @@ final class DeviceSession: ObservableObject, Identifiable {
     let name: String
     let sender: MacSender
 
-    @Published var status = "Starting…"
+    @Published var status = "正在启动…"
     @Published var framesSent = 0
     @Published var mbps = 0.0
     // Receiver's per-install identity (from hello) — the key for recognizing
@@ -147,7 +147,7 @@ final class SenderController: ObservableObject {
     static let shared = SenderController()
 
     @Published var presentation = AppPresentation(
-        rawValue: UserDefaults.standard.string(forKey: "presentation") ?? "") ?? .menuBar {
+        rawValue: UserDefaults.standard.string(forKey: "presentation") ?? "") ?? .dock {
         didSet {
             UserDefaults.standard.set(presentation.rawValue, forKey: "presentation")
             NSApp.setActivationPolicy(presentation == .dock ? .regular : .accessory)
@@ -355,9 +355,9 @@ final class SenderController: ObservableObject {
             if let device = usbDevices.first(where: { $0.udid == udid }), let name = device.name {
                 return name
             }
-            return udid == nil ? "Manual (\(host):\(port))" : "iPhone / iPad"
+            return udid == nil ? "手动连接（\(host):\(port)）" : "iPhone / iPad"
         case .wifi(let result):
-            return serviceName(of: result) ?? "WiFi device"
+            return serviceName(of: result) ?? "WiFi 设备"
         }
     }
 
@@ -457,7 +457,7 @@ final class SenderController: ObservableObject {
                 // stopped by the user while waiting — nothing to report
             } catch {
                 Log.info("sender failed to start: \(error)")
-                session.status = "Failed: \(error.localizedDescription)"
+                session.status = "失败：\(error.localizedDescription)"
             }
         }
     }
@@ -618,13 +618,13 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("OpenDisplay")
                         .font(.title3.bold())
-                    Text("Your iPads and iPhones as extra displays")
+                    Text("把 iPad 和 iPhone 变成额外显示器")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 if controller.running {
-                    Button("Disconnect All") { controller.disconnectAll() }
+                    Button("全部断开") { controller.disconnectAll() }
                         .controlSize(.large)
                 }
             }
@@ -634,9 +634,9 @@ struct ContentView: View {
 
             // Settings
             Form {
-                Section("Devices") {
+                Section("设备") {
                     if controller.deviceEntries.isEmpty {
-                        Text("No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network.")
+                        Text("未发现设备。请用 USB 连接 iPhone 或 iPad，或在同一 WiFi 网络中的设备上打开 OpenDisplay。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -660,7 +660,7 @@ struct ContentView: View {
                                 }
                                 Spacer()
                                 if let target = entry.preferredTarget {
-                                    Button("Connect") {
+                                    Button("连接") {
                                         controller.connect(to: target, userInitiated: true)
                                     }
                                     .controlSize(.small)
@@ -670,15 +670,15 @@ struct ContentView: View {
                     }
                 }
 
-                Picker("Mode", selection: $controller.mode) {
-                    Text("Extend").tag(CaptureMode.extend)
-                    Text("Mirror").tag(CaptureMode.mirror)
+                Picker("模式", selection: $controller.mode) {
+                    Text("扩展").tag(CaptureMode.extend)
+                    Text("镜像").tag(CaptureMode.mirror)
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: controller.mode) { controller.restartAll() }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Picker("Quality", selection: $controller.quality) {
+                    Picker("画质", selection: $controller.quality) {
                         ForEach(StreamQuality.allCases, id: \.self) { q in
                             Text(q.label).tag(q)
                         }
@@ -690,50 +690,50 @@ struct ContentView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Picker("Show app in", selection: $controller.presentation) {
+                    Picker("显示位置", selection: $controller.presentation) {
                         ForEach(AppPresentation.allCases, id: \.self) { p in
                             Text(p.label).tag(p)
                         }
                     }
                     if controller.presentation == .background {
-                        Text("No menu bar or Dock icon — streaming keeps running. Open the OpenDisplay app again (Spotlight/Finder) to show this window.")
+                        Text("不会显示菜单栏或程序坞图标，串流会继续运行。需要打开此窗口时，请从 Spotlight 或 Finder 再次启动 OpenDisplay。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                LabeledContent("Display layout") {
-                    Button("Arrange Displays…") {
+                LabeledContent("显示器布局") {
+                    Button("排列显示器…") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.Displays-Settings.extension") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     .controlSize(.small)
                 }
-                .help("Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device.")
+                .help("打开“系统设置”→“显示器”，你可以在那里调整扩展显示器相对 Mac 屏幕的位置。每台设备都会作为独立显示器出现，并使用设备名称。")
 
-                Section("Permissions") {
+                Section("权限") {
                     permissionRow(
-                        "Screen Recording",
+                        "屏幕录制",
                         granted: permissions.screenRecording,
-                        help: "Required to capture the display.",
+                        help: "用于捕获显示器画面。",
                         anchor: "Privacy_ScreenCapture",
                         request: { permissions.requestScreenRecording() }
                     )
                     permissionRow(
-                        "Accessibility",
+                        "辅助功能",
                         granted: permissions.accessibility,
-                        help: "Required for touch input from the device.",
+                        help: "用于接收设备上的触摸和滚动输入。",
                         anchor: "Privacy_Accessibility",
                         request: { permissions.requestAccessibility() }
                     )
                     // macOS offers no API to query Local Network access, so
                     // infer from discovery results and let the user check.
                     permissionRow(
-                        "Local Network",
+                        "本地网络",
                         granted: !controller.discovered.isEmpty,
                         uncertain: controller.discovered.isEmpty,
-                        help: "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
+                        help: "WiFi 模式需要此权限。如果设备列表为空，请在这台 Mac 和 iPhone/iPad 的“隐私与安全性”→“本地网络”中允许 OpenDisplay，并保持设备端 app 打开。",
                         anchor: "Privacy_LocalNetwork"
                     )
                 }
@@ -751,15 +751,15 @@ struct ContentView: View {
                     .fill(controller.running ? .green : .secondary.opacity(0.5))
                     .frame(width: 9, height: 9)
                 Text(controller.running
-                     ? "\(controller.sessions.count) device\(controller.sessions.count == 1 ? "" : "s") connected"
-                     : "Idle")
+                     ? "已连接 \(controller.sessions.count) 台设备"
+                     : "空闲")
                     .font(.callout)
                     .lineLimit(1)
                 Spacer()
                 if let updater {
                     CheckForUpdatesView(updater: updater)
                 }
-                Button("Quit") { NSApp.terminate(nil) }
+                Button("退出") { NSApp.terminate(nil) }
                     .controlSize(.small)
             }
             .padding(.horizontal, 16)
@@ -787,11 +787,11 @@ struct ContentView: View {
             Spacer()
             if uncertain || !granted {
                 if let request {
-                    Button("Grant…") { request() }
+                    Button("授权…") { request() }
                         .controlSize(.small)
-                        .help("Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under \(title) in System Settings — flip the toggle there.")
+                        .help("向 macOS 请求此权限。如果系统弹窗之前已被关闭，这会把 app 注册到系统设置里的对应权限项，请在那里打开开关。")
                 }
-                Button("Open Settings") {
+                Button("打开设置") {
                     PermissionMonitor.openPrivacyPane(anchor)
                 }
                 .controlSize(.small)
@@ -824,7 +824,7 @@ struct CheckForUpdatesView: View {
     }
 
     var body: some View {
-        Button("Check for Updates…") { updater.checkForUpdates() }
+        Button("检查更新…") { updater.checkForUpdates() }
             .controlSize(.small)
             .disabled(!viewModel.canCheckForUpdates)
     }
@@ -837,11 +837,11 @@ struct SessionRow: View {
     let controller: SenderController
 
     private var statusColor: Color {
-        if session.status.hasPrefix("Extending") || session.status.hasPrefix("Mirroring")
-            || session.status.hasPrefix("Connected") {
+        if session.status.hasPrefix("正在扩展") || session.status.hasPrefix("正在镜像")
+            || session.status.hasPrefix("已连接") {
             return .green
         }
-        if session.status.hasPrefix("Failed") || session.status.contains("stopped") {
+        if session.status.hasPrefix("失败") || session.status.contains("已停止") {
             return .red
         }
         return .orange
@@ -871,8 +871,8 @@ struct SessionRow: View {
                 Image(systemName: "arrow.clockwise")
             }
             .controlSize(.small)
-            .help("Drop the connection and pair with the device again")
-            Button("Disconnect") { controller.disconnect(session) }
+            .help("断开当前连接并重新连接设备")
+            Button("断开") { controller.disconnect(session) }
                 .controlSize(.small)
         }
     }

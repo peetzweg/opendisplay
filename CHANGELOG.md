@@ -1,5 +1,39 @@
 # Changelog
 
+## Fork changes
+
+### Added
+
+- Android WiFi receiver with NSD discovery, TCP listener, H.264 Annex B stream
+  decode, cursor overlay, touch input, two-finger scroll, latency/FPS status,
+  and receiver-side display quality profiles.
+- Chinese user-facing copy for the macOS sender and iOS receiver, including
+  permissions, connection state, onboarding, settings, and performance labels.
+- Local macOS launcher/build helper scripts for a Dock-visible workflow.
+- Project documentation for architecture, roadmap, contribution workflow,
+  support, and security.
+
+### Changed
+
+- macOS app defaults to a Dock/main-window presentation instead of a menu-bar
+  only experience.
+- macOS mirror mode also prepares input injection, so touch input is not limited
+  to extended-display mode.
+- Android touch handling defers single-touch begin events to avoid accidental
+  clicks when a two-finger scroll starts.
+- Android two-finger scroll direction now follows the tablet user's gesture
+  expectation.
+- Local build artifacts and Android APK outputs are ignored by Git.
+
+### Verified
+
+- macOS Debug build for `OpenSidecarMac`.
+- iOS Simulator Debug build for `OpenSidecariOS`.
+- Android debug APK build.
+- Android protocol self-test.
+- Real Android tablet WiFi mirror/extend session with cursor display and touch
+  stability checks.
+
 ## [0.11.0](https://github.com/peetzweg/opendisplay/compare/v0.10.1...v0.11.0) (2026-07-07)
 
 
