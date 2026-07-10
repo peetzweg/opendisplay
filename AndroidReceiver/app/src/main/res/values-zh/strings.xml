@@ -10,6 +10,7 @@
     <string name="settings_connection_status">连接状态：%1$s</string>
     <string name="settings_server_info">服务端口：%1$d\n设备标识：%2$s</string>
     <string name="settings_keep_awake">保持屏幕常亮</string>
+    <string name="settings_disconnect_on_pause">应用暂停时断开连接</string>
     <string name="settings_show_status">串流时显示状态浮层</string>
     <string name="settings_show_metrics">显示延迟和帧率</string>
     <string name="settings_quality">画质/分辨率：%1$s</string>

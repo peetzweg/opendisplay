@@ -32,6 +32,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
     private static final String PREFS = "OpenDisplayAndroid";
     private static final String KEY_ONBOARDING_DISMISSED = "onboardingDismissed";
     private static final String KEY_KEEP_AWAKE = "keepAwake";
+    private static final String KEY_DISCONNECT_ON_PAUSE = "disconnectOnPause";
     private static final String KEY_SHOW_STATUS = "showStatusOverlay";
     private static final String KEY_SHOW_METRICS = "showMetrics";
     private static final String KEY_DISPLAY_PROFILE = "displayProfile";
@@ -56,8 +57,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        enterImmersiveMode();
         currentStatus = getString(R.string.status_waiting_start);
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -71,11 +71,56 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
     }
 
     @Override
-    protected void onDestroy() {
-        if (server != null) {
-            server.stop();
+    protected void onResume() {
+        super.onResume();
+        enterImmersiveMode();
+        applyKeepAwakePreference();
+        startServerIfReady();
+    }
+
+    @Override
+    protected void onPause() {
+        if (prefs != null && prefs.getBoolean(KEY_DISCONNECT_ON_PAUSE, false)) {
+            stopServer();
         }
+        super.onPause();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            enterImmersiveMode();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        stopServer();
         super.onDestroy();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void enterImmersiveMode() {
+        Window window = getWindow();
+        window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams attrs = window.getAttributes();
+            attrs.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            window.setAttributes(attrs);
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
+        }
+        window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
     }
 
     @Override
@@ -186,10 +231,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
             @Override
             public void surfaceDestroyed(SurfaceHolder holder) {
                 activeSurface = null;
-                if (server != null) {
-                    server.stop();
-                    server = null;
-                }
+                stopServer();
             }
         });
 
@@ -266,6 +308,13 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
             applyKeepAwakePreference();
         });
         content.addView(keepAwake, matchWrap());
+
+        CheckBox disconnectOnPause = new CheckBox(this);
+        disconnectOnPause.setText(getString(R.string.settings_disconnect_on_pause));
+        disconnectOnPause.setChecked(prefs.getBoolean(KEY_DISCONNECT_ON_PAUSE, false));
+        disconnectOnPause.setOnCheckedChangeListener((button, checked) ->
+                prefs.edit().putBoolean(KEY_DISCONNECT_ON_PAUSE, checked).apply());
+        content.addView(disconnectOnPause, matchWrap());
 
         CheckBox showStatus = new CheckBox(this);
         showStatus.setText(getString(R.string.settings_show_status));
@@ -359,6 +408,17 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         }
         server = new OpenDisplayServer(MainActivity.this, currentDisplaySpec(), MainActivity.this);
         server.start(activeSurface.getSurface());
+    }
+
+    private void stopServer() {
+        if (server != null) {
+            server.stop();
+            server = null;
+        }
+        setStreaming(false);
+        if (cursorOverlay != null) {
+            cursorOverlay.resetCursor();
+        }
     }
 
     private boolean hasNearbyWifiPermission() {
@@ -457,7 +517,9 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
 
     private void setStreaming(boolean streaming) {
         this.streaming = streaming;
-        idlePanel.setVisibility(streaming ? View.GONE : View.VISIBLE);
+        if (idlePanel != null) {
+            idlePanel.setVisibility(streaming ? View.GONE : View.VISIBLE);
+        }
         updateStatusOverlayVisibility();
     }
 

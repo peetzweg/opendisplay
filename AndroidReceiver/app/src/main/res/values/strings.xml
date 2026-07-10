@@ -10,6 +10,7 @@
     <string name="settings_connection_status">Connection status: %1$s</string>
     <string name="settings_server_info">Server port: %1$d\nDevice ID: %2$s</string>
     <string name="settings_keep_awake">Keep screen awake</string>
+    <string name="settings_disconnect_on_pause">Disconnect when app is paused</string>
     <string name="settings_show_status">Show status overlay while streaming</string>
     <string name="settings_show_metrics">Show latency and frame rate</string>
     <string name="settings_quality">Quality / resolution: %1$s</string>
