@@ -98,7 +98,7 @@ tests/java/
 实用的本地检查：
 
 ```bash
-AndroidReceiver/scripts/build_debug_apk.sh
+Android/scripts/build_debug_apk.sh
 ```
 
 USB 模式下，在 Android 上开启开发者选项和 USB 调试，连接设备，允许 Mac

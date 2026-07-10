@@ -109,7 +109,7 @@ tests/java/
 Useful local checks:
 
 ```bash
-AndroidReceiver/scripts/build_debug_apk.sh
+Android/scripts/build_debug_apk.sh
 ```
 
 For USB, enable Developer options and USB debugging on Android, connect the
