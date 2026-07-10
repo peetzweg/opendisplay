@@ -120,10 +120,14 @@ final class VirtualDisplay {
         CGConfigureDisplayMirrorOfDisplay(config, id, kCGNullDirectDisplay)
         // ...and any display currently mirroring the VD (covers the reporter's
         // arrangement: the device set as Main, with the built-in mirroring it).
+        // Online list, NOT active list: a display that mirrors another is not
+        // drawable, so it never appears among the actives — scanning those can
+        // never find the display we're looking for (measured: a built-in
+        // mirroring the VD reports active=false).
         var n: UInt32 = 0
-        CGGetActiveDisplayList(0, nil, &n)
+        CGGetOnlineDisplayList(0, nil, &n)
         var list = [CGDirectDisplayID](repeating: 0, count: Int(n))
-        CGGetActiveDisplayList(n, &list, &n)
+        CGGetOnlineDisplayList(n, &list, &n)
         for other in list where other != id && CGDisplayMirrorsDisplay(other) == id {
             CGConfigureDisplayMirrorOfDisplay(config, other, kCGNullDirectDisplay)
         }

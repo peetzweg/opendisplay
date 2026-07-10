@@ -329,17 +329,42 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    /// The virtual display takes a moment to show up in shareable content.
+    /// The virtual display takes a moment to show up in shareable content —
+    /// and on machines that misclassify it as a TV (#100), macOS restores the
+    /// saved "Mirror Entire Screen" arrangement asynchronously, seconds after
+    /// creation. A mirror-set secondary is not an active display and is
+    /// omitted from SCShareableContent entirely, so the display *vanishes*
+    /// until the un-mirror guard (`VirtualDisplay.ensureNotMirrored`, ≤2s
+    /// cadence) detaches it, plus ~2s more to re-register with SCK. That
+    /// round trip regularly overran the old 5s window (also reported
+    /// independently in PR #106) — allow 15s, and log the CG-level state
+    /// while waiting so a failure pinpoints why SCK isn't listing it.
     private func findSCDisplay(id: CGDirectDisplayID) async throws -> SCDisplay {
-        for _ in 0..<20 {
+        for attempt in 0..<60 {
             let content = try await SCShareableContent.current
             if let display = content.displays.first(where: { $0.displayID == id }) {
                 return display
             }
+            if attempt % 4 == 3 {
+                Log.info("display \(id) not in SCShareableContent yet: \(Self.displayState(id))")
+            }
             try await Task.sleep(for: .milliseconds(250))
         }
         throw NSError(domain: "MacSender", code: 3,
-                      userInfo: [NSLocalizedDescriptionKey: "virtual display never appeared in SCShareableContent"])
+                      userInfo: [NSLocalizedDescriptionKey:
+                          "virtual display never appeared in SCShareableContent (\(Self.displayState(id)))"])
+    }
+
+    /// One-line CG-level view of a display for diagnosing why SCK omits it
+    /// (mirror-set members that aren't the set's primary are inactive and
+    /// hidden from SCShareableContent — the #100 failure mode).
+    private static func displayState(_ id: CGDirectDisplayID) -> String {
+        let mirrors = CGDisplayMirrorsDisplay(id)
+        return "inMirrorSet=\(CGDisplayIsInMirrorSet(id) != 0)"
+            + (mirrors == kCGNullDirectDisplay ? "" : " mirroring=\(mirrors)")
+            + " active=\(CGDisplayIsActive(id) != 0)"
+            + " online=\(CGDisplayIsOnline(id) != 0)"
+            + " main=\(CGDisplayIsMain(id) != 0)"
     }
 
     private func startCapture(display: SCDisplay, pixelsWide: Int, pixelsHigh: Int) async throws {
