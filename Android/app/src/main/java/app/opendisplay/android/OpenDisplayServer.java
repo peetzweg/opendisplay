@@ -12,6 +12,9 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -45,6 +48,10 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
     private double lastRttMs;
     private double lastInputP50Ms;
     private int lastMacCaptureFps;
+    private double lastEndToEndMs;
+    private double lastEncodeMs;
+    private final List<Double> endToEndSamples = new ArrayList<>();
+    private final List<Double> encodeSamples = new ArrayList<>();
 
     public interface Listener {
         void onStatus(String status);
@@ -257,6 +264,10 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
         lastRttMs = 0;
         lastInputP50Ms = 0;
         lastMacCaptureFps = 0;
+        lastEndToEndMs = 0;
+        lastEncodeMs = 0;
+        endToEndSamples.clear();
+        encodeSamples.clear();
     }
 
     private void closeClient() {
@@ -304,7 +315,20 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
     }
 
     @Override
-    public void onDecoderFrameRendered() {
+    public void onDecoderFrameRendered(H264SurfaceDecoder.FrameTelemetry telemetry) {
+        if (telemetry != null) {
+            double encodeMs = telemetry.sendMs - telemetry.captureMs;
+            if (encodeMs >= 0 && encodeMs < 5_000) {
+                encodeSamples.add(encodeMs);
+            }
+            Double offset = clockOffsetMs;
+            if (offset != null) {
+                double endToEndMs = LengthPrefixedProtocol.nowMs() + offset - telemetry.captureMs;
+                if (endToEndMs > -50 && endToEndMs < 5_000) {
+                    endToEndSamples.add(Math.max(0, endToEndMs));
+                }
+            }
+        }
         renderedFrames++;
         long now = System.currentTimeMillis();
         long elapsed = now - metricsWindowStartMs;
@@ -312,8 +336,25 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
             int fps = (int) Math.round(renderedFrames * 1000.0 / elapsed);
             renderedFrames = 0;
             metricsWindowStartMs = now;
-            listener.onMetrics(new StreamMetrics(fps, lastRttMs, lastInputP50Ms, lastMacCaptureFps));
+            lastEndToEndMs = medianOrPrevious(endToEndSamples, lastEndToEndMs);
+            lastEncodeMs = medianOrPrevious(encodeSamples, lastEncodeMs);
+            listener.onMetrics(new StreamMetrics(
+                    fps, lastRttMs, lastInputP50Ms, lastMacCaptureFps,
+                    lastEndToEndMs, lastEncodeMs));
         }
+    }
+
+    private static double medianOrPrevious(List<Double> samples, double previous) {
+        if (samples.isEmpty()) {
+            return previous;
+        }
+        Collections.sort(samples);
+        int middle = samples.size() / 2;
+        double median = samples.size() % 2 == 0
+                ? (samples.get(middle - 1) + samples.get(middle)) / 2.0
+                : samples.get(middle);
+        samples.clear();
+        return median;
     }
 
     @Override

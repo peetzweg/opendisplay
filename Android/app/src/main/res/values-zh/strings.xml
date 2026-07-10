@@ -27,6 +27,8 @@
     <string name="status_waiting_nearby_wifi_permission">正在等待附近设备权限…</string>
     <string name="status_receiving_prefix">正在接收</string>
     <string name="metrics_input">输入</string>
+    <string name="metrics_end_to_end">端到端</string>
+    <string name="metrics_encode">编码</string>
     <string name="status_listening">正在监听 :%1$d</string>
     <string name="status_mac_connected_address">Mac 已连接：%1$s</string>
     <string name="status_listen_failed">监听失败：%1$s</string>

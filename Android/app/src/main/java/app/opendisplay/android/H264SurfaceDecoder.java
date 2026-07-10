@@ -5,7 +5,11 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.view.Surface;
 
+import org.json.JSONObject;
+
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
 import app.opendisplay.android.protocol.AnnexB;
 import app.opendisplay.android.protocol.SpsParser;
@@ -18,11 +22,22 @@ public final class H264SurfaceDecoder {
     private int configuredWidth;
     private int configuredHeight;
     private long presentationUs;
+    private final Map<Long, FrameTelemetry> telemetryByPresentationUs = new HashMap<>();
+
+    public static final class FrameTelemetry {
+        public final double captureMs;
+        public final double sendMs;
+
+        private FrameTelemetry(double captureMs, double sendMs) {
+            this.captureMs = captureMs;
+            this.sendMs = sendMs;
+        }
+    }
 
     public interface Listener {
         void onDecoderStatus(String status);
         void onDecoderNeedsKeyframe();
-        void onDecoderFrameRendered();
+        void onDecoderFrameRendered(FrameTelemetry telemetry);
     }
 
     public H264SurfaceDecoder(Context context, Surface surface, Listener listener) {
@@ -32,6 +47,7 @@ public final class H264SurfaceDecoder {
     }
 
     public synchronized void queueFrame(byte[] wirePayload) {
+        FrameTelemetry telemetry = parseTelemetry(wirePayload);
         byte[] payload = AnnexB.stripTelemetryPrefix(wirePayload);
         byte[] sps = AnnexB.findNalUnit(payload, 7);
         byte[] pps = AnnexB.findNalUnit(payload, 8);
@@ -75,7 +91,11 @@ public final class H264SurfaceDecoder {
             buffer.clear();
             buffer.put(payload);
             int flags = containsNalType(payload, 5) ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
-            codec.queueInputBuffer(input, 0, payload.length, presentationUs, flags);
+            long framePresentationUs = presentationUs;
+            codec.queueInputBuffer(input, 0, payload.length, framePresentationUs, flags);
+            if (telemetry != null) {
+                telemetryByPresentationUs.put(framePresentationUs, telemetry);
+            }
             presentationUs += 16_666;
             drainOutput();
         } catch (IllegalStateException error) {
@@ -94,6 +114,7 @@ public final class H264SurfaceDecoder {
             codec.release();
             codec = null;
         }
+        telemetryByPresentationUs.clear();
     }
 
     private void configure(int width, int height, byte[] sps, byte[] pps) throws IOException {
@@ -125,7 +146,8 @@ public final class H264SurfaceDecoder {
             int output = codec.dequeueOutputBuffer(info, 0);
             if (output >= 0) {
                 codec.releaseOutputBuffer(output, true);
-                listener.onDecoderFrameRendered();
+                listener.onDecoderFrameRendered(
+                        telemetryByPresentationUs.remove(info.presentationTimeUs));
             } else if (output == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 MediaFormat format = codec.getOutputFormat();
                 configuredWidth = format.getInteger(MediaFormat.KEY_WIDTH);
@@ -145,5 +167,22 @@ public final class H264SurfaceDecoder {
             }
         }
         return false;
+    }
+
+    private static FrameTelemetry parseTelemetry(byte[] payload) {
+        String prefix = AnnexB.telemetryPrefix(payload);
+        if (prefix == null) {
+            return null;
+        }
+        try {
+            JSONObject object = new JSONObject(prefix);
+            double captureMs = object.optDouble("cap", Double.NaN);
+            double sendMs = object.optDouble("snd", Double.NaN);
+            if (Double.isFinite(captureMs) && Double.isFinite(sendMs)) {
+                return new FrameTelemetry(captureMs, sendMs);
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 }

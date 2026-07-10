@@ -50,7 +50,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
     private boolean streaming;
     private final ScrollGestureTracker scrollGesture = new ScrollGestureTracker();
     private TouchGestureCoordinator touchGesture;
-    private StreamMetrics lastMetrics = new StreamMetrics(0, 0, 0, 0);
+    private StreamMetrics lastMetrics = new StreamMetrics(0, 0, 0, 0, 0, 0);
 
     @Override
     @SuppressWarnings("deprecation")
@@ -530,6 +530,14 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         StringBuilder value = new StringBuilder(getString(R.string.status_receiving_prefix));
         if (lastMetrics.receiverFps > 0) {
             value.append(" · ").append(lastMetrics.receiverFps).append(" FPS");
+        }
+        if (lastMetrics.endToEndMs > 0) {
+            value.append(" · ").append(getString(R.string.metrics_end_to_end)).append(" ")
+                    .append(Math.round(lastMetrics.endToEndMs)).append(" ms");
+        }
+        if (lastMetrics.encodeMs > 0) {
+            value.append(" · ").append(getString(R.string.metrics_encode)).append(" ")
+                    .append(Math.round(lastMetrics.encodeMs)).append(" ms");
         }
         if (lastMetrics.rttMs > 0) {
             value.append(" · RTT ").append(Math.round(lastMetrics.rttMs)).append(" ms");
