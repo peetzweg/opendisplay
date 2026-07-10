@@ -251,10 +251,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // = native pixels / 2 (rounded down to even for the encoder).
         let pointsWide = (info.pixelsWide / 2) & ~1
         let pointsHigh = (info.pixelsHigh / 2) & ~1
-        // Rough physical size so macOS picks a sane default UI scale.
-        let mm = info.pixelsWide >= info.pixelsHigh
-            ? CGSize(width: 147, height: 68)
-            : CGSize(width: 68, height: 147)
+        // Physical size from a per-kind PPI estimate (iPads ≈264, iPhones
+        // ≈460) so macOS picks a sane default UI scale. The old 147×68mm
+        // constant described a phone even for iPads — a wildly wrong size
+        // feeds the display-class heuristic bad data (#111), and TV-classed
+        // displays default to "Mirror Entire Screen" (#100). Orientation is
+        // inherent: pixelsWide/High arrive swapped on rotation.
+        let ppi = info.kind == "iPad" ? 264.0 : 460.0
+        let mm = CGSize(width: Double(info.pixelsWide) / ppi * 25.4,
+                        height: Double(info.pixelsHigh) / ppi * 25.4)
 
         // USB sessions can start before lockdown resolves the device name —
         // fall back to the kind from the hello rather than the generic label.
