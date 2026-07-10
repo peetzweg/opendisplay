@@ -95,6 +95,7 @@ enum MainWindow {
 enum ConnectionTarget: Hashable {
     case usb(udid: String?)           // wired via built-in usbmuxd; nil = first device
     case wifi(NWBrowser.Result)       // discovered via Bonjour
+    case manual(host: String, port: UInt16)  // user-entered IP:port
 
     /// Stable identity for sessions and persistence — survives Bonjour
     /// re-discovery (fresh NWBrowser.Result) and USB replugs (new DeviceID).
@@ -104,6 +105,7 @@ enum ConnectionTarget: Hashable {
         case .wifi(let result):
             if case .service(let name, _, _, _) = result.endpoint { return "wifi:\(name)" }
             return "wifi:unknown"
+        case .manual(let host, let port): return "manual:\(host):\(port)"
         }
     }
 }
@@ -130,8 +132,11 @@ final class DeviceSession: ObservableObject, Identifiable {
     var deviceKind: String?
 
     var transportLabel: String {
-        if case .usb = target { return "USB" }
-        return "WiFi"
+        switch target {
+        case .usb: return "USB"
+        case .wifi: return "WiFi"
+        case .manual: return "Manual"
+        }
     }
 
     init(id: String, target: ConnectionTarget, name: String, sender: MacSender) {
@@ -164,6 +169,11 @@ final class SenderController: ObservableObject {
     // (debugging escape hatch, e.g. an iproxy or SSH tunnel).
     @Published var host = UserDefaults.standard.string(forKey: "host") ?? "127.0.0.1"
     @Published var port = UserDefaults.standard.string(forKey: "port") ?? "9000"
+    // UI-entered "host[:port]" for connecting to a receiver by address —
+    // e.g. a network where Bonjour/mDNS is filtered.
+    @Published var manualEndpoint = UserDefaults.standard.string(forKey: "manualEndpoint") ?? "" {
+        didSet { UserDefaults.standard.set(manualEndpoint, forKey: "manualEndpoint") }
+    }
     // `-mode mirror` / `-mode extend` launch argument also works.
     @Published var mode = CaptureMode(rawValue: UserDefaults.standard.string(forKey: "mode") ?? "") ?? .extend
     @Published var quality = StreamQuality(rawValue: UserDefaults.standard.string(forKey: "quality") ?? "") ?? .best {
@@ -193,6 +203,12 @@ final class SenderController: ObservableObject {
     }
     private var wifiRemembered = Set(UserDefaults.standard.stringArray(forKey: "wifiRemembered") ?? []) {
         didSet { UserDefaults.standard.set(Array(wifiRemembered), forKey: "wifiRemembered") }
+    }
+    // Manual "host:port" endpoints the user connected to — kept in the device
+    // list (there is no discovery to bring them back) until explicitly removed.
+    // Never auto-dialed: a dead address would sit dialing forever.
+    @Published private var manualRemembered = Set(UserDefaults.standard.stringArray(forKey: "manualRemembered") ?? []) {
+        didSet { UserDefaults.standard.set(Array(manualRemembered), forKey: "manualRemembered") }
     }
     // Install id learned from each USB device's hello, persisted, so the
     // same hardware is recognized across transports even when the user
@@ -358,7 +374,53 @@ final class SenderController: ObservableObject {
             return udid == nil ? "Manual (\(host):\(port))" : "iPhone / iPad"
         case .wifi(let result):
             return serviceName(of: result) ?? "WiFi device"
+        case .manual(let host, let port):
+            return "\(host):\(port)"
         }
+    }
+
+    // MARK: - Manual endpoint (IP:port)
+
+    /// "host", "host:port", or "[v6]:port" — port defaults to the receiver's
+    /// listen port (9000). A bare IPv6 address (multiple colons, no brackets)
+    /// is taken whole.
+    static func parseEndpoint(_ input: String) -> (host: String, port: UInt16)? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(" ") else { return nil }
+        var host = trimmed
+        var port: UInt16 = 9000
+        if trimmed.hasPrefix("["), let end = trimmed.firstIndex(of: "]") {
+            host = String(trimmed[trimmed.index(after: trimmed.startIndex)..<end])
+            let rest = trimmed[trimmed.index(after: end)...]
+            if rest.hasPrefix(":") {
+                guard let p = UInt16(rest.dropFirst()), p > 0 else { return nil }
+                port = p
+            } else if !rest.isEmpty {
+                return nil
+            }
+        } else if let colon = trimmed.lastIndex(of: ":"),
+                  trimmed.firstIndex(of: ":") == colon {
+            guard let p = UInt16(trimmed[trimmed.index(after: colon)...]), p > 0 else { return nil }
+            host = String(trimmed[..<colon])
+            port = p
+        }
+        guard !host.isEmpty else { return nil }
+        return (host, port)
+    }
+
+    var manualEndpointValid: Bool {
+        Self.parseEndpoint(manualEndpoint) != nil
+    }
+
+    func connectManual() {
+        guard let (host, portNum) = Self.parseEndpoint(manualEndpoint) else { return }
+        connect(to: .manual(host: host, port: portNum), userInitiated: true)
+    }
+
+    /// Remove a remembered manual endpoint from the device list.
+    func forget(_ entry: DeviceEntry) {
+        guard case .manual(let host, let portNum)? = entry.manualTarget else { return }
+        manualRemembered.remove("\(host):\(portNum)")
     }
 
     func session(for id: String) -> DeviceSession? {
@@ -403,6 +465,7 @@ final class SenderController: ObservableObject {
         switch target {
         case .usb: usbDisabled.remove(id)
         case .wifi: wifiRemembered.insert(id)
+        case .manual(let host, let portNum): manualRemembered.insert("\(host):\(portNum)")
         }
 
         let transport: SenderTransport
@@ -418,6 +481,9 @@ final class SenderController: ObservableObject {
             }
         case .wifi(let result):
             transport = .tcp(result.endpoint)
+        case .manual(let host, let portNum):
+            transport = .tcp(.hostPort(host: NWEndpoint.Host(host),
+                                       port: NWEndpoint.Port(rawValue: portNum)!))
         }
 
         let name = label(for: target)
@@ -463,10 +529,12 @@ final class SenderController: ObservableObject {
     }
 
     /// User-initiated disconnect: also opt the device out of auto-connect.
+    /// Manual endpoints stay remembered — their row is the only way back.
     func disconnect(_ session: DeviceSession) {
         switch session.target {
         case .usb: usbDisabled.insert(session.id)
         case .wifi: wifiRemembered.remove(session.id)
+        case .manual: break
         }
         end(session)
     }
@@ -496,8 +564,10 @@ final class SenderController: ObservableObject {
         let name: String
         let usbTarget: ConnectionTarget?
         let wifiTarget: ConnectionTarget?
+        var manualTarget: ConnectionTarget? = nil
 
         var transportLabel: String {
+            if manualTarget != nil { return "Manual" }
             switch (usbTarget != nil, wifiTarget != nil) {
             case (true, true): return "USB · WiFi"
             case (true, false): return "USB"
@@ -506,7 +576,7 @@ final class SenderController: ObservableObject {
             }
         }
         /// Lowest latency first.
-        var preferredTarget: ConnectionTarget? { usbTarget ?? wifiTarget }
+        var preferredTarget: ConnectionTarget? { usbTarget ?? wifiTarget ?? manualTarget }
     }
 
     var deviceEntries: [DeviceEntry] {
@@ -544,6 +614,13 @@ final class SenderController: ObservableObject {
             coveredSessionIDs.insert(target.sessionID)
             entries.append(DeviceEntry(id: "service:\(name)", name: name,
                                        usbTarget: nil, wifiTarget: target))
+        }
+        for endpoint in manualRemembered.sorted() {
+            guard let (host, portNum) = Self.parseEndpoint(endpoint) else { continue }
+            let target = ConnectionTarget.manual(host: host, port: portNum)
+            coveredSessionIDs.insert(target.sessionID)
+            entries.append(DeviceEntry(id: target.sessionID, name: "\(host):\(portNum)",
+                                       usbTarget: nil, wifiTarget: nil, manualTarget: target))
         }
         // Sessions whose device vanished from discovery (e.g. Bonjour record
         // gone while the stream is still alive) keep a row to disconnect.
@@ -665,8 +742,30 @@ struct ContentView: View {
                                     }
                                     .controlSize(.small)
                                 }
+                                if entry.manualTarget != nil {
+                                    Button {
+                                        controller.forget(entry)
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                    }
+                                    .controlSize(.small)
+                                    .help("Remove this address from the list")
+                                }
                             }
                         }
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            TextField("IP address (host or host:port)", text: $controller.manualEndpoint)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit { controller.connectManual() }
+                            Button("Connect") { controller.connectManual() }
+                                .controlSize(.small)
+                                .disabled(!controller.manualEndpointValid)
+                        }
+                        Text("Connect to a receiver by address when it isn't discovered automatically (port defaults to 9000).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
