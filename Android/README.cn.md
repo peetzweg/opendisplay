@@ -23,8 +23,8 @@ OpenDisplay 接收端协议约定：兼容 Bonjour 的服务发现、length-pref
 - Mac 鼠标位置绘制
 - 轻点、拖拽、双指滚动输入
 - 英文默认界面，并保留中文启动、状态和设置翻译
-- 延迟/FPS 状态显示开关
-- 原生、均衡、流畅三档画质/分辨率配置
+- 端到端延迟、编码延迟、RTT 与 FPS 状态显示开关
+- 始终通告原生屏幕尺寸；串流画质由 Mac 端控制，无需重建虚拟显示器
 
 已在本地真机验证：
 
@@ -66,12 +66,7 @@ app/src/main/java/app/opendisplay/android/
   CursorOverlayView.java         Mac 光标绘制
   TouchGestureCoordinator.java   轻点/拖拽手势暂存
   ScrollGestureTracker.java      双指滚动增量
-  DisplayProfile.java            对外通告的分辨率档位
   protocol/                      长度前缀、Annex B、SPS、控制消息解析
-
-scripts/
-  build_debug_apk.sh             本地 debug APK 构建脚本
-  install_debug_apk.sh           本地安装辅助脚本
 
 tests/java/
   ProtocolSelfTest.java          协议与输入行为检查
@@ -82,7 +77,7 @@ tests/java/
 - **Surface 优先渲染**：`MediaCodec` 直接渲染到 `SurfaceView`，避免额外的帧拷贝。
 - **触摸写入不在 UI 线程**：控制消息通过 `ControlMessageWriter` 排队发送，避免 Android 的 `NetworkOnMainThreadException`。
 - **轻点延迟判定避免滚动误触**：单指按下事件会短暂保留，直到手势类型明确；第二根手指会取消待定的轻点。
-- **显示档位由接收端驱动**：Android 可通告缩放后的显示尺寸，让 Mac 捕获更少数据，降低 WiFi 场景下的延迟。
+- **原生显示尺寸保持稳定**：Android 始终通告面板原生尺寸。Mac 端画质设置只缩放捕获和编码，不会拆除并重建虚拟显示器。
 - **光标与视频分离**：Mac 通过控制消息发送光标位置和图像元数据，Android 以叠加层方式绘制。
 
 ## 已知限制
@@ -98,8 +93,13 @@ tests/java/
 实用的本地检查：
 
 ```bash
-Android/scripts/build_debug_apk.sh
+cd Android && ./gradlew testDebugUnitTest assembleDebug
 ```
+
+Gradle Wrapper 是标准构建方式，需要 JDK 17 或更高版本。涉及 Android
+接收端的 Pull Request 会在 GitHub Actions 中运行单元测试并构建 debug APK。
+APK 位于 `Android/app/build/outputs/apk/debug/app-debug.apk`；连接设备后，可用
+`cd Android && ./gradlew installDebug` 安装。
 
 USB 模式下，在 Android 上开启开发者选项和 USB 调试，连接设备，允许 Mac
 的调试密钥，然后打开接收端应用。Mac 应用会自动发现 `adb devices` 并使用
@@ -112,9 +112,9 @@ adb -s DEVICE_SERIAL forward tcp:0 tcp:9000
 使用 `tcp:0` 让 ADB 自行选择空闲的 Mac 侧端口，因此每个接收端都可以固定
 使用 `9000` 端口，并支持同时连接多台 Android 设备。
 
-协议自测覆盖：长度前缀往返、控制消息分类、H.264 Annex B 解析、SPS 尺寸
-解析、光标控制消息、安全的触摸指针处理、滚动增量、轻点延迟判定，以及
-后台控制消息写入。
+协议自测覆盖：长度前缀往返（包括超过 1 MiB 的帧）、控制消息分类、H.264
+Annex B 解析、SPS 尺寸解析、安全的触摸指针处理、滚动增量、轻点延迟判定，
+以及后台控制消息写入。
 
 ## 上游兼容性
 

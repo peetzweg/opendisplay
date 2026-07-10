@@ -28,8 +28,8 @@ Currently implemented:
 - Mac mouse cursor drawing
 - Tap, drag, and two-finger scroll input
 - English UI by default, with Chinese launch, status, and settings translations retained
-- Latency/FPS status display toggle
-- Native, Balanced, and Smooth quality/resolution profiles
+- End-to-end latency, encode latency, RTT, and FPS status display toggle
+- Native panel advertisement; stream quality is controlled by the Mac without rebuilding the virtual display
 
 Verified on a real device:
 
@@ -71,12 +71,7 @@ app/src/main/java/app/opendisplay/android/
   CursorOverlayView.java         Mac cursor drawing
   TouchGestureCoordinator.java   tap/drag gesture staging
   ScrollGestureTracker.java      two-finger scroll deltas
-  DisplayProfile.java            advertised resolution profiles
   protocol/                      length-prefix, Annex B, SPS, control parsing
-
-scripts/
-  build_debug_apk.sh             local debug APK builder
-  install_debug_apk.sh           local install helper
 
 tests/java/
   ProtocolSelfTest.java          protocol and input behavior checks
@@ -90,8 +85,9 @@ tests/java/
   `ControlMessageWriter`, avoiding Android's `NetworkOnMainThreadException`.
 - **Tap deferral avoids scroll mis-clicks**: single-touch begin events are held
   briefly until the gesture is known; a second finger cancels the pending tap.
-- **Display profiles are receiver-driven**: Android can advertise a scaled
-  display size so the Mac captures less data for lower-latency WiFi use.
+- **Native display geometry stays stable**: Android always advertises its panel
+  size. The Mac quality setting scales capture/encode without tearing down and
+  rebuilding the virtual display.
 - **Cursor is separate from video**: the Mac sends cursor position and image
   metadata as control messages, and Android draws it as an overlay.
 
@@ -109,8 +105,14 @@ tests/java/
 Useful local checks:
 
 ```bash
-Android/scripts/build_debug_apk.sh
+cd Android && ./gradlew testDebugUnitTest assembleDebug
 ```
+
+The Gradle wrapper is the canonical build path and requires JDK 17 or newer.
+Pull requests that touch the Android receiver run the unit tests and debug APK
+build in GitHub Actions. The APK is written to
+`Android/app/build/outputs/apk/debug/app-debug.apk`; with a device connected,
+install it using `cd Android && ./gradlew installDebug`.
 
 For USB, enable Developer options and USB debugging on Android, connect the
 device, approve the Mac's debugging key, and open the receiver. The Mac app
@@ -124,9 +126,9 @@ adb -s DEVICE_SERIAL forward tcp:0 tcp:9000
 Using `tcp:0` lets ADB choose a free Mac-side port, so port `9000` can remain
 fixed on every receiver and multiple Android devices can be connected at once.
 
-The protocol self-test covers length-prefix round trips, control message
-classification, H.264 Annex B parsing, SPS dimension parsing, cursor control
-messages, safe touch pointer handling, scroll deltas, tap deferral, and
+The protocol self-test covers length-prefix round trips (including frames over
+1 MiB), control message classification, H.264 Annex B parsing, SPS dimension
+parsing, safe touch pointer handling, scroll deltas, tap deferral, and
 background control-message writes.
 
 ## Upstream Compatibility
