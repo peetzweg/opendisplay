@@ -13,14 +13,10 @@
     <string name="settings_disconnect_on_pause">Disconnect when app is paused</string>
     <string name="settings_show_status">Show status overlay while streaming</string>
     <string name="settings_show_metrics">Show latency and frame rate</string>
-    <string name="settings_quality">Quality / resolution: %1$s</string>
     <string name="settings_help_text">If the Mac cannot find Android: make sure both devices are on the same local network, VPN/TUN is not isolating the local network, and Android nearby devices/local network permission is allowed. If the Mac does not respond after tapping the screen, make sure Mac Accessibility permission is enabled.</string>
     <string name="settings_grant_nearby_wifi">Grant nearby devices permission</string>
     <string name="settings_title">Settings and Help</string>
     <string name="action_done">Done</string>
-    <string name="display_profile_title">Quality / Resolution</string>
-    <string name="status_display_profile_requested">Requested %1$s resolution. The Mac will reconfigure the display.</string>
-    <string name="action_cancel">Cancel</string>
     <string name="onboarding_title">Welcome to OpenDisplay</string>
     <string name="onboarding_message">This Android app works together with the Mac app. Start OpenDisplay on your Mac first, connect both devices to the same Wi-Fi, then select this Android device on the Mac.</string>
     <string name="onboarding_ok">Got it</string>
@@ -42,7 +38,4 @@
     <string name="decoder_frame_too_large">Video frame is too large and was dropped</string>
     <string name="decoder_request_keyframe">Decoder error. Requesting a keyframe</string>
     <string name="status_receiving_resolution">Receiving %1$d x %2$d</string>
-    <string name="display_profile_native">Native</string>
-    <string name="display_profile_balanced" formatted="false">Balanced 75%</string>
-    <string name="display_profile_fast" formatted="false">Smooth 50%</string>
 </resources>

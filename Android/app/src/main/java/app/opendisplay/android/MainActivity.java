@@ -35,7 +35,6 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
     private static final String KEY_DISCONNECT_ON_PAUSE = "disconnectOnPause";
     private static final String KEY_SHOW_STATUS = "showStatusOverlay";
     private static final String KEY_SHOW_METRICS = "showMetrics";
-    private static final String KEY_DISPLAY_PROFILE = "displayProfile";
 
     private FrameLayout root;
     private SurfaceView surfaceView;
@@ -334,12 +333,6 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         });
         content.addView(showMetrics, matchWrap());
 
-        Button quality = new Button(this);
-        quality.setText(getString(R.string.settings_quality,
-                displayProfileLabel(currentDisplayProfile())));
-        quality.setOnClickListener(v -> showDisplayProfileDialog());
-        content.addView(quality, matchWrap());
-
         TextView help = text(getString(R.string.settings_help_text), 14,
                 Color.rgb(82, 94, 112), false);
         help.setPadding(0, dp(10), 0, 0);
@@ -357,32 +350,6 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
                 .setTitle(getString(R.string.settings_title))
                 .setView(content)
                 .setPositiveButton(getString(R.string.action_done), null)
-                .show();
-    }
-
-    private void showDisplayProfileDialog() {
-        DisplayProfile[] profiles = DisplayProfile.values();
-        String[] labels = new String[profiles.length];
-        int checked = 0;
-        DisplayProfile current = currentDisplayProfile();
-        for (int i = 0; i < profiles.length; i++) {
-            labels[i] = displayProfileLabel(profiles[i]);
-            if (profiles[i] == current) {
-                checked = i;
-            }
-        }
-        new AlertDialog.Builder(this)
-                .setTitle(getString(R.string.display_profile_title))
-                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                    prefs.edit().putString(KEY_DISPLAY_PROFILE, profiles[which].key).apply();
-                    if (server != null) {
-                        server.updateDisplay(currentDisplaySpec());
-                    }
-                    setStatus(getString(R.string.status_display_profile_requested,
-                            labels[which]));
-                    dialog.dismiss();
-                })
-                .setNegativeButton(getString(R.string.action_cancel), null)
                 .show();
     }
 
@@ -570,31 +537,20 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
 
     private DisplaySpec currentDisplaySpec() {
         DisplayMetrics metrics = getResources().getDisplayMetrics();
-        DisplayProfile profile = currentDisplayProfile();
         if (Build.VERSION.SDK_INT >= 30) {
             Rect bounds = getWindowManager().getCurrentWindowMetrics().getBounds();
-            return scaledDisplaySpec(bounds.width(), bounds.height(), metrics.density, profile);
+            return displaySpec(bounds.width(), bounds.height(), metrics.density);
         }
         DisplayMetrics realMetrics = new DisplayMetrics();
         readLegacyRealMetrics(realMetrics);
-        return scaledDisplaySpec(realMetrics.widthPixels, realMetrics.heightPixels, realMetrics.density, profile);
+        return displaySpec(realMetrics.widthPixels, realMetrics.heightPixels, realMetrics.density);
     }
 
-    private DisplaySpec scaledDisplaySpec(int width, int height, double density, DisplayProfile profile) {
-        int scaledW = Math.max(2, ((int) Math.round(width * profile.scale)) & ~1);
-        int scaledH = Math.max(2, ((int) Math.round(height * profile.scale)) & ~1);
-        return new DisplaySpec(scaledW, scaledH, density);
-    }
-
-    private DisplayProfile currentDisplayProfile() {
-        if (prefs == null) {
-            return DisplayProfile.NATIVE;
-        }
-        return DisplayProfile.fromKey(prefs.getString(KEY_DISPLAY_PROFILE, DisplayProfile.NATIVE.key));
-    }
-
-    private String displayProfileLabel(DisplayProfile profile) {
-        return getString(profile.labelResId);
+    private DisplaySpec displaySpec(int width, int height, double density) {
+        return new DisplaySpec(
+                Math.max(2, width & ~1),
+                Math.max(2, height & ~1),
+                density);
     }
 
     @SuppressWarnings("deprecation")

@@ -13,14 +13,10 @@
     <string name="settings_disconnect_on_pause">应用暂停时断开连接</string>
     <string name="settings_show_status">串流时显示状态浮层</string>
     <string name="settings_show_metrics">显示延迟和帧率</string>
-    <string name="settings_quality">画质/分辨率：%1$s</string>
     <string name="settings_help_text">如果 Mac 找不到 Android：确认两台设备在同一局域网，VPN/TUN 没有隔离局域网，并允许 Android 的“附近设备/本地网络”权限。点击屏幕后若 Mac 端无反应，请确认 Mac 辅助功能权限已开启。</string>
     <string name="settings_grant_nearby_wifi">授予附近设备权限</string>
     <string name="settings_title">设置与帮助</string>
     <string name="action_done">完成</string>
-    <string name="display_profile_title">画质/分辨率</string>
-    <string name="status_display_profile_requested">已请求 %1$s 分辨率，Mac 会重新配置画面</string>
-    <string name="action_cancel">取消</string>
     <string name="onboarding_title">欢迎使用 OpenDisplay</string>
     <string name="onboarding_message">这个 Android 端需要和 Mac 端配合使用。请先在 Mac 上启动 OpenDisplay，再让两台设备连接同一个 WiFi，随后在 Mac 端选择这台 Android 设备。</string>
     <string name="onboarding_ok">知道了</string>
@@ -42,7 +38,4 @@
     <string name="decoder_frame_too_large">视频帧过大，已丢弃</string>
     <string name="decoder_request_keyframe">解码器异常，正在请求关键帧</string>
     <string name="status_receiving_resolution">正在接收 %1$d×%2$d</string>
-    <string name="display_profile_native">原生</string>
-    <string name="display_profile_balanced" formatted="false">均衡 75%</string>
-    <string name="display_profile_fast" formatted="false">流畅 50%</string>
 </resources>
