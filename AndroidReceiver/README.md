@@ -1,6 +1,6 @@
 # OpenDisplay Android Receiver
 
-Android WiFi receiver for the OpenDisplay Mac/Android CN fork.
+Android WiFi and ADB-over-USB receiver for the OpenDisplay Mac/Android CN fork.
 
 This module lets an Android tablet act as a receiver for the Mac sender. It
 uses the same OpenDisplay receiver contract as the iOS app: Bonjour-compatible
@@ -15,6 +15,7 @@ control messages for input and liveness.
 
 - Android NSD 广播 `_opensidecar._tcp`
 - TCP 监听端口 `9000`
+- Mac 端通过 ADB 自动发现 USB 设备，并将空闲本地端口转发到设备的 `tcp:9000`
 - 与 Mac 端兼容的 length-prefixed JSON 控制帧
 - H.264 Annex B 视频帧接收
 - `MediaCodec` 解码到 `SurfaceView`
@@ -90,7 +91,8 @@ tests/java/
 
 ## Known Limits
 
-- Android support is WiFi-only in this fork.
+- Android USB mode requires Android Platform Tools (`adb`) on the Mac and USB
+  debugging authorization on the Android device.
 - The transport is local-network TCP and is not yet production-grade encrypted pairing.
 - Hardware decoder behavior can vary by Android vendor.
 - Multi-touch is currently mapped to practical desktop gestures, not a full macOS gesture set.
@@ -103,6 +105,18 @@ Useful local checks:
 ```bash
 AndroidReceiver/scripts/build_debug_apk.sh
 ```
+
+For USB, enable Developer options and USB debugging on Android, connect the
+device, approve the Mac's debugging key, and open the receiver. The Mac app
+discovers `adb devices` automatically and uses an allocated local forward,
+equivalent to:
+
+```bash
+adb -s DEVICE_SERIAL forward tcp:0 tcp:9000
+```
+
+Using `tcp:0` lets ADB choose a free Mac-side port, so port `9000` can remain
+fixed on every receiver and multiple Android devices can be connected at once.
 
 The protocol self-test covers length-prefix round trips, control message
 classification, H.264 Annex B parsing, SPS dimension parsing, cursor control
