@@ -59,11 +59,17 @@ public final class H264SurfaceDecoder {
         try {
             int input = codec.dequeueInputBuffer(0);
             if (input < 0) {
+                drainOutput();
+                input = codec.dequeueInputBuffer(0);
+            }
+            if (input < 0) {
+                listener.onDecoderNeedsKeyframe();
                 return;
             }
             java.nio.ByteBuffer buffer = codec.getInputBuffer(input);
             if (buffer == null || payload.length > buffer.capacity()) {
                 listener.onDecoderStatus(context.getString(R.string.decoder_frame_too_large));
+                listener.onDecoderNeedsKeyframe();
                 return;
             }
             buffer.clear();
@@ -95,7 +101,7 @@ public final class H264SurfaceDecoder {
         MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, Math.max(width * height, 1 << 20));
         format.setInteger(MediaFormat.KEY_PRIORITY, 0);
-        if (android.os.Build.VERSION.SDK_INT >= 30) {
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
             format.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, 1);
         }
         if (sps != null) {

@@ -13,6 +13,8 @@ import app.opendisplay.android.TouchEventMapper;
 public final class ProtocolSelfTest {
     public static void main(String[] args) throws Exception {
         testLengthPrefixedRoundTrip();
+        testLargeLengthPrefixedRoundTrip();
+        testOversizedLengthIsRejectedBeforeAllocation();
         testJsonClassification();
         testAnnexBTelemetryAndNalus();
         testSpsParser();
@@ -30,6 +32,31 @@ public final class ProtocolSelfTest {
         byte[] encoded = LengthPrefixedProtocol.encode("hello".getBytes("UTF-8"));
         byte[] decoded = LengthPrefixedProtocol.read(new ByteArrayInputStream(encoded));
         assertEquals("hello", new String(decoded, "UTF-8"));
+    }
+
+    private static void testLargeLengthPrefixedRoundTrip() throws Exception {
+        byte[] payload = new byte[(1 << 20) + 1];
+        payload[payload.length - 1] = 0x65;
+        byte[] decoded = LengthPrefixedProtocol.read(
+                new ByteArrayInputStream(LengthPrefixedProtocol.encode(payload)));
+        assertEquals(payload.length, decoded.length);
+        assertEquals((byte) 0x65, decoded[decoded.length - 1]);
+    }
+
+    private static void testOversizedLengthIsRejectedBeforeAllocation() throws Exception {
+        int length = LengthPrefixedProtocol.MAX_FRAME_BYTES + 1;
+        byte[] header = new byte[] {
+                (byte) (length >>> 24),
+                (byte) (length >>> 16),
+                (byte) (length >>> 8),
+                (byte) length
+        };
+        try {
+            LengthPrefixedProtocol.read(new ByteArrayInputStream(header));
+            throw new AssertionError("expected oversized frame to be rejected");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("invalid OpenDisplay frame length"));
+        }
     }
 
     private static void testJsonClassification() {

@@ -11,7 +11,9 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class LengthPrefixedProtocol {
-    public static final int MAX_FRAME_BYTES = 1 << 20;
+    // Keep a defensive allocation limit, but leave ample room for native-resolution
+    // IDR frames at the Mac sender's highest bitrate.
+    public static final int MAX_FRAME_BYTES = 64 << 20;
 
     private LengthPrefixedProtocol() {}
 
