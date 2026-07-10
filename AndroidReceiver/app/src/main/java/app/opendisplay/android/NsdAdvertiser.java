@@ -44,22 +44,23 @@ public final class NsdAdvertiser {
         registration = new NsdManager.RegistrationListener() {
             @Override
             public void onServiceRegistered(NsdServiceInfo serviceInfo) {
-                listener.onNsdStatus("已广播：" + serviceInfo.getServiceName());
+                listener.onNsdStatus(context.getString(
+                        R.string.nsd_advertised, serviceInfo.getServiceName()));
             }
 
             @Override
             public void onRegistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                listener.onNsdStatus("广播失败：" + errorCode);
+                listener.onNsdStatus(context.getString(R.string.nsd_advertise_failed, errorCode));
             }
 
             @Override
             public void onServiceUnregistered(NsdServiceInfo serviceInfo) {
-                listener.onNsdStatus("广播已停止");
+                listener.onNsdStatus(context.getString(R.string.nsd_stopped));
             }
 
             @Override
             public void onUnregistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                listener.onNsdStatus("停止广播失败：" + errorCode);
+                listener.onNsdStatus(context.getString(R.string.nsd_stop_failed, errorCode));
             }
         };
         nsdManager.registerService(info, NsdManager.PROTOCOL_DNS_SD, registration);

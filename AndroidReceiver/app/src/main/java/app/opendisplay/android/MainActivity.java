@@ -45,7 +45,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
     private OpenDisplayServer server;
     private SurfaceHolder activeSurface;
     private SharedPreferences prefs;
-    private String currentStatus = "等待启动…";
+    private String currentStatus;
     private boolean streaming;
     private final ScrollGestureTracker scrollGesture = new ScrollGestureTracker();
     private TouchGestureCoordinator touchGesture;
@@ -58,6 +58,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        currentStatus = getString(R.string.status_waiting_start);
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -85,7 +86,9 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
     @Override
     public void onConnected(boolean connected) {
         runOnUiThread(() -> {
-            setStatus(connected ? "Mac 已连接，等待画面…" : "等待 Mac 连接…");
+            setStatus(getString(connected
+                    ? R.string.status_mac_connected_waiting_video
+                    : R.string.status_waiting_mac_connection));
             if (!connected) {
                 setStreaming(false);
                 cursorOverlay.resetCursor();
@@ -128,7 +131,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         if (requestCode == REQUEST_NEARBY_WIFI && hasNearbyWifiPermission()) {
             startServerIfReady();
         } else if (requestCode == REQUEST_NEARBY_WIFI) {
-            setStatus("需要附近设备权限才能在 WiFi 中被 Mac 发现");
+            setStatus(getString(R.string.status_nearby_wifi_permission_required));
         }
     }
 
@@ -211,7 +214,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         logo.setAdjustViewBounds(true);
         content.addView(logo, new LinearLayout.LayoutParams(dp(118), dp(118)));
 
-        TextView title = text("OpenDisplay Android", 30, Color.rgb(20, 24, 34), true);
+        TextView title = text(getString(R.string.app_name), 30, Color.rgb(20, 24, 34), true);
         title.setGravity(Gravity.CENTER);
         content.addView(title, matchWrap());
 
@@ -220,19 +223,16 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         idleStatusView.setPadding(0, dp(8), 0, dp(24));
         content.addView(idleStatusView, matchWrap());
 
-        content.addView(cardText("1. 在 Mac 上启动 OpenDisplay Mac 端\n"
-                + "2. 保持 Android 与 Mac 在同一 WiFi\n"
-                + "3. 在 Mac 端 WiFi 列表中选择 OpenDisplay Android\n"
-                + "4. 成功后会自动切换到全屏副屏画面"));
+        content.addView(cardText(getString(R.string.idle_instructions)));
 
         Button settings = new Button(this);
-        settings.setText("设置与帮助");
+        settings.setText(getString(R.string.button_settings_help));
         settings.setOnClickListener(v -> showSettingsDialog());
         LinearLayout.LayoutParams buttonParams = matchWrap();
         buttonParams.setMargins(0, dp(24), 0, dp(8));
         content.addView(settings, buttonParams);
 
-        TextView footnote = text("提示：串流中可在 Android 最近任务里返回此界面；状态浮层可在设置中关闭。", 13,
+        TextView footnote = text(getString(R.string.idle_footnote), 13,
                 Color.rgb(117, 128, 145), false);
         footnote.setGravity(Gravity.CENTER);
         footnote.setPadding(0, dp(8), 0, 0);
@@ -253,12 +253,13 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(20), dp(10), dp(20), 0);
 
-        content.addView(text("连接状态：" + currentStatus, 15, Color.rgb(36, 45, 60), false), matchWrap());
-        content.addView(text("服务端口：9000\n设备标识：" + InstallId.get(this), 13,
+        content.addView(text(getString(R.string.settings_connection_status, currentStatus),
+                15, Color.rgb(36, 45, 60), false), matchWrap());
+        content.addView(text(getString(R.string.settings_server_info, 9000, InstallId.get(this)), 13,
                 Color.rgb(95, 105, 120), false), matchWrap());
 
         CheckBox keepAwake = new CheckBox(this);
-        keepAwake.setText("保持屏幕常亮");
+        keepAwake.setText(getString(R.string.settings_keep_awake));
         keepAwake.setChecked(prefs.getBoolean(KEY_KEEP_AWAKE, true));
         keepAwake.setOnCheckedChangeListener((button, checked) -> {
             prefs.edit().putBoolean(KEY_KEEP_AWAKE, checked).apply();
@@ -267,7 +268,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         content.addView(keepAwake, matchWrap());
 
         CheckBox showStatus = new CheckBox(this);
-        showStatus.setText("串流时显示状态浮层");
+        showStatus.setText(getString(R.string.settings_show_status));
         showStatus.setChecked(prefs.getBoolean(KEY_SHOW_STATUS, true));
         showStatus.setOnCheckedChangeListener((button, checked) -> {
             prefs.edit().putBoolean(KEY_SHOW_STATUS, checked).apply();
@@ -276,7 +277,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         content.addView(showStatus, matchWrap());
 
         CheckBox showMetrics = new CheckBox(this);
-        showMetrics.setText("显示延迟和帧率");
+        showMetrics.setText(getString(R.string.settings_show_metrics));
         showMetrics.setChecked(prefs.getBoolean(KEY_SHOW_METRICS, true));
         showMetrics.setOnCheckedChangeListener((button, checked) -> {
             prefs.edit().putBoolean(KEY_SHOW_METRICS, checked).apply();
@@ -285,28 +286,28 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         content.addView(showMetrics, matchWrap());
 
         Button quality = new Button(this);
-        quality.setText("画质/分辨率：" + currentDisplayProfile().label);
+        quality.setText(getString(R.string.settings_quality,
+                displayProfileLabel(currentDisplayProfile())));
         quality.setOnClickListener(v -> showDisplayProfileDialog());
         content.addView(quality, matchWrap());
 
-        TextView help = text("如果 Mac 找不到 Android：确认两台设备在同一局域网，VPN/TUN 没有隔离局域网，"
-                + "并允许 Android 的“附近设备/本地网络”权限。点击屏幕后若 Mac 端无反应，请确认 Mac 辅助功能权限已开启。",
-                14, Color.rgb(82, 94, 112), false);
+        TextView help = text(getString(R.string.settings_help_text), 14,
+                Color.rgb(82, 94, 112), false);
         help.setPadding(0, dp(10), 0, 0);
         content.addView(help, matchWrap());
 
         if (!hasNearbyWifiPermission() && Build.VERSION.SDK_INT >= 33) {
             Button permission = new Button(this);
-            permission.setText("授予附近设备权限");
+            permission.setText(getString(R.string.settings_grant_nearby_wifi));
             permission.setOnClickListener(v -> requestPermissions(
                     new String[] {Manifest.permission.NEARBY_WIFI_DEVICES}, REQUEST_NEARBY_WIFI));
             content.addView(permission, matchWrap());
         }
 
         new AlertDialog.Builder(this)
-                .setTitle("设置与帮助")
+                .setTitle(getString(R.string.settings_title))
                 .setView(content)
-                .setPositiveButton("完成", null)
+                .setPositiveButton(getString(R.string.action_done), null)
                 .show();
     }
 
@@ -316,22 +317,23 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         int checked = 0;
         DisplayProfile current = currentDisplayProfile();
         for (int i = 0; i < profiles.length; i++) {
-            labels[i] = profiles[i].label;
+            labels[i] = displayProfileLabel(profiles[i]);
             if (profiles[i] == current) {
                 checked = i;
             }
         }
         new AlertDialog.Builder(this)
-                .setTitle("画质/分辨率")
+                .setTitle(getString(R.string.display_profile_title))
                 .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                     prefs.edit().putString(KEY_DISPLAY_PROFILE, profiles[which].key).apply();
                     if (server != null) {
                         server.updateDisplay(currentDisplaySpec());
                     }
-                    setStatus("已请求 " + profiles[which].label + " 分辨率，Mac 会重新配置画面");
+                    setStatus(getString(R.string.status_display_profile_requested,
+                            labels[which]));
                     dialog.dismiss();
                 })
-                .setNegativeButton("取消", null)
+                .setNegativeButton(getString(R.string.action_cancel), null)
                 .show();
     }
 
@@ -340,10 +342,9 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
             return;
         }
         new AlertDialog.Builder(this)
-                .setTitle("欢迎使用 OpenDisplay")
-                .setMessage("这个 Android 端需要和 Mac 端配合使用。请先在 Mac 上启动 OpenDisplay，"
-                        + "再让两台设备连接同一个 WiFi，随后在 Mac 端选择这台 Android 设备。")
-                .setPositiveButton("知道了", (dialog, which) ->
+                .setTitle(getString(R.string.onboarding_title))
+                .setMessage(getString(R.string.onboarding_message))
+                .setPositiveButton(getString(R.string.onboarding_ok), (dialog, which) ->
                         prefs.edit().putBoolean(KEY_ONBOARDING_DISMISSED, true).apply())
                 .show();
     }
@@ -353,7 +354,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
             return;
         }
         if (!hasNearbyWifiPermission()) {
-            setStatus("正在等待附近设备权限…");
+            setStatus(getString(R.string.status_waiting_nearby_wifi_permission));
             return;
         }
         server = new OpenDisplayServer(MainActivity.this, currentDisplaySpec(), MainActivity.this);
@@ -464,7 +465,7 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
         if (!streaming || !prefs.getBoolean(KEY_SHOW_METRICS, true)) {
             return;
         }
-        StringBuilder value = new StringBuilder("正在接收");
+        StringBuilder value = new StringBuilder(getString(R.string.status_receiving_prefix));
         if (lastMetrics.receiverFps > 0) {
             value.append(" · ").append(lastMetrics.receiverFps).append(" FPS");
         }
@@ -472,7 +473,8 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
             value.append(" · RTT ").append(Math.round(lastMetrics.rttMs)).append(" ms");
         }
         if (lastMetrics.inputP50Ms > 0) {
-            value.append(" · 输入 ").append(Math.round(lastMetrics.inputP50Ms)).append(" ms");
+            value.append(" · ").append(getString(R.string.metrics_input)).append(" ")
+                    .append(Math.round(lastMetrics.inputP50Ms)).append(" ms");
         }
         if (lastMetrics.macCaptureFps > 0) {
             value.append(" · Mac ").append(lastMetrics.macCaptureFps).append(" FPS");
@@ -519,6 +521,10 @@ public final class MainActivity extends Activity implements OpenDisplayServer.Li
             return DisplayProfile.NATIVE;
         }
         return DisplayProfile.fromKey(prefs.getString(KEY_DISPLAY_PROFILE, DisplayProfile.NATIVE.key));
+    }
+
+    private String displayProfileLabel(DisplayProfile profile) {
+        return getString(profile.labelResId);
     }
 
     @SuppressWarnings("deprecation")

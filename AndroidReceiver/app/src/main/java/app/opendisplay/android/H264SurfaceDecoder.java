@@ -1,5 +1,6 @@
 package app.opendisplay.android;
 
+import android.content.Context;
 import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.view.Surface;
@@ -10,6 +11,7 @@ import app.opendisplay.android.protocol.AnnexB;
 import app.opendisplay.android.protocol.SpsParser;
 
 public final class H264SurfaceDecoder {
+    private final Context context;
     private final Surface surface;
     private final Listener listener;
     private MediaCodec codec;
@@ -23,7 +25,8 @@ public final class H264SurfaceDecoder {
         void onDecoderFrameRendered();
     }
 
-    public H264SurfaceDecoder(Surface surface, Listener listener) {
+    public H264SurfaceDecoder(Context context, Surface surface, Listener listener) {
+        this.context = context.getApplicationContext();
         this.surface = surface;
         this.listener = listener;
     }
@@ -39,14 +42,15 @@ public final class H264SurfaceDecoder {
             }
             SpsParser.Size size = SpsParser.parseDimensions(sps);
             if (size == null) {
-                listener.onDecoderStatus("无法解析 H.264 SPS");
+                listener.onDecoderStatus(context.getString(R.string.decoder_sps_failed));
                 listener.onDecoderNeedsKeyframe();
                 return;
             }
             try {
                 configure(size.width, size.height, sps, pps);
             } catch (IOException | RuntimeException error) {
-                listener.onDecoderStatus("解码器启动失败：" + error.getMessage());
+                listener.onDecoderStatus(context.getString(
+                        R.string.decoder_start_failed, error.getMessage()));
                 release();
                 return;
             }
@@ -59,7 +63,7 @@ public final class H264SurfaceDecoder {
             }
             java.nio.ByteBuffer buffer = codec.getInputBuffer(input);
             if (buffer == null || payload.length > buffer.capacity()) {
-                listener.onDecoderStatus("视频帧过大，已丢弃");
+                listener.onDecoderStatus(context.getString(R.string.decoder_frame_too_large));
                 return;
             }
             buffer.clear();
@@ -69,7 +73,7 @@ public final class H264SurfaceDecoder {
             presentationUs += 16_666;
             drainOutput();
         } catch (IllegalStateException error) {
-            listener.onDecoderStatus("解码器异常，正在请求关键帧");
+            listener.onDecoderStatus(context.getString(R.string.decoder_request_keyframe));
             release();
             listener.onDecoderNeedsKeyframe();
         }
@@ -105,7 +109,8 @@ public final class H264SurfaceDecoder {
         configuredWidth = width;
         configuredHeight = height;
         presentationUs = 0;
-        listener.onDecoderStatus("正在接收 " + configuredWidth + "×" + configuredHeight);
+        listener.onDecoderStatus(context.getString(
+                R.string.status_receiving_resolution, configuredWidth, configuredHeight));
     }
 
     private void drainOutput() {
@@ -119,7 +124,8 @@ public final class H264SurfaceDecoder {
                 MediaFormat format = codec.getOutputFormat();
                 configuredWidth = format.getInteger(MediaFormat.KEY_WIDTH);
                 configuredHeight = format.getInteger(MediaFormat.KEY_HEIGHT);
-                listener.onDecoderStatus("正在接收 " + configuredWidth + "×" + configuredHeight);
+                listener.onDecoderStatus(context.getString(
+                        R.string.status_receiving_resolution, configuredWidth, configuredHeight));
             } else {
                 return;
             }

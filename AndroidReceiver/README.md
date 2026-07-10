@@ -20,7 +20,7 @@ control messages for input and liveness.
 - `MediaCodec` 解码到 `SurfaceView`
 - Mac 鼠标位置绘制
 - 轻点、拖拽、双指滚动输入
-- 中文启动、状态和设置界面
+- 英文默认界面，并保留中文启动、状态和设置翻译
 - 延迟/FPS 状态显示开关
 - 原生、均衡、流畅三档画质/分辨率配置
 

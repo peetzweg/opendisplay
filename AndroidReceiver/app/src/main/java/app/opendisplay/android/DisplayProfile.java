@@ -1,17 +1,17 @@
 package app.opendisplay.android;
 
 public enum DisplayProfile {
-    NATIVE("native", "原生", 1.0),
-    BALANCED("balanced", "均衡 75%", 0.75),
-    FAST("fast", "流畅 50%", 0.5);
+    NATIVE("native", R.string.display_profile_native, 1.0),
+    BALANCED("balanced", R.string.display_profile_balanced, 0.75),
+    FAST("fast", R.string.display_profile_fast, 0.5);
 
     public final String key;
-    public final String label;
+    public final int labelResId;
     public final double scale;
 
-    DisplayProfile(String key, String label, double scale) {
+    DisplayProfile(String key, int labelResId, double scale) {
         this.key = key;
-        this.label = label;
+        this.labelResId = labelResId;
         this.scale = scale;
     }
 

@@ -66,12 +66,12 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
             return;
         }
         running = true;
-        decoder = new H264SurfaceDecoder(surface, this);
+        decoder = new H264SurfaceDecoder(context, surface, this);
         metricsWindowStartMs = System.currentTimeMillis();
-        advertiser.start("OpenDisplay Android", installId, PORT);
+        advertiser.start(context.getString(R.string.app_name), installId, PORT);
         io.execute(this::acceptLoop);
         timer.scheduleAtFixedRate(this::sendPingIfConnected, 2, 2, TimeUnit.SECONDS);
-        listener.onStatus("正在监听 :" + PORT);
+        listener.onStatus(context.getString(R.string.status_listening, PORT));
     }
 
     public void stop() {
@@ -117,13 +117,15 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
                 socket = accepted;
                 output = new BufferedOutputStream(accepted.getOutputStream());
                 listener.onConnected(true);
-                listener.onStatus("Mac 已连接：" + accepted.getInetAddress().getHostAddress());
+                listener.onStatus(context.getString(
+                        R.string.status_mac_connected_address,
+                        accepted.getInetAddress().getHostAddress()));
                 sendHello();
                 readLoop(accepted);
             }
         } catch (IOException error) {
             if (running) {
-                listener.onStatus("监听失败：" + error.getMessage());
+                listener.onStatus(context.getString(R.string.status_listen_failed, error.getMessage()));
             }
         }
     }
@@ -141,7 +143,7 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
             }
         } catch (IOException error) {
             if (running) {
-                listener.onStatus("连接已断开，等待 Mac 重新连接…");
+                listener.onStatus(context.getString(R.string.status_connection_lost));
             }
         } finally {
             if (active == socket) {
@@ -221,7 +223,7 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
     @Override
     public void onDecoderStatus(String status) {
         listener.onStatus(status);
-        if (status.startsWith("正在接收")) {
+        if (status.startsWith(context.getString(R.string.status_receiving_prefix))) {
             listener.onStreaming(true);
         }
     }
