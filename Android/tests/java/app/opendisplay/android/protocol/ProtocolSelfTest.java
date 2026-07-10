@@ -18,7 +18,6 @@ public final class ProtocolSelfTest {
         testJsonClassification();
         testAnnexBTelemetryAndNalus();
         testSpsParser();
-        testMacCursorControlMessage();
         testTouchPointerIndexIsSafe();
         testScrollJson();
         testScrollGestureTrackerProducesPixelDeltas();
@@ -80,24 +79,6 @@ public final class ProtocolSelfTest {
         assertEquals(720, size.height);
     }
 
-    private static void testMacCursorControlMessage() {
-        MacControlMessage cursor = MacControlMessage.parse(
-                "{\"type\":\"cursor\",\"x\":0.2500,\"y\":0.7500,\"v\":1}");
-        assertEquals("cursor", cursor.type);
-        assertEquals(0.25, cursor.x);
-        assertEquals(0.75, cursor.y);
-        assertTrue(cursor.visible);
-
-        MacControlMessage image = MacControlMessage.parse(
-                "{\"type\":\"cursorImg\",\"nw\":0.01000,\"nh\":0.02000,\"ax\":0.100,\"ay\":0.200,\"png\":\"abcd\"}");
-        assertEquals("cursorImg", image.type);
-        assertEquals(0.01, image.normalizedWidth);
-        assertEquals(0.02, image.normalizedHeight);
-        assertEquals(0.1, image.anchorX);
-        assertEquals(0.2, image.anchorY);
-        assertEquals("abcd", image.pngBase64);
-    }
-
     private static void testTouchPointerIndexIsSafe() {
         assertEquals(0, TouchEventMapper.safePointerIndex(TouchEventMapper.ACTION_MOVE, 2, 1));
         assertEquals(1, TouchEventMapper.safePointerIndex(TouchEventMapper.ACTION_UP, 99, 2));
@@ -118,11 +99,11 @@ public final class ProtocolSelfTest {
         tracker.begin(100, 200, 2.0);
         assertTrue(tracker.isActive());
         ScrollGestureTracker.Delta first = tracker.move(130, 220);
-        assertEquals(-15.0, first.dx);
-        assertEquals(-10.0, first.dy);
+        assertEquals(15.0, first.dx);
+        assertEquals(10.0, first.dy);
         ScrollGestureTracker.Delta second = tracker.move(150, 210);
-        assertEquals(-10.0, second.dx);
-        assertEquals(5.0, second.dy);
+        assertEquals(10.0, second.dx);
+        assertEquals(-5.0, second.dy);
         tracker.end();
         assertFalse(tracker.isActive());
         assertEquals(null, tracker.move(200, 200));

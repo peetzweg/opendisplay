@@ -31,8 +31,8 @@ public final class ScrollGestureTracker {
         if (!active) {
             return null;
         }
-        double dx = -(x - lastX) / viewPixelsPerVideoPixel;
-        double dy = -(y - lastY) / viewPixelsPerVideoPixel;
+        double dx = (x - lastX) / viewPixelsPerVideoPixel;
+        double dy = (y - lastY) / viewPixelsPerVideoPixel;
         lastX = x;
         lastY = y;
         return new Delta(dx, dy);

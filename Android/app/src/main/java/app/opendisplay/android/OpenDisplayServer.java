@@ -18,7 +18,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import app.opendisplay.android.protocol.LengthPrefixedProtocol;
-import app.opendisplay.android.protocol.MacControlMessage;
 
 public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, NsdAdvertiser.Listener {
     private static final int PORT = 9000;
@@ -191,13 +190,18 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
                     lastRttMs = rtt;
                 }
             } else if ("cursor".equals(type)) {
-                MacControlMessage cursor = MacControlMessage.parse(json);
-                listener.onCursor(cursor.x, cursor.y, cursor.visible);
+                listener.onCursor(
+                        object.optDouble("x", 0),
+                        object.optDouble("y", 0),
+                        object.optInt("v", 0) == 1);
             } else if ("cursorImg".equals(type)) {
-                MacControlMessage cursor = MacControlMessage.parse(json);
-                byte[] png = Base64.decode(cursor.pngBase64, Base64.DEFAULT);
-                listener.onCursorImage(png, cursor.anchorX, cursor.anchorY,
-                        cursor.normalizedWidth, cursor.normalizedHeight);
+                byte[] png = Base64.decode(object.optString("png", ""), Base64.DEFAULT);
+                listener.onCursorImage(
+                        png,
+                        object.optDouble("ax", 0),
+                        object.optDouble("ay", 0),
+                        object.optDouble("nw", 0),
+                        object.optDouble("nh", 0));
             }
         } catch (Exception ignored) {
         }
