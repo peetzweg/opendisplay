@@ -9,6 +9,7 @@ import org.json.JSONObject;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
@@ -21,10 +22,12 @@ import app.opendisplay.android.protocol.MacControlMessage;
 
 public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, NsdAdvertiser.Listener {
     private static final int PORT = 9000;
+    private static final long STALE_CONNECTION_MS = 5_000;
 
     private final Context context;
     private final Listener listener;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final ExecutorService clientReaders = Executors.newCachedThreadPool();
     private final ExecutorService writer = Executors.newSingleThreadExecutor();
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
     private final String installId;
@@ -35,7 +38,8 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
     private Socket socket;
     private BufferedOutputStream output;
     private H264SurfaceDecoder decoder;
-    private Double clockOffsetMs;
+    private volatile Double clockOffsetMs;
+    private volatile long lastPayloadReceivedMs;
     private final ControlMessageWriter controlWriter = new ControlMessageWriter(writer);
     private int renderedFrames;
     private long metricsWindowStartMs;
@@ -70,7 +74,7 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
         metricsWindowStartMs = System.currentTimeMillis();
         advertiser.start(context.getString(R.string.app_name), installId, PORT);
         io.execute(this::acceptLoop);
-        timer.scheduleAtFixedRate(this::sendPingIfConnected, 2, 2, TimeUnit.SECONDS);
+        timer.scheduleAtFixedRate(this::monitorConnection, 2, 2, TimeUnit.SECONDS);
         listener.onStatus(context.getString(R.string.status_listening, PORT));
     }
 
@@ -88,6 +92,7 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
             decoder.release();
         }
         io.shutdownNow();
+        clientReaders.shutdownNow();
         writer.shutdownNow();
         timer.shutdownNow();
     }
@@ -107,21 +112,33 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
     }
 
     private void acceptLoop() {
-        try (ServerSocket server = new ServerSocket(PORT)) {
+        try (ServerSocket server = new ServerSocket()) {
             server.setReuseAddress(true);
+            server.bind(new InetSocketAddress(PORT));
             serverSocket = server;
             while (running) {
                 Socket accepted = server.accept();
-                accepted.setTcpNoDelay(true);
-                closeClient();
-                socket = accepted;
-                output = new BufferedOutputStream(accepted.getOutputStream());
-                listener.onConnected(true);
-                listener.onStatus(context.getString(
-                        R.string.status_mac_connected_address,
-                        accepted.getInetAddress().getHostAddress()));
-                sendHello();
-                readLoop(accepted);
+                try {
+                    accepted.setTcpNoDelay(true);
+                    accepted.setKeepAlive(true);
+                    BufferedOutputStream acceptedOutput =
+                            new BufferedOutputStream(accepted.getOutputStream());
+                    installClient(accepted, acceptedOutput);
+                    listener.onStreaming(false);
+                    listener.onConnected(true);
+                    listener.onStatus(context.getString(
+                            R.string.status_mac_connected_address,
+                            accepted.getInetAddress().getHostAddress()));
+                    sendHello();
+                    sendJson(LengthPrefixedProtocol.keyframeRequestJson());
+                    clientReaders.execute(() -> readLoop(accepted));
+                } catch (IOException error) {
+                    closeSocket(accepted);
+                    if (running) {
+                        listener.onStatus(context.getString(
+                                R.string.status_listen_failed, error.getMessage()));
+                    }
+                }
             }
         } catch (IOException error) {
             if (running) {
@@ -133,8 +150,9 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
     private void readLoop(Socket active) {
         try {
             BufferedInputStream input = new BufferedInputStream(active.getInputStream());
-            while (running && active == socket && !active.isClosed()) {
+            while (running && isActiveSocket(active) && !active.isClosed()) {
                 byte[] payload = LengthPrefixedProtocol.read(input);
+                lastPayloadReceivedMs = System.currentTimeMillis();
                 if (LengthPrefixedProtocol.isPureJsonControl(payload)) {
                     handleMacJson(new String(payload, java.nio.charset.StandardCharsets.UTF_8));
                 } else if (decoder != null) {
@@ -142,11 +160,11 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
                 }
             }
         } catch (IOException error) {
-            if (running) {
+            if (running && isActiveSocket(active)) {
                 listener.onStatus(context.getString(R.string.status_connection_lost));
             }
         } finally {
-            if (active == socket) {
+            if (isActiveSocket(active)) {
                 closeClient();
                 listener.onConnected(false);
                 listener.onStreaming(false);
@@ -198,8 +216,17 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
                 installId));
     }
 
-    private void sendPingIfConnected() {
+    private void monitorConnection() {
         sendJson(LengthPrefixedProtocol.pingJson(LengthPrefixedProtocol.nowMs()));
+        Socket active = currentSocket();
+        if (active != null
+                && System.currentTimeMillis() - lastPayloadReceivedMs > STALE_CONNECTION_MS
+                && isActiveSocket(active)) {
+            listener.onStatus(context.getString(R.string.status_connection_lost));
+            closeClient();
+            listener.onConnected(false);
+            listener.onStreaming(false);
+        }
     }
 
     private synchronized void sendJson(String json) {
@@ -209,15 +236,54 @@ public final class OpenDisplayServer implements H264SurfaceDecoder.Listener, Nsd
         controlWriter.send(output, json);
     }
 
-    private synchronized void closeClient() {
-        if (socket != null) {
-            try {
-                socket.close();
-            } catch (IOException ignored) {
-            }
-            socket = null;
+    private void installClient(Socket accepted, BufferedOutputStream acceptedOutput) {
+        closeClient();
+        resetStreamMetrics();
+        synchronized (this) {
+            socket = accepted;
+            output = acceptedOutput;
+            lastPayloadReceivedMs = System.currentTimeMillis();
         }
-        output = null;
+    }
+
+    private void resetStreamMetrics() {
+        clockOffsetMs = null;
+        renderedFrames = 0;
+        metricsWindowStartMs = System.currentTimeMillis();
+        lastRttMs = 0;
+        lastInputP50Ms = 0;
+        lastMacCaptureFps = 0;
+    }
+
+    private void closeClient() {
+        Socket closing;
+        synchronized (this) {
+            closing = socket;
+            socket = null;
+            output = null;
+        }
+        closeSocket(closing);
+        if (decoder != null) {
+            decoder.release();
+        }
+    }
+
+    private synchronized Socket currentSocket() {
+        return socket;
+    }
+
+    private synchronized boolean isActiveSocket(Socket active) {
+        return active == socket;
+    }
+
+    private void closeSocket(Socket closing) {
+        if (closing == null) {
+            return;
+        }
+        try {
+            closing.close();
+        } catch (IOException ignored) {
+        }
     }
 
     @Override
