@@ -2,36 +2,42 @@
 
 Android WiFi and ADB-over-USB receiver for the OpenDisplay Mac/Android CN fork.
 
+中文版：[README.cn.md](README.cn.md)
+
 This module lets an Android tablet act as a receiver for the Mac sender. It
 uses the same OpenDisplay receiver contract as the iOS app: Bonjour-compatible
 service discovery, a length-prefixed TCP stream, H.264 video frames, and JSON
 control messages for input and liveness.
 
-## 中文说明
+## Overview
 
-安卓端的定位是“平板接收器”，不是独立投屏软件。Mac 端负责创建镜像或扩展显示器、捕获画面、编码 H.264 并通过局域网发送；安卓端负责发现/监听、解码、显示画面，并把触摸和滚动事件回传给 Mac。
+The Android app is a "tablet receiver", not a standalone screen-casting tool.
+The Mac side creates the mirrored or extended display, captures the screen,
+encodes H.264, and streams it over the local network; the Android side
+discovers/listens, decodes, renders the picture, and sends touch and scroll
+events back to the Mac.
 
-当前已经实现：
+Currently implemented:
 
-- Android NSD 广播 `_opensidecar._tcp`
-- TCP 监听端口 `9000`
-- Mac 端通过 ADB 自动发现 USB 设备，并将空闲本地端口转发到设备的 `tcp:9000`
-- 与 Mac 端兼容的 length-prefixed JSON 控制帧
-- H.264 Annex B 视频帧接收
-- `MediaCodec` 解码到 `SurfaceView`
-- Mac 鼠标位置绘制
-- 轻点、拖拽、双指滚动输入
-- 英文默认界面，并保留中文启动、状态和设置翻译
-- 延迟/FPS 状态显示开关
-- 原生、均衡、流畅三档画质/分辨率配置
+- Android NSD advertisement of `_opensidecar._tcp`
+- TCP listener on port `9000`
+- Mac discovers USB devices via ADB and forwards a free local port to the device's `tcp:9000`
+- Length-prefixed JSON control frames compatible with the Mac sender
+- H.264 Annex B video frame reception
+- `MediaCodec` decode to a `SurfaceView`
+- Mac mouse cursor drawing
+- Tap, drag, and two-finger scroll input
+- English UI by default, with Chinese launch, status, and settings translations retained
+- Latency/FPS status display toggle
+- Native, Balanced, and Smooth quality/resolution profiles
 
-已在本地真机验证：
+Verified on a real device:
 
-- Android 平板能出现在 Mac 端 WiFi 设备列表
-- Mac 可以通过 WiFi 镜像和扩展到 Android
-- H.264 画面能正常解码显示
-- 点击屏幕不会导致 app 退出
-- 鼠标位置可以在 Android 屏幕上显示
+- The Android tablet appears in the Mac's WiFi device list
+- The Mac can mirror and extend to Android over WiFi
+- H.264 video decodes and displays correctly
+- Tapping the screen does not crash the app
+- The Mac cursor position renders on the Android screen
 
 ## Receiver Contract
 
