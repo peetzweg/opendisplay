@@ -104,7 +104,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private let queue = DispatchQueue(label: "sender.video")
     private let startCode: [UInt8] = [0, 0, 0, 1]
 
-    private let transport: SenderTransport
+    // The dial target. Written on `queue` only (after init): the controller
+    // can migrate a live session between transports via switchTransport.
+    private var transport: SenderTransport
     private let endpointName: String
     private let mode: CaptureMode
     private let quality: StreamQuality
@@ -407,6 +409,32 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // Unblock a start() that is still waiting for the hello.
             self?.helloContinuation?.resume(throwing: CancellationError())
             self?.helloContinuation = nil
+        }
+    }
+
+    /// Migrate the live session to another transport: swap the socket under
+    /// the pipeline — virtual display, capture and encoder stay up (no
+    /// display destroy/create, so no screen flash and no window reshuffle)
+    /// while the connection redials over the new transport. The receiver
+    /// treats it like any reconnect: the fresh connection replaces the old
+    /// one and the video resyncs with a keyframe. Which transport to be on
+    /// is the controller's call (cable-in upgrade, unplug failover).
+    func switchTransport(to newTransport: SenderTransport) {
+        queue.async { [weak self] in
+            guard let self, !self.stopped else { return }
+            let label = if case .usb = newTransport { "USB" } else { "WiFi" }
+            Log.info("switching \(self.endpointName) to \(label)")
+            self.transport = newTransport
+            // Fresh grace window: if the new link can't come up either, the
+            // session ends like any other disconnect instead of dialing
+            // a dead transport forever.
+            self.disconnectedSince = Date()
+            self.connectionReady = false
+            self.dialGeneration += 1   // a dial still in flight must not adopt
+            self.connection?.cancel()
+            self.connection = nil
+            self.pendingSends = 0
+            self.connect()
         }
     }
 

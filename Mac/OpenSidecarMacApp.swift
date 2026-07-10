@@ -128,17 +128,33 @@ final class DeviceSession: ObservableObject, Identifiable {
     // "iPhone" / "iPad" from hello — naming fallback while (or in case)
     // lockdown hasn't resolved the device's real name.
     var deviceKind: String?
+    // `target` names the identity the session was created for; the live
+    // transport can migrate (cable-in upgrade, unplug failover) — these
+    // track where the sender actually is right now.
+    @Published var onUSB: Bool
+    // The udid the session is (or was last) cabled through, so a usbmuxd
+    // detach can be matched back to this session for failover.
+    var usbUDID: String?
+    // The Bonjour service name this session was started from or failed over
+    // to. Kept because browse results routinely arrive without their TXT
+    // record (no install id to match on) and the USB device is detached
+    // after a failover — the name is then the only link between the session
+    // and its service row.
+    var wifiServiceName: String?
 
-    var transportLabel: String {
-        if case .usb = target { return "USB" }
-        return "WiFi"
-    }
+    var transportLabel: String { onUSB ? "USB" : "WiFi" }
 
     init(id: String, target: ConnectionTarget, name: String, sender: MacSender) {
         self.id = id
         self.target = target
         self.name = name
         self.sender = sender
+        if case .usb(let udid) = target {
+            onUSB = true
+            usbUDID = udid
+        } else {
+            onUSB = false
+        }
     }
 }
 
@@ -175,19 +191,21 @@ final class SenderController: ObservableObject {
     private var browser: NWBrowser?
     private var usbWatcher: UsbmuxDeviceWatcher?
 
-    // Connection policy — deliberately simple, no automatic transport
-    // switching. One session per physical device; whichever transport
-    // connected first keeps the device until the session ends. Unplugging
-    // the cable ENDS the session (it does not migrate to WiFi), and a WiFi
-    // drop does not migrate to the cable: silent transport handover
-    // surprised users more than it helped (and every virtual-display
-    // create/destroy flashes all screens).
+    // Connection policy — one session per physical device, and the cable
+    // wins whenever it's available (lower, steadier latency than WiFi):
     //
     //  - USB devices connect on attach ("plug in and go") unless the user
     //    explicitly disconnected them once (usbDisabled).
+    //  - Plugging the cable in while the device streams over WiFi migrates
+    //    the live session onto USB; unplugging it fails over to WiFi when
+    //    the device's service is visible — otherwise the session ends after
+    //    the usual grace. Migrations swap only the socket (switchTransport):
+    //    the virtual display survives, so no screen flash, no window
+    //    reshuffle — the earlier no-switching policy existed because
+    //    migration used to mean destroying and recreating the session.
     //  - WiFi devices the user connected before (wifiRemembered) reconnect
     //    in a short window at LAUNCH only — never mid-session.
-    // `-autostart NO` disables all auto-connecting.
+    // `-autostart NO` disables all auto-connecting, including migrations.
     private var usbDisabled = Set(UserDefaults.standard.stringArray(forKey: "usbDisabled") ?? []) {
         didSet { UserDefaults.standard.set(Array(usbDisabled), forKey: "usbDisabled") }
     }
@@ -217,7 +235,9 @@ final class SenderController: ObservableObject {
         startBrowsing()
         usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
             guard let self else { return }
+            let detached = Set(self.usbDevices.map(\.udid)).subtracting(devices.map(\.udid))
             self.usbDevices = devices
+            self.failover(detachedUDIDs: detached)
             self.autoConnect()
         }
         Task { @MainActor in
@@ -282,9 +302,13 @@ final class SenderController: ObservableObject {
         return sessions.first { s in
             guard case .usb(let udid) = s.target else { return false }
             if let id = txtID(of: result), s.deviceID == id { return true }
-            guard let udid, let device = usbDevices.first(where: { $0.udid == udid })
-            else { return false }
-            return sameDevice(result, device)
+            if let udid, let device = usbDevices.first(where: { $0.udid == udid }),
+               sameDevice(result, device) { return true }
+            // Browse results routinely lack their TXT record and the USB
+            // device is gone after a failover — the service name is then
+            // the only remaining link to the session.
+            let name = serviceName(of: result)
+            return name != nil && (name == s.wifiServiceName || name == s.name)
         }
     }
 
@@ -299,10 +323,15 @@ final class SenderController: ObservableObject {
            !usbDisabled.contains("usb:first"), session(for: "usb:first") == nil {
             connect(to: .usb(udid: nil))
         }
-        for device in usbDevices
-            where !usbDisabled.contains("usb:\(device.udid)")
-            && activeSession(coveringUSB: device) == nil {
-            connect(to: .usb(udid: device.udid))
+        for device in usbDevices {
+            if let covering = activeSession(coveringUSB: device) {
+                // usbDisabled gates auto-connecting a device, not the
+                // transport of a session the user deliberately has running —
+                // however it was started, the cable is better: take it.
+                upgradeToUSB(covering, device: device)
+            } else if !usbDisabled.contains("usb:\(device.udid)") {
+                connect(to: .usb(udid: device.udid))
+            }
         }
         guard wifiAutoConnectArmed, Date() < wifiAutoConnectDeadline else { return }
         for result in discovered {
@@ -320,6 +349,45 @@ final class SenderController: ObservableObject {
     private func cabled(_ result: NWBrowser.Result) -> Bool {
         usbDevices.contains {
             sameDevice(result, $0) && !usbDisabled.contains("usb:\($0.udid)")
+        }
+    }
+
+    /// Cable plugged in while the device streams over WiFi: migrate the live
+    /// session onto USB. No-op when the session is already cabled.
+    private func upgradeToUSB(_ session: DeviceSession, device: UsbmuxDevice) {
+        guard !session.onUSB, let portNum = UInt16(port) else { return }
+        Log.info("cable attached for \(session.id) — migrating to USB")
+        session.onUSB = true
+        session.usbUDID = device.udid
+        // The match may have been by name only — pin the strong identity so
+        // future matching (and the next launch) recognizes the pair.
+        if let id = session.deviceID { installIDByUDID[device.udid] = id }
+        session.sender.switchTransport(to: .usb(udid: device.udid, port: portNum))
+    }
+
+    /// Cable unplugged under a live session: fail over to the device's WiFi
+    /// service if one is visible. Without one the session keeps its normal
+    /// fate — retry over USB through the grace period, then end.
+    private func failover(detachedUDIDs: Set<String>) {
+        guard autoConnectEnabled, !detachedUDIDs.isEmpty else { return }
+        for session in sessions where session.onUSB {
+            guard let udid = session.usbUDID, detachedUDIDs.contains(udid),
+                  let result = wifiService(for: session) else { continue }
+            Log.info("cable detached for \(session.id) — failing over to WiFi")
+            session.onUSB = false
+            session.wifiServiceName = serviceName(of: result)
+            session.sender.switchTransport(to: .tcp(result.endpoint))
+        }
+    }
+
+    /// The discovered WiFi service belonging to this session's device.
+    private func wifiService(for session: DeviceSession) -> NWBrowser.Result? {
+        discovered.first { result in
+            if let id = txtID(of: result), let deviceID = session.deviceID {
+                return id == deviceID
+            }
+            let name = serviceName(of: result)
+            return name != nil && (name == session.wifiServiceName || name == session.name)
         }
     }
 
@@ -424,6 +492,9 @@ final class SenderController: ObservableObject {
         let sender = MacSender(transport: transport, name: name, mode: mode,
                                quality: quality, displaySerial: Self.displaySerial(for: id))
         let session = DeviceSession(id: id, target: target, name: name, sender: sender)
+        if case .wifi(let result) = target {
+            session.wifiServiceName = serviceName(of: result)
+        }
         sender.onStatus = { [weak session] text in
             session?.status = text
             Log.info("status[\(id)]: \(text)")
@@ -436,6 +507,9 @@ final class SenderController: ObservableObject {
                 self.installIDByUDID[udid] = installID
             }
             self.dedupeSessions()
+            // The learned identity may reveal that this WiFi session's device
+            // is cabled — take the upgrade opportunity right away.
+            self.autoConnect()
         }
         sender.onStats = { [weak session] frames, mbps in
             session?.framesSent = frames
@@ -468,6 +542,10 @@ final class SenderController: ObservableObject {
         case .usb: usbDisabled.insert(session.id)
         case .wifi: wifiRemembered.remove(session.id)
         }
+        // A migrated session is also reachable the other way — opt that side
+        // out too, or auto-connect resurrects the device moments later.
+        if session.onUSB, let udid = session.usbUDID { usbDisabled.insert("usb:\(udid)") }
+        if let name = session.wifiServiceName { wifiRemembered.remove("wifi:\(name)") }
         end(session)
     }
 
@@ -487,6 +565,7 @@ final class SenderController: ObservableObject {
         sessions.forEach { $0.sender.stop() }
         sessions.removeAll()
         targets.forEach { connect(to: $0) }
+        autoConnect()   // a rebuilt WiFi session may deserve its cable back
     }
 
     // MARK: - Device list (one row per physical device)
@@ -522,6 +601,11 @@ final class SenderController: ObservableObject {
             let usbTarget = ConnectionTarget.usb(udid: device.udid)
             coveredSessionIDs.insert(usbTarget.sessionID)
             if let twin { coveredSessionIDs.insert(ConnectionTarget.wifi(twin).sessionID) }
+            // A WiFi-identity session migrated onto this cable serves the
+            // device even when its service is no longer advertised.
+            if let covering = activeSession(coveringUSB: device) {
+                coveredSessionIDs.insert(covering.id)
+            }
             entries.append(DeviceEntry(
                 id: "device:\(device.udid)",
                 name: device.name
@@ -542,6 +626,12 @@ final class SenderController: ObservableObject {
             else { continue }
             let target = ConnectionTarget.wifi(result)
             coveredSessionIDs.insert(target.sessionID)
+            // A USB-identity session that failed over to WiFi serves this
+            // service — claim it, or it would dangle as a second row and
+            // this one would offer a Connect that steals the receiver.
+            if let covering = activeSession(coveringWiFi: result) {
+                coveredSessionIDs.insert(covering.id)
+            }
             entries.append(DeviceEntry(id: "service:\(name)", name: name,
                                        usbTarget: nil, wifiTarget: target))
         }
@@ -555,8 +645,19 @@ final class SenderController: ObservableObject {
     }
 
     func session(for entry: DeviceEntry) -> DeviceSession? {
-        if let target = entry.usbTarget, let s = session(for: target.sessionID) { return s }
-        if let target = entry.wifiTarget, let s = session(for: target.sessionID) { return s }
+        if let target = entry.usbTarget {
+            if let s = session(for: target.sessionID) { return s }
+            if case .usb(let udid?) = target,
+               let device = usbDevices.first(where: { $0.udid == udid }),
+               let s = activeSession(coveringUSB: device) { return s }
+        }
+        if let target = entry.wifiTarget {
+            if let s = session(for: target.sessionID) { return s }
+            // Transport-migrated sessions keep their original identity — a
+            // USB-identity session failed over to WiFi still owns this row.
+            if case .wifi(let result) = target,
+               let s = activeSession(coveringWiFi: result) { return s }
+        }
         return session(for: entry.id)   // dangling-session rows
     }
 }
