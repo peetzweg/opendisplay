@@ -5,13 +5,25 @@ import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.junit.Test;
+
 import app.opendisplay.android.ControlMessageWriter;
 import app.opendisplay.android.ScrollGestureTracker;
 import app.opendisplay.android.TouchGestureCoordinator;
 import app.opendisplay.android.TouchEventMapper;
 
 public final class ProtocolSelfTest {
+    @Test
+    public void protocolAndInputBehavior() throws Exception {
+        runAll();
+    }
+
     public static void main(String[] args) throws Exception {
+        runAll();
+        System.out.println("ProtocolSelfTest PASS");
+    }
+
+    private static void runAll() throws Exception {
         testLengthPrefixedRoundTrip();
         testLargeLengthPrefixedRoundTrip();
         testOversizedLengthIsRejectedBeforeAllocation();
@@ -24,7 +36,6 @@ public final class ProtocolSelfTest {
         testTouchGestureCoordinatorDefersTapUntilGestureIsKnown();
         testTouchGestureCoordinatorCancelsPendingTapForScroll();
         testControlMessageWriterDoesNotWriteOnCallerThread();
-        System.out.println("ProtocolSelfTest PASS");
     }
 
     private static void testLengthPrefixedRoundTrip() throws Exception {
