@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using OpenDisplay.Windows.Infrastructure;
 using OpenDisplay.Windows.Models;
 using OpenDisplay.Windows.Services;
@@ -17,11 +18,23 @@ internal sealed class SessionViewModel : ObservableObject
     public string Id => _session.Id;
     public string TargetId => _session.TargetId;
     public ReceiverTransport Transport => _session.Transport;
+    public string TransportLabel => Transport switch
+    {
+        ReceiverTransport.Adb => "ADB / USB",
+        ReceiverTransport.Manual => "Manual address",
+        _ => "Wi-Fi"
+    };
     public string? AdbSerial => _session.AdbSerial;
     public string? InitialReceiverId => _session.InitialReceiverId;
     public string? ReceiverId { get => _receiverId; private set => SetProperty(ref _receiverId, value); }
     public string Name => _session.Name;
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
+    public Brush StatusBrush => Status.StartsWith("Extending", StringComparison.OrdinalIgnoreCase) ||
+                                Status.StartsWith("Mirroring", StringComparison.OrdinalIgnoreCase)
+        ? Brushes.SeaGreen
+        : Status.StartsWith("Stopped", StringComparison.OrdinalIgnoreCase)
+            ? Brushes.IndianRed
+            : Brushes.DarkOrange;
     public long FramesSent { get => _framesSent; private set => SetProperty(ref _framesSent, value); }
     public double MegabitsPerSecond { get => _megabitsPerSecond; private set => SetProperty(ref _megabitsPerSecond, value); }
     public ICommand DisconnectCommand { get; }
@@ -34,7 +47,11 @@ internal sealed class SessionViewModel : ObservableObject
     {
         _session = session;
         DisconnectCommand = new RelayCommand(() => DisconnectRequested?.Invoke(this));
-        session.StatusChanged += status => Dispatch(() => Status = status);
+        session.StatusChanged += status => Dispatch(() =>
+        {
+            Status = status;
+            OnPropertyChanged(nameof(StatusBrush));
+        });
         session.StatsChanged += (frames, mbps) => Dispatch(() =>
         {
             FramesSent = frames;

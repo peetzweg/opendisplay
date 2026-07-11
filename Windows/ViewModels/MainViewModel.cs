@@ -21,6 +21,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     private readonly DependencyDiagnostics _dependencyDiagnostics;
     private readonly Preferences _preferences;
     private readonly AsyncRelayCommand _connectCommand;
+    private readonly AsyncRelayCommand _connectManualCommand;
     private readonly RelayCommand _forgetManualCommand;
     private IReadOnlyList<ReceiverEndpoint> _wifiDevices = [];
     private IReadOnlyList<AdbDevice> _adbDevices = [];
@@ -48,9 +49,46 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public string ManualHost { get => _manualHost; set => SetProperty(ref _manualHost, value); }
-    public CaptureMode Mode { get => _mode; set => SetProperty(ref _mode, value); }
-    public StreamQuality Quality { get => _quality; set => SetProperty(ref _quality, value); }
+    public string ManualHost
+    {
+        get => _manualHost;
+        set
+        {
+            if (!SetProperty(ref _manualHost, value)) return;
+            _connectManualCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public CaptureMode Mode
+    {
+        get => _mode;
+        set
+        {
+            if (!SetProperty(ref _mode, value)) return;
+            OnPropertyChanged(nameof(ModeDescription));
+        }
+    }
+
+    public StreamQuality Quality
+    {
+        get => _quality;
+        set
+        {
+            if (!SetProperty(ref _quality, value)) return;
+            OnPropertyChanged(nameof(QualityDescription));
+        }
+    }
+
+    public string ModeDescription => Mode == CaptureMode.Extend
+        ? "Creates an additional Windows display. Requires Virtual Display Driver."
+        : "Copies your primary display. A virtual display is not required.";
+
+    public string QualityDescription => Quality switch
+    {
+        StreamQuality.Best => "Full resolution and highest bitrate. Best on USB or fast Wi-Fi.",
+        StreamQuality.Balanced => "Reduced resolution and bitrate for typical Wi-Fi networks.",
+        _ => "Prioritizes responsiveness on slower or unstable connections."
+    };
     public string SystemStatus { get => _systemStatus; private set => SetProperty(ref _systemStatus, value); }
     public string Diagnostics { get => _diagnostics; private set => SetProperty(ref _diagnostics, value); }
     public string LogFilePath => Log.FilePath;
@@ -60,7 +98,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 
     public ICommand RefreshCommand { get; }
     public ICommand ConnectCommand => _connectCommand;
-    public ICommand ConnectManualCommand { get; }
+    public ICommand ConnectManualCommand => _connectManualCommand;
     public ICommand ForgetManualCommand => _forgetManualCommand;
     public ICommand RefreshDiagnosticsCommand { get; }
     public ICommand OpenLogCommand { get; }
@@ -85,7 +123,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         _connectCommand = new AsyncRelayCommand(ConnectSelectedAsync,
             () => SelectedDevice?.IsReady == true);
-        ConnectManualCommand = new AsyncRelayCommand(ConnectManualAsync);
+        _connectManualCommand = new AsyncRelayCommand(ConnectManualAsync,
+            () => !string.IsNullOrWhiteSpace(ManualHost));
         RefreshDiagnosticsCommand = new AsyncRelayCommand(RefreshDiagnosticsAsync);
         OpenLogCommand = new RelayCommand(OpenLog);
         _forgetManualCommand = new RelayCommand(ForgetSelectedManual,
