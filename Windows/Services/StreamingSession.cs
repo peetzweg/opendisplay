@@ -16,6 +16,7 @@ internal sealed class StreamingSession : IAsyncDisposable
     private readonly IVirtualDisplayProvider _virtualDisplays;
     private readonly MonitorLocator _monitors;
     private readonly string _ffmpeg;
+    private readonly string? _adb;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly TaskCompletionSource<ReceiverHello> _hello =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -45,7 +46,8 @@ internal sealed class StreamingSession : IAsyncDisposable
         StreamQuality quality,
         IVirtualDisplayProvider virtualDisplays,
         MonitorLocator monitors,
-        string ffmpeg)
+        string ffmpeg,
+        string? adb)
     {
         _endpoint = endpoint;
         _mode = mode;
@@ -53,6 +55,7 @@ internal sealed class StreamingSession : IAsyncDisposable
         _virtualDisplays = virtualDisplays;
         _monitors = monitors;
         _ffmpeg = ffmpeg;
+        _adb = adb;
     }
 
     public async Task RunAsync()
@@ -62,8 +65,18 @@ internal sealed class StreamingSession : IAsyncDisposable
             Log.Info($"Session {Id} starting: target={_endpoint.Id}, transport={_endpoint.Transport}, " +
                      $"mode={_mode}, quality={_quality}, endpoint={_endpoint.Address}:{_endpoint.Port}");
             StatusChanged?.Invoke($"Connecting to {_endpoint.Address}:{_endpoint.Port}…");
-            _connection = await FramedConnection.ConnectAsync(
-                _endpoint.Address.ToString(), _endpoint.Port, _lifetime.Token);
+            if (_endpoint.Transport == ReceiverTransport.Adb &&
+                _endpoint.AdbSerial is { Length: > 0 } serial &&
+                _adb is { Length: > 0 })
+            {
+                StatusChanged?.Invoke($"Connecting to {serial} over ADB…");
+                _connection = await FramedConnection.ConnectAdbAsync(_adb, serial, _lifetime.Token);
+            }
+            else
+            {
+                _connection = await FramedConnection.ConnectAsync(
+                    _endpoint.Address.ToString(), _endpoint.Port, _lifetime.Token);
+            }
             var receiveTask = ReceiveLoopAsync(_lifetime.Token);
             StatusChanged?.Invoke("Connected; waiting for receiver geometry…");
             var hello = await _hello.Task.WaitAsync(TimeSpan.FromSeconds(10), _lifetime.Token);

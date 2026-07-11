@@ -66,6 +66,7 @@ public partial class App : System.Windows.Application
             var viewModel = new MainViewModel(
                 _discovery,
                 adbWatcher,
+                adbLocator,
                 new VddVirtualDisplayProvider(monitors),
                 monitors,
                 ffmpeg,

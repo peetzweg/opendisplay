@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -16,14 +17,25 @@ internal sealed class FramedConnection : IAsyncDisposable
 {
     private const int MaxControlBytes = 1 << 20;
     private const int MaxFrameBytes = 32 << 20;
-    private readonly Socket _socket;
-    private readonly NetworkStream _stream;
+    private readonly Stream _reader;
+    private readonly Stream _writerStream;
+    private readonly Process? _adbProcess;
+    private readonly Task<string>? _adbStderr;
     private readonly SemaphoreSlim _writer = new(1, 1);
 
     private FramedConnection(Socket socket)
     {
-        _socket = socket;
-        _stream = new NetworkStream(socket, ownsSocket: true);
+        var stream = new NetworkStream(socket, ownsSocket: true);
+        _reader = stream;
+        _writerStream = stream;
+    }
+
+    private FramedConnection(Process adbProcess, Task<string> adbStderr)
+    {
+        _adbProcess = adbProcess;
+        _adbStderr = adbStderr;
+        _reader = adbProcess.StandardOutput.BaseStream;
+        _writerStream = adbProcess.StandardInput.BaseStream;
     }
 
     public static async Task<FramedConnection> ConnectAsync(
@@ -73,6 +85,53 @@ internal sealed class FramedConnection : IAsyncDisposable
         }
 
         throw new IOException($"Could not connect to {host}:{port} using any resolved address.", lastError);
+    }
+
+    public static async Task<FramedConnection> ConnectAdbAsync(
+        string adbExecutable, string serial, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo(adbExecutable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var argument in new[]
+                 {
+                     "-s", serial, "shell", "-T",
+                     "toybox", "nc", "-w", "10", "127.0.0.1", "9000"
+                 })
+            startInfo.ArgumentList.Add(argument);
+
+        var process = Process.Start(startInfo)
+            ?? throw new IOException("Could not start adb.exe for the USB stream.");
+        var stderr = process.StandardError.ReadToEndAsync();
+        Log.Info($"ADB direct stream starting for {serial} using binary toybox nc");
+
+        try
+        {
+            var exited = process.WaitForExitAsync(cancellationToken);
+            if (await Task.WhenAny(exited, Task.Delay(300, cancellationToken)) == exited)
+            {
+                await exited;
+                var error = (await stderr).Trim();
+                process.Dispose();
+                throw new IOException(error.Length > 0
+                    ? $"ADB could not open the receiver stream: {error}"
+                    : "ADB could not open the receiver stream. Keep the Android receiver app open.");
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return new FramedConnection(process, stderr);
+        }
+        catch
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+            process.Dispose();
+            throw;
+        }
     }
 
     private static Socket CreateStreamSocket(AddressFamily addressFamily)
@@ -125,8 +184,8 @@ internal sealed class FramedConnection : IAsyncDisposable
         await _writer.WaitAsync(cancellationToken);
         try
         {
-            await _stream.WriteAsync(header, cancellationToken);
-            await _stream.WriteAsync(payload, cancellationToken);
+            await _writerStream.WriteAsync(header, cancellationToken);
+            await _writerStream.WriteAsync(payload, cancellationToken);
         }
         finally { _writer.Release(); }
     }
@@ -137,7 +196,7 @@ internal sealed class FramedConnection : IAsyncDisposable
         var offset = 0;
         while (offset < destination.Length)
         {
-            var count = await _stream.ReadAsync(destination[offset..], cancellationToken);
+            var count = await _reader.ReadAsync(destination[offset..], cancellationToken);
             if (count == 0)
             {
                 if (offset == 0) return false;
@@ -150,8 +209,23 @@ internal sealed class FramedConnection : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _stream.DisposeAsync();
-        _socket.Dispose();
+        await _writerStream.DisposeAsync();
+        if (!ReferenceEquals(_reader, _writerStream)) await _reader.DisposeAsync();
+        if (_adbProcess is not null)
+        {
+            try { if (!_adbProcess.HasExited) _adbProcess.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+            if (_adbStderr is not null)
+            {
+                try
+                {
+                    var error = (await _adbStderr).Trim();
+                    if (error.Length > 0) Log.Warn($"ADB direct stream: {error}");
+                }
+                catch (InvalidOperationException) { }
+            }
+            _adbProcess.Dispose();
+        }
         _writer.Dispose();
     }
 }

@@ -14,6 +14,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 {
     private readonly ReceiverDiscovery _discovery;
     private readonly AdbDeviceWatcher _adbWatcher;
+    private readonly AdbLocator _adbLocator;
     private readonly IVirtualDisplayProvider _virtualDisplays;
     private readonly MonitorLocator _monitors;
     private readonly FfmpegLocator _ffmpeg;
@@ -106,6 +107,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     public MainViewModel(
         ReceiverDiscovery discovery,
         AdbDeviceWatcher adbWatcher,
+        AdbLocator adbLocator,
         IVirtualDisplayProvider virtualDisplays,
         MonitorLocator monitors,
         FfmpegLocator ffmpeg,
@@ -114,6 +116,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     {
         _discovery = discovery;
         _adbWatcher = adbWatcher;
+        _adbLocator = adbLocator;
         _virtualDisplays = virtualDisplays;
         _monitors = monitors;
         _ffmpeg = ffmpeg;
@@ -230,7 +233,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 
         Log.Info($"Connecting to {endpoint.Id} via {endpoint.TransportLabel}");
         var session = new StreamingSession(endpoint, Mode, Quality,
-            _virtualDisplays, _monitors, executable);
+            _virtualDisplays, _monitors, executable, _adbLocator.Find());
         var viewModel = new SessionViewModel(session);
         viewModel.DisconnectRequested += Disconnect;
         viewModel.Ended += EndSession;
