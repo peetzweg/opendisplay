@@ -1,0 +1,19 @@
+<Application x:Class="OpenDisplay.Windows.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnMainWindowClose">
+  <Application.Resources>
+    <SolidColorBrush x:Key="AccentBrush" Color="#2675EC" />
+    <Style TargetType="Button">
+      <Setter Property="Padding" Value="14,7" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+    </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Padding" Value="7,5" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style TargetType="ComboBox">
+      <Setter Property="Padding" Value="7,5" />
+    </Style>
+  </Application.Resources>
+</Application>

@@ -250,6 +250,8 @@ Tracked as [roadmap issues](https://github.com/peetzweg/opendisplay/issues?q=is%
 **Exploratory**
 - [#14](https://github.com/peetzweg/opendisplay/issues/14) Remote access beyond the local network
 - [#15](https://github.com/peetzweg/opendisplay/issues/15) Additional client platforms
+- [ ] Windows sender prototype — modeled in [`Windows/`](Windows/README.md), using
+  VirtualDrivers/Virtual-Display-Driver for true extended displays
 
 Done: prebuilt releases, built-in USB connectivity (no helper tools), WiFi via Bonjour, portrait mode, touch + two-finger scroll, performance overlay, iPad support, multiple devices at once ([#8](https://github.com/peetzweg/opendisplay/issues/8) — every connected device becomes its own extended display).
 
