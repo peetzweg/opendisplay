@@ -4,9 +4,11 @@ This directory models the Windows sender app corresponding to `Mac/`. It is a
 .NET 8 WPF application written in C#. It connects to the existing iOS and
 Android receivers and uses the same OpenDisplay wire protocol.
 
-The project has not yet been compiled or exercised on Windows. The code is
-deliberately split at platform boundaries so each piece can be validated and
-replaced independently when a Windows development machine is available.
+The project has been compiled and exercised on Windows, and the core sharing
+workflows have been tested. Validation across additional Windows versions,
+display-driver configurations, and receiver hardware is still ongoing. The
+code is split at platform boundaries so each piece can be validated and
+replaced independently.
 
 ## Architecture
 
