@@ -16,14 +16,14 @@ internal sealed class FramedConnection : IAsyncDisposable
 {
     private const int MaxControlBytes = 1 << 20;
     private const int MaxFrameBytes = 32 << 20;
-    private readonly TcpClient _client;
+    private readonly Socket _socket;
     private readonly NetworkStream _stream;
     private readonly SemaphoreSlim _writer = new(1, 1);
 
-    private FramedConnection(TcpClient client)
+    private FramedConnection(Socket socket)
     {
-        _client = client;
-        _stream = client.GetStream();
+        _socket = socket;
+        _stream = new NetworkStream(socket, ownsSocket: true);
     }
 
     public static async Task<FramedConnection> ConnectAsync(
@@ -43,32 +43,54 @@ internal sealed class FramedConnection : IAsyncDisposable
         Exception? lastError = null;
         foreach (var address in addresses)
         {
-            TcpClient? client = null;
+            Socket? socket = null;
             try
             {
-                // Do not use parameterless TcpClient here. It lets the runtime
-                // choose a default address family, which can fail with
-                // WSAEINVAL on systems where that family is disabled.
-                client = new TcpClient(address.AddressFamily) { NoDelay = true };
+                socket = CreateStreamSocket(address.AddressFamily);
                 Log.Info($"TCP connecting to {address}:{port} using {address.AddressFamily}");
-                await client.ConnectAsync(address, port, cancellationToken);
+                await socket.ConnectAsync(new IPEndPoint(address, port), cancellationToken);
+                try { socket.NoDelay = true; }
+                catch (SocketException ex)
+                {
+                    // TCP_NODELAY improves input latency but is not required
+                    // for a valid stream on unusual Winsock providers.
+                    Log.Warn($"Could not enable TCP_NODELAY for {address}:{port}: {ex.Message}");
+                }
                 Log.Info($"TCP connected to {address}:{port}");
-                return new FramedConnection(client);
+                return new FramedConnection(socket);
             }
             catch (OperationCanceledException)
             {
-                client?.Dispose();
+                socket?.Dispose();
                 throw;
             }
             catch (Exception ex) when (ex is SocketException or InvalidOperationException)
             {
                 lastError = ex;
-                client?.Dispose();
+                socket?.Dispose();
                 Log.Warn($"TCP connection to {address}:{port} failed: {ex.Message}");
             }
         }
 
         throw new IOException($"Could not connect to {host}:{port} using any resolved address.", lastError);
+    }
+
+    private static Socket CreateStreamSocket(AddressFamily addressFamily)
+    {
+        try
+        {
+            return new Socket(addressFamily, SocketType.Stream, ProtocolType.Tcp);
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.InvalidArgument)
+        {
+            // Some Windows Winsock catalogs reject an explicitly selected TCP
+            // provider with WSAEINVAL even for IPv4 loopback. Protocol 0 asks
+            // Winsock to select the stream provider and avoids TcpClient's
+            // failing InitializeClientSocket path.
+            Log.Warn($"Winsock rejected the explicit TCP provider for {addressFamily}; " +
+                     "retrying with automatic stream-provider selection");
+            return new Socket(addressFamily, SocketType.Stream, ProtocolType.Unspecified);
+        }
     }
 
     public async Task<byte[]?> ReadAsync(CancellationToken cancellationToken)
@@ -128,8 +150,8 @@ internal sealed class FramedConnection : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _client.Close();
         await _stream.DisposeAsync();
+        _socket.Dispose();
         _writer.Dispose();
     }
 }

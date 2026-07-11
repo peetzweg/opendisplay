@@ -7,8 +7,15 @@ namespace OpenDisplay.Windows;
 
 public partial class App : System.Windows.Application
 {
+    private const string InstanceMutexName = @"Local\OpenDisplay.Windows.SingleInstance";
+    private const string ActivationEventName = @"Local\OpenDisplay.Windows.Activate";
     private ReceiverDiscovery? _discovery;
     private TrayIconService? _trayIcon;
+    private Mutex? _instanceMutex;
+    private EventWaitHandle? _activationEvent;
+    private CancellationTokenSource? _activationLifetime;
+    private Task? _activationListener;
+    private bool _ownsInstanceMutex;
     private bool _exitRequested;
 
     public App()
@@ -36,6 +43,14 @@ public partial class App : System.Windows.Application
         try
         {
             base.OnStartup(e);
+            if (!ClaimSingleInstance())
+            {
+                Log.Info("Another OpenDisplay instance is already running; requesting activation");
+                _activationEvent?.Set();
+                Shutdown();
+                return;
+            }
+
             Log.Info($"Starting OpenDisplay {typeof(App).Assembly.GetName().Version}");
             Log.Info($"Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}; " +
                      $"OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}; " +
@@ -61,6 +76,7 @@ public partial class App : System.Windows.Application
             MainWindow = window;
             _trayIcon = new TrayIconService(window, ExitApplication);
             window.Show();
+            StartActivationListener();
             viewModel.Start();
         }
         catch (Exception ex)
@@ -73,6 +89,22 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _activationLifetime?.Cancel();
+        try { _activationListener?.Wait(TimeSpan.FromSeconds(1)); }
+        catch (AggregateException) { }
+        _activationListener = null;
+        _activationLifetime?.Dispose();
+        _activationLifetime = null;
+        _activationEvent?.Dispose();
+        _activationEvent = null;
+        if (_ownsInstanceMutex)
+        {
+            try { _instanceMutex?.ReleaseMutex(); }
+            catch (ApplicationException) { }
+        }
+        _instanceMutex?.Dispose();
+        _instanceMutex = null;
+
         if (MainWindow?.DataContext is MainViewModel viewModel)
             viewModel.Dispose();
         _trayIcon?.Dispose();
@@ -81,6 +113,35 @@ public partial class App : System.Windows.Application
         Log.Info($"Application exiting with code {e.ApplicationExitCode}");
         base.OnExit(e);
         Log.Close();
+    }
+
+    private bool ClaimSingleInstance()
+    {
+        _activationEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName);
+        _instanceMutex = new Mutex(false, InstanceMutexName);
+        try { _ownsInstanceMutex = _instanceMutex.WaitOne(0, false); }
+        catch (AbandonedMutexException) { _ownsInstanceMutex = true; }
+        return _ownsInstanceMutex;
+    }
+
+    private void StartActivationListener()
+    {
+        var activationEvent = _activationEvent;
+        if (activationEvent is null) return;
+        _activationLifetime = new CancellationTokenSource();
+        var cancellationToken = _activationLifetime.Token;
+        _activationListener = Task.Run(() =>
+        {
+            var handles = new WaitHandle[] { activationEvent, cancellationToken.WaitHandle };
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (WaitHandle.WaitAny(handles) != 0) return;
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (MainWindow is MainWindow window) window.RestoreFromTray();
+                });
+            }
+        }, cancellationToken);
     }
 
     private void ExitApplication()

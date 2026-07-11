@@ -229,12 +229,6 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         Log.Info($"Connecting to {endpoint.Id} via {endpoint.TransportLabel}");
-
-        if (endpoint.Transport == ReceiverTransport.Adb && endpoint.AdbSerial is { } serial)
-        {
-            _preferences.DisabledAdbDevices.Remove(serial);
-            _preferencesStore.Save(_preferences);
-        }
         var session = new StreamingSession(endpoint, Mode, Quality,
             _virtualDisplays, _monitors, executable);
         var viewModel = new SessionViewModel(session);
@@ -251,11 +245,6 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     private void Disconnect(SessionViewModel session)
     {
         Log.Info($"User disconnected session {session.Id} ({session.TargetId})");
-        if (session.Transport == ReceiverTransport.Adb && session.AdbSerial is { } serial)
-        {
-            _preferences.DisabledAdbDevices.Add(serial);
-            _preferencesStore.Save(_preferences);
-        }
         EndSession(session);
         SystemStatus = $"Disconnected {session.Name}.";
     }
@@ -301,10 +290,6 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         AdbAvailable = available;
         OnPropertyChanged(nameof(AdbMissingVisibility));
         RebuildDevices();
-        foreach (var device in devices.Where(device => device.Ready &&
-                     !_preferences.DisabledAdbDevices.Contains(device.Serial) &&
-                     !HasSessionForAdbDevice(device.Serial)))
-            _ = ConnectEndpointAsync(device.ToEndpoint());
     });
 
     private void OnSessionHello(SessionViewModel session, ReceiverHello hello)
@@ -329,13 +314,6 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
                 EndSession(wifiTwin);
         }
         RebuildDevices();
-    }
-
-    private bool HasSessionForAdbDevice(string serial)
-    {
-        if (Sessions.Any(session => session.AdbSerial == serial)) return true;
-        return _preferences.AdbReceiverIds.TryGetValue(serial, out var receiverId) &&
-               Sessions.Any(session => session.ReceiverId == receiverId);
     }
 
     private void RebuildDevices(string? selectId = null)

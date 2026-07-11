@@ -118,7 +118,9 @@ not consume a VDD monitor.
 Closing or minimizing the control window hides OpenDisplay to the Windows
 notification area without stopping active sessions. Click or double-click the
 tray icon to restore the window. Use **Exit** in the tray menu to stop sessions
-and quit the application completely.
+and quit the application completely. Only one OpenDisplay instance runs at a
+time; launching it again restores the existing window, including when it is
+hidden in the notification area.
 
 The Windows executable, control window, and notification-area icon reuse the
 macOS application artwork from `Mac/Assets.xcassets/AppIcon.appiconset`.
@@ -167,11 +169,12 @@ gets its own dynamically allocated forwarding rule equivalent to:
 adb -s DEVICE_SERIAL forward tcp:0 tcp:9000
 ```
 
-The allocated loopback endpoint appears with an `ADB` label and connects
-automatically unless that device was explicitly disconnected. Unauthorized and
-offline devices remain visible with an actionable status instead of silently
-disappearing. App-owned forwarding rules are removed when OpenDisplay exits;
-ADB also removes them when the device disconnects.
+The allocated loopback endpoint appears with an `ADB` label. Select it and
+click **Start sharing** to connect; detecting or plugging in an ADB device never
+starts a session automatically. Unauthorized and offline devices remain visible
+with an actionable status instead of silently disappearing. App-owned
+forwarding rules are removed when OpenDisplay exits; ADB also removes them when
+the device disconnects.
 
 ADB device serials are associated with the receiver's installation ID after
 the first `hello`. If the same Android device is also discovered over WiFi,

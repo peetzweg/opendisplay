@@ -43,6 +43,5 @@ internal sealed class PreferencesStore
 internal sealed record Preferences
 {
     public HashSet<string> ManualEndpoints { get; init; } = new(StringComparer.OrdinalIgnoreCase);
-    public HashSet<string> DisabledAdbDevices { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> AdbReceiverIds { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }
