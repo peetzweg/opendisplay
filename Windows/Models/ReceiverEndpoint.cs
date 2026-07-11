@@ -7,8 +7,27 @@ public sealed record ReceiverEndpoint(
     string Name,
     IPAddress Address,
     int Port,
-    string? ReceiverId = null)
+    string? ReceiverId = null,
+    ReceiverTransport Transport = ReceiverTransport.Wifi,
+    bool IsReady = true,
+    string? Hint = null,
+    string? AdbSerial = null)
 {
-    public string DisplayName => $"{Name} ({Address})";
+    public string DisplayName => Hint is not null
+        ? $"{Name} — {Hint}"
+        : $"{Name} ({TransportLabel})";
+    public string TransportLabel => Transport switch
+    {
+        ReceiverTransport.Adb => "ADB",
+        ReceiverTransport.Manual => "Manual",
+        _ => "WiFi"
+    };
     public IPEndPoint ToIPEndPoint() => new(Address, Port);
+}
+
+public enum ReceiverTransport
+{
+    Wifi,
+    Adb,
+    Manual
 }

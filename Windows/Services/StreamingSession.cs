@@ -26,9 +26,14 @@ internal sealed class StreamingSession : IAsyncDisposable
     private long _lastStatsTimestamp = Stopwatch.GetTimestamp();
 
     public string Id { get; } = Guid.NewGuid().ToString("N");
+    public string TargetId => _endpoint.Id;
+    public ReceiverTransport Transport => _endpoint.Transport;
+    public string? AdbSerial => _endpoint.AdbSerial;
+    public string? InitialReceiverId => _endpoint.ReceiverId;
     public string Name => _endpoint.Name;
     public event Action<string>? StatusChanged;
     public event Action<long, double>? StatsChanged;
+    public event Action<ReceiverHello>? HelloReceived;
     public event Action? Disconnected;
 
     public StreamingSession(
@@ -112,7 +117,11 @@ internal sealed class StreamingSession : IAsyncDisposable
             {
                 case "hello":
                     var hello = root.Deserialize<ReceiverHello>();
-                    if (hello is not null) _hello.TrySetResult(hello);
+                    if (hello is not null)
+                    {
+                        _hello.TrySetResult(hello);
+                        HelloReceived?.Invoke(hello);
+                    }
                     break;
                 case "touch":
                     _input?.Touch(

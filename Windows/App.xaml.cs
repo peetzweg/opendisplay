@@ -13,11 +13,14 @@ public partial class App : Application
         base.OnStartup(e);
 
         _discovery = new ReceiverDiscovery();
+        var adbWatcher = new AdbDeviceWatcher(new AdbLocator());
         var viewModel = new MainViewModel(
             _discovery,
+            adbWatcher,
             new VddVirtualDisplayProvider(new MonitorLocator()),
             new MonitorLocator(),
-            new FfmpegLocator());
+            new FfmpegLocator(),
+            new PreferencesStore());
 
         var window = new MainWindow { DataContext = viewModel };
         MainWindow = window;

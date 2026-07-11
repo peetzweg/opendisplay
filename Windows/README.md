@@ -19,6 +19,7 @@ iPhone / iPad / Android receiver
                          v
 OpenDisplay.Windows (WPF / C#)
   ReceiverDiscovery       dependency-free mDNS discovery
+  AdbDeviceWatcher        Android USB discovery and per-device forwarding
   StreamingSession        connection, protocol, lifecycle, stats
   WindowsInputInjector    normalized touch -> SendInput / SetCursorPos
   FfmpegCaptureEncoder    monitor capture -> h264_mf -> Annex B
@@ -34,13 +35,38 @@ pixel dimensions, and captures that monitor.
 
 ## Prerequisites
 
-- Windows 10 19041 or newer (Windows 11 is the primary target)
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- `ffmpeg.exe` with `gdigrab`, `h264_mf`, and the `h264_metadata` bitstream
-  filter. Put it beside `OpenDisplay.exe`, on `PATH`, or set
-  `OPENDISPLAY_FFMPEG` to its full path.
-- For Extend mode, install the signed release of
-  [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver).
+You need the following on the Windows sender PC:
+
+1. **Windows 10 build 19041 or newer.** Windows 11 is the primary target.
+2. **The OpenDisplay receiver app** open in the foreground on an iPhone, iPad,
+   or Android device. The receiver listens on TCP port `9000`.
+3. **.NET 8.** Install the
+   [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) to build the
+   project. A packaged release will only need the .NET Desktop Runtime, unless
+   it is published self-contained.
+4. **FFmpeg** with all three of these components:
+   `gdigrab`, the Media Foundation `h264_mf` encoder, and the `h264_metadata`
+   bitstream filter. Put `ffmpeg.exe` beside `OpenDisplay.exe`, put it on
+   `PATH`, or set `OPENDISPLAY_FFMPEG` to its full path.
+5. **Virtual Display Driver for Extend mode.** Install a signed release of
+   [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver).
+   Mirror mode does not need VDD.
+6. **Android Platform Tools for Android USB.** `adb.exe` is optional for WiFi
+   and manual connections. OpenDisplay searches `ANDROID_SDK_ROOT`,
+   `ANDROID_HOME`, `%LOCALAPPDATA%\Android\Sdk\platform-tools`, and `PATH`.
+
+Check the FFmpeg features from PowerShell:
+
+```powershell
+ffmpeg -hide_banner -devices | Select-String gdigrab
+ffmpeg -hide_banner -encoders | Select-String h264_mf
+ffmpeg -hide_banner -bsfs | Select-String h264_metadata
+```
+
+The Windows Firewall may ask whether OpenDisplay can use private networks.
+Allow private-network access for WiFi discovery and streaming. Manual and ADB
+connections do not depend on multicast discovery, but the TCP connection must
+still be permitted.
 
 The VDD project is not vendored here. It is an independent MIT-licensed
 dependency and has its own installer and update lifecycle.
@@ -83,6 +109,70 @@ This is intentional. The current upstream driver exposes
 path reinitializes the adapter globally. Doing that when a stream starts could
 rearrange every desktop and interfere with other software using VDD.
 
+Configure one active VDD monitor for every concurrent receiver using Extend
+mode. Two connected tablets require `<count>2</count>`. A Mirror session does
+not consume a VDD monitor.
+
+## Connect a receiver
+
+### WiFi / automatic discovery
+
+1. Put the Windows PC and receiver on the same local network.
+2. Open the OpenDisplay receiver app and keep it in the foreground.
+3. Start the Windows app. The device should appear with a `WiFi` label.
+4. Select Mirror or Extend, choose a quality preset, and click **Connect**.
+
+Discovery uses `_opensidecar._tcp.local` multicast DNS. Guest networks, VPNs,
+and enterprise WiFi can filter multicast; use Manual mode in that case.
+
+### Android over USB / ADB
+
+1. Install Android Platform Tools, or install Android Studio so `adb.exe` is in
+   its standard SDK location.
+2. On Android, enable Developer options and **USB debugging**.
+3. Connect the device by USB and approve the PC's debugging key on the device.
+4. Open the OpenDisplay Android receiver.
+
+OpenDisplay runs `adb devices -l` every two seconds. Each authorized device
+gets its own dynamically allocated forwarding rule equivalent to:
+
+```powershell
+adb -s DEVICE_SERIAL forward tcp:0 tcp:9000
+```
+
+The allocated loopback endpoint appears with an `ADB` label and connects
+automatically unless that device was explicitly disconnected. Unauthorized and
+offline devices remain visible with an actionable status instead of silently
+disappearing. App-owned forwarding rules are removed when OpenDisplay exits;
+ADB also removes them when the device disconnects.
+
+ADB device serials are associated with the receiver's installation ID after
+the first `hello`. If the same Android device is also discovered over WiFi,
+OpenDisplay prefers the cable and suppresses or closes the WiFi duplicate.
+
+For a portable development build, `adb.exe` may also be placed beside
+`OpenDisplay.exe`; its companion Platform Tools DLLs must remain beside it.
+
+### Manual host or IP address
+
+Use the Manual address field when multicast discovery is unavailable. Accepted
+formats are:
+
+```text
+192.168.1.42          # defaults to port 9000
+tablet.local:9000
+[2001:db8::42]:9000
+2001:db8::42          # bare IPv6, defaults to port 9000
+```
+
+Press Enter or click the Manual **Connect** button. Successfully submitted
+addresses are remembered but never auto-connected, because a stale address
+would otherwise retry indefinitely. Select a remembered Manual entry and use
+**Forget** to remove it.
+
+Manual mode is plain TCP. It is not the same as Android USB forwarding and it
+does not provide encryption or pairing.
+
 ## Build (once a Windows machine is available)
 
 ```powershell
@@ -97,16 +187,20 @@ Recommended first validation sequence:
 1. Build with nullable warnings enabled and fix any Windows SDK projection or
    P/Invoke layout issues found by the compiler.
 2. Start in Mirror mode with the receiver on WiFi.
-3. Verify mDNS discovery and manual `IP:9000` connection.
-4. Validate H.264 compatibility with both iOS and Android receivers.
-5. Install VDD, add the exact receiver resolutions, then test Extend mode.
-6. Measure capture, encode, network, decode, and input latency.
+3. Verify mDNS discovery and manual IPv4, DNS, and IPv6 parsing.
+4. Verify authorized, unauthorized, offline, attach, detach, and multiple-device
+   ADB behavior, including forward cleanup on exit.
+5. Validate H.264 compatibility with both iOS and Android receivers.
+6. Install VDD, add the exact receiver resolutions, then test Extend mode.
+7. Measure capture, encode, network, decode, and input latency.
 
 ## What is implemented
 
 - WPF control window with receiver, mode, quality, and multi-session UI
 - `_opensidecar._tcp.local` multicast-DNS discovery without a NuGet dependency
-- Manual IPv4/DNS endpoint fallback
+- Manual IPv4, DNS, bracketed IPv6, and bare IPv6 targets, with persistence
+- Android ADB discovery, device-state UI, per-device dynamic port forwarding,
+  automatic wired connection, cleanup, and WiFi deduplication
 - Existing four-byte big-endian OpenDisplay framing
 - Receiver `hello`, touch, scroll, keyframe, and ping/pong handling
 - VDD named-pipe probe using the upstream pipe and UTF-16 command format
@@ -135,9 +229,8 @@ Recommended first validation sequence:
 - VDD outputs are persistent, user-managed displays. Disconnecting an
   OpenDisplay session releases the output inside the app but does not remove or
   disable it in Windows.
-- USB transport is not yet implemented on Windows. WiFi and manual TCP are the
-  first milestone. iOS USB would require a supported usbmux client; Android USB
-  can later mirror the existing ADB port-forwarding approach.
+- Android USB works through ADB. iPhone/iPad USB is not implemented on Windows;
+  it requires a Windows-supported usbmux client and Apple device drivers.
 - Cursor is currently captured in the video. A native backend should exclude
   it and send `cursor` / `cursorImg` controls like the Mac app for lower
   perceived pointer latency.

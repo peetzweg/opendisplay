@@ -26,10 +26,17 @@
         </Grid.ColumnDefinitions>
         <StackPanel>
           <TextBlock Text="Receiver" FontWeight="SemiBold" Margin="0,0,0,6" />
-          <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
-                    DisplayMemberPath="DisplayName" MinWidth="330" />
+          <DockPanel LastChildFill="True">
+            <Button DockPanel.Dock="Right" Content="Forget" Command="{Binding ForgetManualCommand}"
+                    Margin="8,0,0,0" />
+            <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
+                      DisplayMemberPath="DisplayName" MinWidth="330" />
+          </DockPanel>
           <TextBlock Text="Receivers advertise _opensidecar._tcp on the local network."
                      Foreground="Gray" FontSize="12" Margin="0,6,0,0" />
+          <TextBlock Text="Android USB requires Android Platform Tools (adb)."
+                     Foreground="Gray" FontSize="12" Margin="0,3,0,0"
+                     Visibility="{Binding AdbMissingVisibility}" />
         </StackPanel>
         <Button Grid.Column="1" Content="Refresh" Command="{Binding RefreshCommand}"
                 VerticalAlignment="Bottom" Margin="14,0,0,0" />
@@ -45,7 +52,15 @@
         </Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Margin="0,0,14,0">
           <TextBlock Text="Manual address" FontWeight="SemiBold" Margin="0,0,0,6" />
-          <TextBox Text="{Binding ManualHost, UpdateSourceTrigger=PropertyChanged}" />
+          <DockPanel LastChildFill="True">
+            <Button DockPanel.Dock="Right" Content="Connect" Command="{Binding ConnectManualCommand}"
+                    Margin="8,0,0,0" />
+            <TextBox Text="{Binding ManualHost, UpdateSourceTrigger=PropertyChanged}">
+              <TextBox.InputBindings>
+                <KeyBinding Key="Enter" Command="{Binding ConnectManualCommand}" />
+              </TextBox.InputBindings>
+            </TextBox>
+          </DockPanel>
         </StackPanel>
         <StackPanel Grid.Column="1" Margin="0,0,14,0">
           <TextBlock Text="Mode" FontWeight="SemiBold" Margin="0,0,0,6" />
@@ -96,7 +111,7 @@
       </Grid.ColumnDefinitions>
       <StackPanel>
         <TextBlock Text="{Binding SystemStatus}" TextWrapping="Wrap" />
-        <TextBlock Text="Extend mode requires the OpenDisplay Indirect Display Driver."
+        <TextBlock Text="Extend mode requires VirtualDrivers/Virtual-Display-Driver."
                    Foreground="Gray" FontSize="12" Margin="0,3,0,0" />
       </StackPanel>
       <Button Grid.Column="1" Content="Connect" Command="{Binding ConnectCommand}"
