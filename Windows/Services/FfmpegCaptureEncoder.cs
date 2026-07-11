@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.CompilerServices;
+using OpenDisplay.Windows.Infrastructure;
 using OpenDisplay.Windows.Models;
 
 namespace OpenDisplay.Windows.Services;
@@ -12,6 +15,8 @@ namespace OpenDisplay.Windows.Services;
 internal sealed class FfmpegCaptureEncoder(string executable) : IAsyncDisposable
 {
     private Process? _process;
+    private readonly ConcurrentQueue<string> _recentErrors = new();
+    public bool RestartRequested { get; private set; }
 
     public async IAsyncEnumerable<byte[]> CaptureAsync(
         DisplayTarget target,
@@ -37,9 +42,10 @@ internal sealed class FfmpegCaptureEncoder(string executable) : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        Log.Info($"Starting FFmpeg: {executable} {arguments}");
         _process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("FFmpeg could not be started.");
-        _ = DrainErrorsAsync(_process.StandardError, cancellationToken);
+        var stderrTask = DrainErrorsAsync(_process.StandardError, cancellationToken);
 
         using var registration = cancellationToken.Register(StopProcess);
         var parser = new AnnexBAccessUnitParser();
@@ -55,27 +61,48 @@ internal sealed class FfmpegCaptureEncoder(string executable) : IAsyncDisposable
         if (!cancellationToken.IsCancellationRequested)
         {
             await _process.WaitForExitAsync(cancellationToken);
-            throw new InvalidOperationException($"FFmpeg stopped with exit code {_process.ExitCode}.");
+            await stderrTask;
+            var detail = string.Join(Environment.NewLine, _recentErrors.TakeLast(8));
+            throw new InvalidOperationException(
+                $"FFmpeg stopped with exit code {_process.ExitCode}." +
+                (detail.Length > 0 ? $"{Environment.NewLine}{detail}" : string.Empty));
         }
     }
 
-    public void RequestKeyFrame() => StopProcess();
+    public void RequestKeyFrame()
+    {
+        RestartRequested = true;
+        Log.Info("Receiver requested a keyframe; restarting FFmpeg");
+        StopProcess();
+    }
 
     private static int Even(int value) => Math.Max(2, value & ~1);
 
-    private static async Task DrainErrorsAsync(StreamReader reader, CancellationToken cancellationToken)
+    private async Task DrainErrorsAsync(StreamReader reader, CancellationToken cancellationToken)
     {
         try
         {
             while (!cancellationToken.IsCancellationRequested &&
-                   await reader.ReadLineAsync(cancellationToken) is not null) { }
+                   await reader.ReadLineAsync(cancellationToken) is { } line)
+            {
+                _recentErrors.Enqueue(line);
+                while (_recentErrors.Count > 30) _recentErrors.TryDequeue(out _);
+                Log.Warn($"FFmpeg: {line}");
+            }
         }
         catch (OperationCanceledException) { }
     }
 
     private void StopProcess()
     {
-        try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); }
+        try
+        {
+            if (_process is { HasExited: false })
+            {
+                Log.Info("Stopping FFmpeg process");
+                _process.Kill(entireProcessTree: true);
+            }
+        }
         catch (InvalidOperationException) { }
     }
 

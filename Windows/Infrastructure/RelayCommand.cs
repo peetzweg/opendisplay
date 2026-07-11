@@ -17,6 +17,8 @@ internal sealed class AsyncRelayCommand(Func<Task> execute, Func<bool>? canExecu
 
     public bool CanExecute(object? parameter) => !_running && (canExecute?.Invoke() ?? true);
 
+    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+
     public async void Execute(object? parameter)
     {
         if (!CanExecute(parameter)) return;

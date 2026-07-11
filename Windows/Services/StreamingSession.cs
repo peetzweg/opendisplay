@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Text.Json;
+using OpenDisplay.Windows.Infrastructure;
 using OpenDisplay.Windows.Models;
 using OpenDisplay.Windows.Protocol;
 
@@ -34,6 +36,7 @@ internal sealed class StreamingSession : IAsyncDisposable
     public event Action<string>? StatusChanged;
     public event Action<long, double>? StatsChanged;
     public event Action<ReceiverHello>? HelloReceived;
+    public event Action<Exception>? Failed;
     public event Action? Disconnected;
 
     public StreamingSession(
@@ -56,6 +59,8 @@ internal sealed class StreamingSession : IAsyncDisposable
     {
         try
         {
+            Log.Info($"Session {Id} starting: target={_endpoint.Id}, transport={_endpoint.Transport}, " +
+                     $"mode={_mode}, quality={_quality}, endpoint={_endpoint.Address}:{_endpoint.Port}");
             StatusChanged?.Invoke($"Connecting to {_endpoint.Address}:{_endpoint.Port}…");
             _connection = await FramedConnection.ConnectAsync(
                 _endpoint.Address.ToString(), _endpoint.Port, _lifetime.Token);
@@ -82,7 +87,7 @@ internal sealed class StreamingSession : IAsyncDisposable
                     await foreach (var annexB in capture.CaptureAsync(_target, _quality, _lifetime.Token))
                         await SendVideoAsync(annexB, _lifetime.Token);
                 }
-                catch (InvalidOperationException) when (!_lifetime.IsCancellationRequested)
+                catch (InvalidOperationException) when (!_lifetime.IsCancellationRequested && capture.RestartRequested)
                 {
                     // A receiver keyframe request restarts FFmpeg, producing a
                     // fresh SPS/PPS/IDR access unit without maintaining a deep
@@ -93,11 +98,20 @@ internal sealed class StreamingSession : IAsyncDisposable
             await receiveTask;
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { StatusChanged?.Invoke($"Stopped: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Log.Error($"Session {Id} failed", ex);
+            StatusChanged?.Invoke($"Stopped: {ex.Message}");
+            try { Failed?.Invoke(ex); }
+            catch (Exception callbackError) { Log.Error($"Session {Id} failure callback failed", callbackError); }
+        }
         finally
         {
-            await CleanupAsync();
-            Disconnected?.Invoke();
+            try { await CleanupAsync(); }
+            catch (Exception ex) { Log.Error($"Session {Id} cleanup failed", ex); }
+            Log.Info($"Session {Id} ended");
+            try { Disconnected?.Invoke(); }
+            catch (Exception ex) { Log.Error($"Session {Id} disconnect callback failed", ex); }
         }
     }
 
@@ -119,6 +133,8 @@ internal sealed class StreamingSession : IAsyncDisposable
                     var hello = root.Deserialize<ReceiverHello>();
                     if (hello is not null)
                     {
+                        Log.Info($"Session {Id} hello: {hello.Device ?? "device"} " +
+                                 $"{hello.PixelsWide}x{hello.PixelsHigh} scale={hello.Scale} id={hello.Id ?? "unknown"}");
                         _hello.TrySetResult(hello);
                         HelloReceived?.Invoke(hello);
                     }

@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace OpenDisplay.Windows.Services;
 
 internal sealed class AdbLocator

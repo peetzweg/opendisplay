@@ -27,6 +27,7 @@ internal sealed class SessionViewModel : ObservableObject
     public ICommand DisconnectCommand { get; }
     public event Action<SessionViewModel>? DisconnectRequested;
     public event Action<SessionViewModel>? Ended;
+    public event Action<SessionViewModel, Exception>? Failed;
     public event Action<SessionViewModel, ReceiverHello>? HelloReceived;
 
     public SessionViewModel(StreamingSession session)
@@ -45,6 +46,7 @@ internal sealed class SessionViewModel : ObservableObject
             HelloReceived?.Invoke(this, hello);
         });
         session.Disconnected += () => Dispatch(() => Ended?.Invoke(this));
+        session.Failed += exception => Dispatch(() => Failed?.Invoke(this, exception));
     }
 
     public Task RunAsync() => _session.RunAsync();
@@ -52,7 +54,7 @@ internal sealed class SessionViewModel : ObservableObject
 
     private static void Dispatch(Action action)
     {
-        var dispatcher = Application.Current?.Dispatcher;
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.CheckAccess()) action();
         else dispatcher.BeginInvoke(action);
     }

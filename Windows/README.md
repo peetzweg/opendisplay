@@ -115,6 +115,14 @@ not consume a VDD monitor.
 
 ## Connect a receiver
 
+Closing or minimizing the control window hides OpenDisplay to the Windows
+notification area without stopping active sessions. Click or double-click the
+tray icon to restore the window. Use **Exit** in the tray menu to stop sessions
+and quit the application completely.
+
+The Windows executable, control window, and notification-area icon reuse the
+macOS application artwork from `Mac/Assets.xcassets/AppIcon.appiconset`.
+
 ### WiFi / automatic discovery
 
 1. Put the Windows PC and receiver on the same local network.
@@ -124,6 +132,25 @@ not consume a VDD monitor.
 
 Discovery uses `_opensidecar._tcp.local` multicast DNS. Guest networks, VPNs,
 and enterprise WiFi can filter multicast; use Manual mode in that case.
+The Windows sender joins `224.0.0.251:5353` and sends its query on every active
+IPv4 LAN interface rather than relying on Windows' default route.
+
+If discovery is empty, expand **Diagnostics** after pressing **Refresh** and
+inspect the `mDNS` line:
+
+- `packets=0` means no multicast responses reached the app. Allow OpenDisplay
+  through Windows Firewall on Private networks, temporarily disable VPNs, and
+  confirm both devices are on the same non-guest LAN.
+- A growing packet count with no OpenDisplay receiver usually means the
+  receiver is not advertising `_opensidecar._tcp`. Keep the receiver app open
+  in the foreground and grant its Local Network permission.
+- The `interfaces=` list should contain the PC address on the receiver's
+  subnet. For a receiver at `192.168.88.249`, expect a PC interface beginning
+  with `192.168.88.`.
+
+Manual connection remains a useful independent test: if
+`192.168.88.249:9000` works while mDNS stays empty, capture and streaming are
+fine and only multicast discovery is blocked.
 
 ### Android over USB / ADB
 
@@ -173,14 +200,120 @@ would otherwise retry indefinitely. Select a remembered Manual entry and use
 Manual mode is plain TCP. It is not the same as Android USB forwarding and it
 does not provide encryption or pairing.
 
-## Build (once a Windows machine is available)
+## Install dependencies and build on Windows
+
+This is a native Windows-only workflow. The project targets `net8.0-windows`
+and WPF, and release artifacts should be built and run on Windows.
+
+Windows 10 and Windows 11 include WinGet through Microsoft's App Installer.
+Open Command Prompt or PowerShell and run:
+
+```bat
+cd Windows
+scripts\deps.bat
+```
+
+`deps.bat` installs or confirms these exact WinGet packages:
+
+| Purpose | WinGet package |
+|---|---|
+| Compile the WPF app | `Microsoft.DotNet.SDK.8` |
+| FFmpeg capture and H.264 Media Foundation encoding | `Gyan.FFmpeg` |
+| Android USB / ADB | `Google.PlatformTools` |
+| VDD native runtime dependency | `Microsoft.VCRedist.2015+.x64` |
+| True extended virtual monitor | `VirtualDrivers.Virtual-Display-Driver` |
+
+WinGet may show a UAC prompt for machine-wide dependencies and the display
+driver. After installation, close and reopen the terminal so updated `PATH`
+entries for `dotnet`, `ffmpeg`, and `adb` are visible.
+
+Build a Release or Debug configuration:
+
+```bat
+cd Windows
+scripts\build.bat Release
+scripts\build.bat Debug
+```
+
+`Release` is the default when the argument is omitted. Output is written to
+`Windows\build\Release` or `Windows\build\Debug`.
+
+`Windows\global.json` pins SDK selection to the latest installed stable .NET 8
+feature band. This prevents a .NET 9/10 preview SDK from taking over the WPF
+build. If `dotnet --version` still prints a preview version, confirm that the
+command is being run through `scripts\build.bat` and that
+`Microsoft.DotNet.SDK.8` installed successfully.
+
+After a successful build:
+
+```bat
+build\Release\OpenDisplay.exe
+```
+
+To use a non-standard .NET installation:
+
+```bat
+set DOTNET=C:\Tools\dotnet\dotnet.exe
+scripts\build.bat Release
+```
+
+### Direct `dotnet` commands
+
+The scripts are equivalent to:
 
 ```powershell
 cd Windows
-dotnet restore
-dotnet build OpenDisplay.Windows.csproj
-dotnet run --project OpenDisplay.Windows.csproj
+dotnet restore OpenDisplay.Windows.csproj -p:EnableWindowsTargeting=true
+dotnet build OpenDisplay.Windows.csproj --no-restore --configuration Release -p:EnableWindowsTargeting=true
 ```
+
+If restore reports `NETSDK1100`, confirm that `EnableWindowsTargeting` remains
+enabled in the project and command line. If it reports `NU1301`, allow access
+to NuGet or configure the required targeting packs in your offline package
+source.
+
+The project disables all implicit source, resource, and WPF item globs and
+explicitly lists its C# and XAML inputs. This avoids literal-wildcard failures
+such as `BG1002: File '**/*.xaml' cannot be found` and
+`MSB3552: Resource file '**/*.resx' cannot be found`, which can occur on some
+preview SDK or mapped/network-drive configurations.
+
+## Diagnostics and crash logs
+
+OpenDisplay writes a timestamped log as soon as the process starts. It first
+tries to create the file beside the executable:
+
+```text
+<OpenDisplay.exe directory>\OpenDisplay.log
+```
+
+If that directory is read-only, such as under `Program Files`, it falls back
+to:
+
+```text
+%LOCALAPPDATA%\OpenDisplay\OpenDisplay.log
+```
+
+The log rotates to `OpenDisplay.log.1` at 5 MiB. The app's **Diagnostics**
+expander shows the actual path and has an **Open log location** button.
+
+The diagnostics report checks:
+
+- .NET runtime, Windows version, architecture, and application directory;
+- the resolved `ffmpeg.exe` path;
+- FFmpeg's `gdigrab`, `h264_mf`, and `h264_metadata` capabilities;
+- active Windows displays and active VDD outputs;
+- the `MTTVirtualDisplayPipe` VDD control channel;
+- the optional ADB executable used for Android USB.
+
+FFmpeg stderr and its exit code are preserved in the log and surfaced in the
+session status instead of being discarded. Unexpected UI, task, startup, and
+process exceptions are also logged. A fatal-error dialog includes the log path
+before the application closes.
+
+When reporting a crash, include `OpenDisplay.log`, the expanded Diagnostics
+text, the selected Mirror/Extend mode, and whether the receiver used WiFi, ADB,
+or a manual address. Screen contents are not written to the log.
 
 Recommended first validation sequence:
 

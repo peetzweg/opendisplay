@@ -1,3 +1,5 @@
+using System.IO;
+using OpenDisplay.Windows.Infrastructure;
 using OpenDisplay.Windows.Models;
 
 namespace OpenDisplay.Windows.Services;
@@ -8,6 +10,7 @@ internal sealed class AdbDeviceWatcher(AdbLocator locator) : IDisposable
     private readonly Dictionary<string, int> _ownedForwards = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private Task? _loop;
+    private string _lastSummary = string.Empty;
 
     public event Action<IReadOnlyList<AdbDevice>, bool>? DevicesChanged;
 
@@ -30,6 +33,12 @@ internal sealed class AdbDeviceWatcher(AdbLocator locator) : IDisposable
                 await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
             }
             catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                Log.Error("ADB watcher loop failed; retrying", ex);
+                try { await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken); }
+                catch (OperationCanceledException) { break; }
+            }
         }
     }
 
@@ -75,10 +84,18 @@ internal sealed class AdbDeviceWatcher(AdbLocator locator) : IDisposable
                 devices.Add(new AdbDevice(item.Serial, item.Name, item.State, port));
             }
             DevicesChanged?.Invoke(devices, true);
+            var summary = string.Join(", ", devices.Select(x =>
+                $"{x.Serial}:{x.State}:port={x.LocalPort?.ToString() ?? "none"}"));
+            if (summary != _lastSummary)
+            {
+                _lastSummary = summary;
+                Log.Info($"ADB devices: {(summary.Length > 0 ? summary : "none")}");
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) when (ex is AdbException or IOException or System.ComponentModel.Win32Exception)
         {
+            Log.Error("ADB device refresh failed", ex);
             DevicesChanged?.Invoke([], true);
         }
     }

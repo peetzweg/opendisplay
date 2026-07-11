@@ -1,7 +1,10 @@
 using System.Buffers.Binary;
+using System.IO;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using OpenDisplay.Windows.Infrastructure;
 using OpenDisplay.Windows.Models;
 
 namespace OpenDisplay.Windows.Services;
@@ -18,10 +21,20 @@ internal sealed class ReceiverDiscovery : IDisposable
     private readonly Dictionary<string, (string Host, int Port)> _services = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IPAddress> _addresses = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _receiverIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
     private UdpClient? _client;
+    private IReadOnlyList<IPAddress> _interfaceAddresses = [];
+    private string _lastPublishedSummary = string.Empty;
+    private long _packetsReceived;
+    private long _packetsWithRecords;
 
     public event Action<IReadOnlyList<ReceiverEndpoint>>? DevicesChanged;
     public event Action<string>? Error;
+
+    public string DiagnosticSummary =>
+        $"mDNS UDP :5353; interfaces=" +
+        $"{(_interfaceAddresses.Count > 0 ? string.Join(",", _interfaceAddresses) : "default")}; " +
+        $"packets={Interlocked.Read(ref _packetsReceived)}; recordPackets={Interlocked.Read(ref _packetsWithRecords)}";
 
     public void Start()
     {
@@ -29,15 +42,41 @@ internal sealed class ReceiverDiscovery : IDisposable
         try
         {
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.ExclusiveAddressUse = false;
             socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             socket.Bind(new IPEndPoint(IPAddress.Any, 5353));
-            socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership,
-                new MulticastOption(IPAddress.Parse("224.0.0.251"), IPAddress.Any));
+            _interfaceAddresses = GetActiveIPv4Addresses();
+            var group = IPAddress.Parse("224.0.0.251");
+            var joined = 0;
+            foreach (var address in _interfaceAddresses)
+            {
+                try
+                {
+                    socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership,
+                        new MulticastOption(group, address));
+                    joined++;
+                }
+                catch (SocketException ex)
+                {
+                    Log.Warn($"Could not join mDNS multicast on {address}: {ex.Message}");
+                }
+            }
+            if (joined == 0)
+            {
+                socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership,
+                    new MulticastOption(group, IPAddress.Any));
+                _interfaceAddresses = [];
+            }
             _client = new UdpClient { Client = socket };
+            Log.Info($"mDNS listener ready: {DiagnosticSummary}");
             _ = ReceiveLoopAsync(_lifetime.Token);
             _ = QueryLoopAsync(_lifetime.Token);
         }
-        catch (Exception ex) { Error?.Invoke($"Device discovery unavailable: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Log.Error("Device discovery unavailable", ex);
+            Error?.Invoke($"Device discovery unavailable: {ex.Message}");
+        }
     }
 
     public async Task RefreshAsync()
@@ -59,6 +98,7 @@ internal sealed class ReceiverDiscovery : IDisposable
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
+                Log.Error("Device discovery query failed", ex);
                 Error?.Invoke($"Device discovery failed: {ex.Message}");
                 await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
             }
@@ -73,7 +113,30 @@ internal sealed class ReceiverDiscovery : IDisposable
         name.CopyTo(query.AsSpan(12));
         BinaryPrimitives.WriteUInt16BigEndian(query.AsSpan(12 + name.Length), 12); // PTR
         BinaryPrimitives.WriteUInt16BigEndian(query.AsSpan(14 + name.Length), 1);  // IN
-        await _client!.SendAsync(query, new IPEndPoint(IPAddress.Parse("224.0.0.251"), 5353), cancellationToken);
+        var destination = new IPEndPoint(IPAddress.Parse("224.0.0.251"), 5353);
+        await _sendGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_interfaceAddresses.Count == 0)
+            {
+                await _client!.SendAsync(query, destination, cancellationToken);
+                return;
+            }
+            foreach (var address in _interfaceAddresses)
+            {
+                try
+                {
+                    _client!.Client.SetSocketOption(SocketOptionLevel.IP,
+                        SocketOptionName.MulticastInterface, address.GetAddressBytes());
+                    await _client.SendAsync(query, destination, cancellationToken);
+                }
+                catch (SocketException ex)
+                {
+                    Log.Warn($"Could not send mDNS query on {address}: {ex.Message}");
+                }
+            }
+        }
+        finally { _sendGate.Release(); }
     }
 
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
@@ -83,10 +146,15 @@ internal sealed class ReceiverDiscovery : IDisposable
             try
             {
                 var result = await _client!.ReceiveAsync(cancellationToken);
+                Interlocked.Increment(ref _packetsReceived);
                 ParsePacket(result.Buffer);
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Error?.Invoke($"mDNS receive failed: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                Log.Error("mDNS receive failed", ex);
+                Error?.Invoke($"mDNS receive failed: {ex.Message}");
+            }
         }
     }
 
@@ -95,6 +163,7 @@ internal sealed class ReceiverDiscovery : IDisposable
         if (packet.Length < 12) return;
         var questions = ReadU16(packet, 4);
         var recordCount = ReadU16(packet, 6) + ReadU16(packet, 8) + ReadU16(packet, 10);
+        if (recordCount > 0) Interlocked.Increment(ref _packetsWithRecords);
         var offset = 12;
         for (var i = 0; i < questions; i++)
         {
@@ -161,6 +230,12 @@ internal sealed class ReceiverDiscovery : IDisposable
             .DistinctBy(x => x.Id)
             .OrderBy(x => x.Name)
             .ToArray();
+        var summary = string.Join(", ", endpoints.Select(x => x.DisplayName));
+        if (summary != _lastPublishedSummary)
+        {
+            _lastPublishedSummary = summary;
+            Log.Info($"mDNS receivers: {(summary.Length > 0 ? summary : "none")}");
+        }
         DevicesChanged?.Invoke(endpoints);
     }
 
@@ -219,10 +294,34 @@ internal sealed class ReceiverDiscovery : IDisposable
         return string.Join('.', labels);
     }
 
+    private static IReadOnlyList<IPAddress> GetActiveIPv4Addresses()
+    {
+        var addresses = new List<IPAddress>();
+        foreach (var network in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (network.OperationalStatus != OperationalStatus.Up ||
+                network.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel)
+                continue;
+            try
+            {
+                addresses.AddRange(network.GetIPProperties().UnicastAddresses
+                    .Select(item => item.Address)
+                    .Where(address => address.AddressFamily == AddressFamily.InterNetwork &&
+                                      !IPAddress.IsLoopback(address)));
+            }
+            catch (NetworkInformationException ex)
+            {
+                Log.Warn($"Could not inspect network interface {network.Name}: {ex.Message}");
+            }
+        }
+        return addresses.Distinct().ToArray();
+    }
+
     public void Dispose()
     {
         _lifetime.Cancel();
         _client?.Dispose();
+        _sendGate.Dispose();
         _lifetime.Dispose();
     }
 }

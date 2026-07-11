@@ -1,9 +1,12 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using OpenDisplay.Windows.Infrastructure;
 using OpenDisplay.Windows.Models;
 using OpenDisplay.Windows.Services;
+using CaptureMode = OpenDisplay.Windows.Models.CaptureMode;
 
 namespace OpenDisplay.Windows.ViewModels;
 
@@ -15,6 +18,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     private readonly MonitorLocator _monitors;
     private readonly FfmpegLocator _ffmpeg;
     private readonly PreferencesStore _preferencesStore;
+    private readonly DependencyDiagnostics _dependencyDiagnostics;
     private readonly Preferences _preferences;
     private readonly AsyncRelayCommand _connectCommand;
     private readonly RelayCommand _forgetManualCommand;
@@ -25,6 +29,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     private CaptureMode _mode = CaptureMode.Extend;
     private StreamQuality _quality = StreamQuality.Best;
     private string _systemStatus = "Starting…";
+    private string _diagnostics = "Diagnostics have not run yet.";
     private bool _adbAvailable;
 
     public ObservableCollection<ReceiverEndpoint> Devices { get; } = [];
@@ -47,6 +52,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     public CaptureMode Mode { get => _mode; set => SetProperty(ref _mode, value); }
     public StreamQuality Quality { get => _quality; set => SetProperty(ref _quality, value); }
     public string SystemStatus { get => _systemStatus; private set => SetProperty(ref _systemStatus, value); }
+    public string Diagnostics { get => _diagnostics; private set => SetProperty(ref _diagnostics, value); }
+    public string LogFilePath => Log.FilePath;
     public bool AdbAvailable { get => _adbAvailable; private set => SetProperty(ref _adbAvailable, value); }
     public Visibility AdbMissingVisibility => AdbAvailable ? Visibility.Collapsed : Visibility.Visible;
     public Visibility EmptySessionsVisibility => Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -55,6 +62,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand ConnectCommand => _connectCommand;
     public ICommand ConnectManualCommand { get; }
     public ICommand ForgetManualCommand => _forgetManualCommand;
+    public ICommand RefreshDiagnosticsCommand { get; }
+    public ICommand OpenLogCommand { get; }
 
     public MainViewModel(
         ReceiverDiscovery discovery,
@@ -62,7 +71,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         IVirtualDisplayProvider virtualDisplays,
         MonitorLocator monitors,
         FfmpegLocator ffmpeg,
-        PreferencesStore preferencesStore)
+        PreferencesStore preferencesStore,
+        DependencyDiagnostics dependencyDiagnostics)
     {
         _discovery = discovery;
         _adbWatcher = adbWatcher;
@@ -70,15 +80,22 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         _monitors = monitors;
         _ffmpeg = ffmpeg;
         _preferencesStore = preferencesStore;
+        _dependencyDiagnostics = dependencyDiagnostics;
         _preferences = preferencesStore.Load();
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         _connectCommand = new AsyncRelayCommand(ConnectSelectedAsync,
             () => SelectedDevice?.IsReady == true);
         ConnectManualCommand = new AsyncRelayCommand(ConnectManualAsync);
+        RefreshDiagnosticsCommand = new AsyncRelayCommand(RefreshDiagnosticsAsync);
+        OpenLogCommand = new RelayCommand(OpenLog);
         _forgetManualCommand = new RelayCommand(ForgetSelectedManual,
             () => SelectedDevice?.Transport == ReceiverTransport.Manual);
         discovery.DevicesChanged += OnWifiDevicesChanged;
-        discovery.Error += error => Dispatch(() => SystemStatus = error);
+        discovery.Error += error => Dispatch(() =>
+        {
+            Log.Warn(error);
+            SystemStatus = error;
+        });
         adbWatcher.DevicesChanged += OnAdbDevicesChanged;
         Sessions.CollectionChanged += (_, _) => OnPropertyChanged(nameof(EmptySessionsVisibility));
     }
@@ -92,6 +109,36 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
             ? "FFmpeg not found. Put ffmpeg.exe beside OpenDisplay.exe, on PATH, or set OPENDISPLAY_FFMPEG."
             : $"Ready · encoder: {encoder} · virtual display: {_virtualDisplays.Name}";
         RebuildDevices();
+        _ = RefreshDiagnosticsAsync();
+    }
+
+    private async Task RefreshDiagnosticsAsync()
+    {
+        Diagnostics = "Checking dependencies…";
+        try { Diagnostics = await _dependencyDiagnostics.RunAsync(); }
+        catch (Exception ex)
+        {
+            Log.Error("Dependency diagnostics failed", ex);
+            Diagnostics = $"Diagnostics failed: {ex.Message}{Environment.NewLine}Log: {Log.FilePath}";
+        }
+    }
+
+    private void OpenLog()
+    {
+        try
+        {
+            if (Log.FilePath.Length == 0 || !File.Exists(Log.FilePath))
+                throw new FileNotFoundException("The log file has not been created.", Log.FilePath);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{Log.FilePath}\"")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Could not open the log location", ex);
+            SystemStatus = $"Could not open log: {ex.Message}";
+        }
     }
 
     private async Task RefreshAsync()
@@ -142,6 +189,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
             return Task.CompletedTask;
         }
 
+        Log.Info($"Connecting to {endpoint.Id} via {endpoint.TransportLabel}");
+
         if (endpoint.Transport == ReceiverTransport.Adb && endpoint.AdbSerial is { } serial)
         {
             _preferences.DisabledAdbDevices.Remove(serial);
@@ -152,6 +201,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         var viewModel = new SessionViewModel(session);
         viewModel.DisconnectRequested += Disconnect;
         viewModel.Ended += EndSession;
+        viewModel.Failed += OnSessionFailed;
         viewModel.HelloReceived += OnSessionHello;
         Sessions.Add(viewModel);
         SystemStatus = $"Starting {Mode.ToString().ToLowerInvariant()} session for {endpoint.Name} over {endpoint.TransportLabel}.";
@@ -161,6 +211,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 
     private void Disconnect(SessionViewModel session)
     {
+        Log.Info($"User disconnected session {session.Id} ({session.TargetId})");
         if (session.Transport == ReceiverTransport.Adb && session.AdbSerial is { } serial)
         {
             _preferences.DisabledAdbDevices.Add(serial);
@@ -174,6 +225,13 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     {
         session.Stop();
         Sessions.Remove(session);
+    }
+
+    private void OnSessionFailed(SessionViewModel session, Exception exception)
+    {
+        SystemStatus = $"{session.Name} failed: {exception.Message} · Log: {Log.FilePath}";
+        Diagnostics = $"Latest session failure:{Environment.NewLine}{exception}{Environment.NewLine}{Environment.NewLine}" +
+                      $"Full log: {Log.FilePath}";
     }
 
     private void ForgetSelectedManual()
@@ -272,7 +330,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 
     private static void Dispatch(Action action)
     {
-        var dispatcher = Application.Current?.Dispatcher;
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.CheckAccess()) action();
         else dispatcher.BeginInvoke(action);
     }

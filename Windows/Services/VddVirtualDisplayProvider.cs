@@ -1,3 +1,4 @@
+using OpenDisplay.Windows.Infrastructure;
 using OpenDisplay.Windows.Models;
 
 namespace OpenDisplay.Windows.Services;
@@ -37,6 +38,7 @@ internal sealed class VddVirtualDisplayProvider(MonitorLocator monitors) : IVirt
 
         try
         {
+            Log.Info($"Claiming VDD output {selected.DeviceName} at {request.Width}x{request.Height}@{request.RefreshRate}");
             if (selected.Target.Width != request.Width || selected.Target.Height != request.Height)
             {
                 if (!monitors.TrySetMode(selected.DeviceName, request.Width, request.Height,
@@ -75,6 +77,7 @@ internal sealed class VddVirtualDisplayProvider(MonitorLocator monitors) : IVirt
         // Releasing only returns the output to this app's pool; it never
         // disables or uninstalls the user's driver.
         lock (_gate) _claimed.Remove(target.DeviceName);
+        Log.Info($"Released VDD output {target.DeviceName}");
         return Task.CompletedTask;
     }
 }

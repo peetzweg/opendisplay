@@ -1,7 +1,10 @@
 using System.Buffers.Binary;
+using System.IO;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using OpenDisplay.Windows.Infrastructure;
 
 namespace OpenDisplay.Windows.Protocol;
 
@@ -26,9 +29,46 @@ internal sealed class FramedConnection : IAsyncDisposable
     public static async Task<FramedConnection> ConnectAsync(
         string host, int port, CancellationToken cancellationToken)
     {
-        var client = new TcpClient { NoDelay = true };
-        await client.ConnectAsync(host, port, cancellationToken);
-        return new FramedConnection(client);
+        IPAddress[] addresses = IPAddress.TryParse(host, out var literal)
+            ? [literal]
+            : await Dns.GetHostAddressesAsync(host, cancellationToken);
+        addresses = addresses
+            .Where(address => address.AddressFamily is
+                AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)
+            .OrderBy(address => address.AddressFamily == AddressFamily.InterNetwork ? 0 : 1)
+            .ToArray();
+        if (addresses.Length == 0)
+            throw new SocketException((int)SocketError.HostNotFound);
+
+        Exception? lastError = null;
+        foreach (var address in addresses)
+        {
+            TcpClient? client = null;
+            try
+            {
+                // Do not use parameterless TcpClient here. It lets the runtime
+                // choose a default address family, which can fail with
+                // WSAEINVAL on systems where that family is disabled.
+                client = new TcpClient(address.AddressFamily) { NoDelay = true };
+                Log.Info($"TCP connecting to {address}:{port} using {address.AddressFamily}");
+                await client.ConnectAsync(address, port, cancellationToken);
+                Log.Info($"TCP connected to {address}:{port}");
+                return new FramedConnection(client);
+            }
+            catch (OperationCanceledException)
+            {
+                client?.Dispose();
+                throw;
+            }
+            catch (Exception ex) when (ex is SocketException or InvalidOperationException)
+            {
+                lastError = ex;
+                client?.Dispose();
+                Log.Warn($"TCP connection to {address}:{port} failed: {ex.Message}");
+            }
+        }
+
+        throw new IOException($"Could not connect to {host}:{port} using any resolved address.", lastError);
     }
 
     public async Task<byte[]?> ReadAsync(CancellationToken cancellationToken)

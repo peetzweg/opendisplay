@@ -1,4 +1,6 @@
+using System.IO;
 using System.Text.Json;
+using OpenDisplay.Windows.Infrastructure;
 
 namespace OpenDisplay.Windows.Services;
 
@@ -16,8 +18,11 @@ internal sealed class PreferencesStore
                 ? JsonSerializer.Deserialize<Preferences>(File.ReadAllBytes(_path)) ?? new Preferences()
                 : new Preferences();
         }
-        catch (IOException) { return new Preferences(); }
-        catch (JsonException) { return new Preferences(); }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            Log.Error("Could not load preferences", ex);
+            return new Preferences();
+        }
     }
 
     public void Save(Preferences preferences)
@@ -28,8 +33,10 @@ internal sealed class PreferencesStore
             File.WriteAllBytes(_path, JsonSerializer.SerializeToUtf8Bytes(preferences,
                 new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Error("Could not save preferences", ex);
+        }
     }
 }
 

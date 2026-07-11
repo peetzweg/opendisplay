@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using OpenDisplay.Windows.Infrastructure;
 
 namespace OpenDisplay.Windows.Services;
 
@@ -97,7 +98,10 @@ internal sealed class AdbClient(string executable)
             var output = await stdout;
             var error = await stderr;
             if (process.ExitCode != 0)
+            {
+                Log.Warn($"adb {string.Join(' ', arguments)} failed ({process.ExitCode}): {error.Trim()}");
                 throw new AdbException(error.Trim().Length > 0 ? error.Trim() : "adb command failed.");
+            }
             return output;
         }
         catch (OperationCanceledException)
