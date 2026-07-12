@@ -650,6 +650,14 @@ struct VideoLayerView: UIViewRepresentable {
         receiver.onCursorImage = { [weak view] image, anchor, normSize in
             view?.setCursorSprite(image, anchor: anchor, normSize: normSize)
         }
+        // Replay the sprite/position that arrived before this view existed
+        // (first frames land after the connect-time sprite) or that the
+        // previous view held (metal-renderer toggle rebuilds the view tree).
+        if let sprite = receiver.cursorSprite {
+            view.setCursorSprite(sprite.image, anchor: sprite.anchor, normSize: sprite.normSize)
+        }
+        let state = receiver.cursorState
+        view.moveCursor(x: state.x, y: state.y, visible: state.visible)
         return view
     }
 

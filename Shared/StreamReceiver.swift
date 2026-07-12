@@ -118,6 +118,13 @@ final class StreamReceiver: ObservableObject {
     // and normalized coordinates use a TOP-LEFT origin (video space).
     var onCursor: ((_ x: Double, _ y: Double, _ visible: Bool) -> Void)?
     var onCursorImage: ((_ image: CGImage, _ anchor: CGPoint, _ normSize: CGSize) -> Void)?
+    // The video view attaches only once frames are on screen — usually AFTER
+    // the connect-time sprite already arrived (the sender re-sends it only
+    // when the cursor changes shape, so a plain arrow would stay invisible
+    // forever). Keep the latest of each so a late-attaching view replays
+    // them. Main-thread, like the callbacks.
+    private(set) var cursorState: (x: Double, y: Double, visible: Bool) = (0.5, 0.5, false)
+    private(set) var cursorSprite: (image: CGImage, anchor: CGPoint, normSize: CGSize)?
 
     // Metal renderer path (experimental, "metalRenderer" setting): we decode
     // explicitly and hand BGRA buffers out; called on the receiver queue.
@@ -390,7 +397,10 @@ final class StreamReceiver: ObservableObject {
             let visible = (obj["v"] as? Int ?? 0) == 1
             let x = obj["x"] as? Double ?? 0
             let y = obj["y"] as? Double ?? 0
-            DispatchQueue.main.async { self.onCursor?(x, y, visible) }
+            DispatchQueue.main.async {
+                self.cursorState = (x, y, visible)
+                self.onCursor?(x, y, visible)
+            }
         case "cursorImg":
             guard let b64 = obj["png"] as? String,
                   let png = Data(base64Encoded: b64),
@@ -399,7 +409,10 @@ final class StreamReceiver: ObservableObject {
                   let nw = obj["nw"] as? Double, let nh = obj["nh"] as? Double else { return }
             let anchor = CGPoint(x: obj["ax"] as? Double ?? 0, y: obj["ay"] as? Double ?? 0)
             let normSize = CGSize(width: nw, height: nh)
-            DispatchQueue.main.async { self.onCursorImage?(image, anchor, normSize) }
+            DispatchQueue.main.async {
+                self.cursorSprite = (image, anchor, normSize)
+                self.onCursorImage?(image, anchor, normSize)
+            }
         case WireMessage.welcome:
             // The Mac identified itself (issue #132). If it speaks a protocol
             // older than we support, it's the Mac that needs updating — and an

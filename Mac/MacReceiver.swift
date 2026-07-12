@@ -103,11 +103,19 @@ final class ReceiverController: ObservableObject {
     /// The panel this Mac offers as a display: the primary screen's current
     /// framebuffer. A Retina panel announces its @2x pixels, which maps 1:1
     /// onto the sender's @2x HiDPI virtual display.
+    ///
+    /// Minus the menu-bar/notch strip: native full screen never covers it on
+    /// notched panels (the fullscreen window is the screen shrunk by
+    /// safeAreaInsets.top — zero on notch-less displays). Announcing the
+    /// full panel would letterbox full screen on every side AND render the
+    /// remote menu bar physically behind the notch; announcing the safe
+    /// rect makes full screen exactly 1:1.
     private func announcePanel(to receiver: StreamReceiver) {
         guard let screen = NSScreen.screens.first else { return }
         let scale = screen.backingScaleFactor
+        let height = screen.frame.height - screen.safeAreaInsets.top
         receiver.setPanel(pixelsWide: Int(screen.frame.width * scale),
-                          pixelsHigh: Int(screen.frame.height * scale),
+                          pixelsHigh: Int(height * scale),
                           scale: Double(scale))
     }
 
@@ -209,6 +217,14 @@ final class ReceiverVideoView: NSView {
         receiver.onCursorImage = { [weak self] image, anchor, normSize in
             self?.setCursorSprite(image, anchor: anchor, normSize: normSize)
         }
+        // Replay the sprite/position that arrived before this view existed —
+        // the sender re-sends them only on change, so without this the
+        // cursor stays invisible until it happens to change shape.
+        if let sprite = receiver.cursorSprite {
+            setCursorSprite(sprite.image, anchor: sprite.anchor, normSize: sprite.normSize)
+        }
+        let state = receiver.cursorState
+        moveCursor(x: state.x, y: state.y, visible: state.visible)
         // videoSize arrives after the format description — re-fit the layers.
         videoSizeObserver = receiver.$videoSize
             .receive(on: DispatchQueue.main)
@@ -216,6 +232,23 @@ final class ReceiverVideoView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    // This Mac's own pointer over the video reads as a second, dead cursor
+    // on the "monitor" — blank it over this view. The streamed sender
+    // cursor (cursorLayer) is the pointer that matters on a display.
+    private static let blankCursor: NSCursor = {
+        let size = NSSize(width: 1, height: 1)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.clear.set()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        return NSCursor(image: image, hotSpot: .zero)
+    }()
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: Self.blankCursor)
+    }
 
     override func layout() {
         super.layout()
