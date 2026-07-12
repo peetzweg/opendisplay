@@ -67,7 +67,7 @@ public partial class App : System.Windows.Application
                 _discovery,
                 adbWatcher,
                 adbLocator,
-                new VddVirtualDisplayProvider(monitors),
+                new VddVirtualDisplayProvider(monitors, vddPipe),
                 monitors,
                 ffmpeg,
                 new PreferencesStore(),
@@ -145,7 +145,7 @@ public partial class App : System.Windows.Application
         }, cancellationToken);
     }
 
-    private void ExitApplication()
+    internal void ExitApplication()
     {
         if (_exitRequested) return;
         _exitRequested = true;

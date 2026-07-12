@@ -32,6 +32,7 @@ internal sealed class MonitorLocator
                 adapter.DeviceString,
                 adapter.DeviceID,
                 (adapter.StateFlags & DisplayDevicePrimary) != 0,
+                true,
                 new DisplayTarget(
                     adapter.DeviceID.Length == 0 ? adapter.DeviceName : adapter.DeviceID,
                     adapter.DeviceName,
@@ -48,10 +49,53 @@ internal sealed class MonitorLocator
         GetAll().FirstOrDefault(x => x.IsPrimary)?.Target
         ?? throw new InvalidOperationException("Windows did not report an active primary monitor.");
 
-    public bool TrySetMode(string deviceName, int width, int height, int refreshRate, out string error)
+    /// <summary>
+    /// Includes disabled VDD outputs. Newly arrived VDD monitors are sometimes
+    /// disabled by Windows until an application assigns them a desktop mode.
+    /// </summary>
+    public IReadOnlyList<WindowsMonitor> GetVddOutputs()
+    {
+        var result = new List<WindowsMonitor>();
+        for (uint index = 0; ; index++)
+        {
+            var adapter = DISPLAY_DEVICE.Create();
+            if (!EnumDisplayDevices(null, index, ref adapter, 0)) break;
+            if (!IsVdd(adapter)) continue;
+
+            var mode = DEVMODE.Create();
+            var hasMode = EnumDisplaySettingsEx(adapter.DeviceName, EnumCurrentSettings, ref mode, 0)
+                || EnumDisplaySettingsEx(adapter.DeviceName, 0, ref mode, 0);
+            var active = (adapter.StateFlags & DisplayDeviceActive) != 0;
+            result.Add(new WindowsMonitor(
+                adapter.DeviceName,
+                adapter.DeviceString,
+                adapter.DeviceID,
+                (adapter.StateFlags & DisplayDevicePrimary) != 0,
+                active,
+                new DisplayTarget(
+                    adapter.DeviceID.Length == 0 ? adapter.DeviceName : adapter.DeviceID,
+                    adapter.DeviceName,
+                    mode.dmPositionX,
+                    mode.dmPositionY,
+                    hasMode ? (int)mode.dmPelsWidth : 0,
+                    hasMode ? (int)mode.dmPelsHeight : 0,
+                    true)));
+        }
+        return result;
+    }
+
+    public bool TrySetMode(
+        string deviceName,
+        int width,
+        int height,
+        int refreshRate,
+        out string error,
+        int? left = null,
+        int? top = null)
     {
         var mode = DEVMODE.Create();
-        if (!EnumDisplaySettingsEx(deviceName, EnumCurrentSettings, ref mode, 0))
+        if (!EnumDisplaySettingsEx(deviceName, EnumCurrentSettings, ref mode, 0) &&
+            !EnumDisplaySettingsEx(deviceName, 0, ref mode, 0))
         {
             error = "The display's current mode could not be read.";
             return false;
@@ -59,6 +103,8 @@ internal sealed class MonitorLocator
         mode.dmPelsWidth = (uint)width;
         mode.dmPelsHeight = (uint)height;
         mode.dmDisplayFrequency = (uint)refreshRate;
+        if (left is not null) mode.dmPositionX = left.Value;
+        if (top is not null) mode.dmPositionY = top.Value;
         mode.dmFields = DmPosition | DmPelsWidth | DmPelsHeight | DmDisplayFrequency;
 
         var result = ChangeDisplaySettingsEx(deviceName, ref mode, IntPtr.Zero,
@@ -81,6 +127,7 @@ internal sealed class MonitorLocator
         string FriendlyName,
         string DeviceId,
         bool IsPrimary,
+        bool IsActive,
         DisplayTarget Target);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

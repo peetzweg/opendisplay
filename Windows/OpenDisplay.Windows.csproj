@@ -54,6 +54,7 @@
     <Compile Include="Services\ReceiverDiscovery.cs" />
     <Compile Include="Services\StreamingSession.cs" />
     <Compile Include="Services\VddPipeClient.cs" />
+    <Compile Include="Services\VddSettingsStore.cs" />
     <Compile Include="Services\VddVirtualDisplayProvider.cs" />
     <Compile Include="Services\WindowsInputInjector.cs" />
     <Compile Include="ViewModels\MainViewModel.cs" />
