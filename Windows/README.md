@@ -171,12 +171,9 @@ gets its own dynamically allocated forwarding rule equivalent to:
 adb -s DEVICE_SERIAL forward tcp:0 tcp:9000
 ```
 
-The allocated loopback endpoint is retained for compatibility and the device
-appears with an `ADB` label. Select it and click **Start sharing** to connect;
-detecting or plugging in an ADB device never starts a session automatically.
-The stream itself runs directly through a binary, non-PTY ADB shell and
-Android's built-in `toybox nc`, so USB mode does not depend on the Windows
-process being able to open the forwarded loopback TCP socket.
+The allocated loopback endpoint is the stream connection: OpenDisplay connects
+to it with TCP after you click **Connect** on the device row. Detecting or
+plugging in an ADB device never starts a session automatically.
 Unauthorized and offline devices remain visible with an actionable status
 instead of silently disappearing. App-owned forwarding rules are removed when
 OpenDisplay exits; ADB also removes them when the device disconnects.

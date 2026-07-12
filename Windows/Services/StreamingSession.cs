@@ -16,7 +16,6 @@ internal sealed class StreamingSession : IAsyncDisposable
     private readonly IVirtualDisplayProvider _virtualDisplays;
     private readonly MonitorLocator _monitors;
     private readonly string _ffmpeg;
-    private readonly string? _adb;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly TaskCompletionSource<ReceiverHello> _hello =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -46,8 +45,7 @@ internal sealed class StreamingSession : IAsyncDisposable
         StreamQuality quality,
         IVirtualDisplayProvider virtualDisplays,
         MonitorLocator monitors,
-        string ffmpeg,
-        string? adb)
+        string ffmpeg)
     {
         _endpoint = endpoint;
         _mode = mode;
@@ -55,7 +53,6 @@ internal sealed class StreamingSession : IAsyncDisposable
         _virtualDisplays = virtualDisplays;
         _monitors = monitors;
         _ffmpeg = ffmpeg;
-        _adb = adb;
     }
 
     public async Task RunAsync()
@@ -66,11 +63,11 @@ internal sealed class StreamingSession : IAsyncDisposable
                      $"mode={_mode}, quality={_quality}, endpoint={_endpoint.Address}:{_endpoint.Port}");
             StatusChanged?.Invoke($"Connecting to {_endpoint.Address}:{_endpoint.Port}…");
             if (_endpoint.Transport == ReceiverTransport.Adb &&
-                _endpoint.AdbSerial is { Length: > 0 } serial &&
-                _adb is { Length: > 0 })
+                _endpoint.AdbSerial is { Length: > 0 } serial)
             {
                 StatusChanged?.Invoke($"Connecting to {serial} over ADB…");
-                _connection = await FramedConnection.ConnectAdbAsync(_adb, serial, _lifetime.Token);
+                _connection = await FramedConnection.ConnectAsync(
+                    _endpoint.Address.ToString(), _endpoint.Port, _lifetime.Token);
             }
             else
             {

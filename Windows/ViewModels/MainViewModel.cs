@@ -235,7 +235,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 
         Log.Info($"Connecting to {endpoint.Id} via {endpoint.TransportLabel}");
         var session = new StreamingSession(endpoint, Mode, Quality,
-            _virtualDisplays, _monitors, executable, _adbLocator.Find());
+            _virtualDisplays, _monitors, executable);
         var viewModel = new SessionViewModel(session);
         viewModel.DisconnectRequested += Disconnect;
         viewModel.Ended += EndSession;
