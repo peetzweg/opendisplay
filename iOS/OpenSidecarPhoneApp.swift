@@ -152,7 +152,7 @@ struct ReceiverScreen: View {
 // MARK: - Idle view (no Mac connected) — regular iOS look, follows light/dark
 
 struct IdleView: View {
-    @ObservedObject var receiver: PhoneReceiver
+    @ObservedObject var receiver: StreamReceiver
     @Binding var showSettings: Bool
 
     var body: some View {
@@ -459,7 +459,7 @@ struct BarGraph: View {
 // MARK: - Settings / help sheet
 
 struct SettingsView: View {
-    @ObservedObject var receiver: PhoneReceiver
+    @ObservedObject var receiver: StreamReceiver
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
@@ -577,12 +577,14 @@ private struct DeviceNameField: View {
 
 @MainActor
 final class ReceiverModel: ObservableObject {
-    let receiver: PhoneReceiver
+    let receiver: StreamReceiver
     private var started = false
     private var cancellables = Set<AnyCancellable>()
 
     init() {
-        receiver = PhoneReceiver(displayLayer: AVSampleBufferDisplayLayer())
+        receiver = StreamReceiver(displayLayer: AVSampleBufferDisplayLayer(),
+                                  deviceKind: deviceKind,
+                                  fallbackServiceName: UIDevice.current.name)
         // Announce the native panel size to the Mac.
         let native = UIScreen.main.nativeBounds.size   // portrait pixels
         receiver.setNativePanel(long: Int(max(native.width, native.height)),
@@ -609,7 +611,7 @@ final class ReceiverModel: ObservableObject {
 /// Forwards touches as normalized video-space coordinates (touchscreen mode).
 struct VideoLayerView: UIViewRepresentable {
     let displayLayer: AVSampleBufferDisplayLayer
-    let receiver: PhoneReceiver
+    let receiver: StreamReceiver
     let useMetal: Bool
 
     func makeUIView(context: Context) -> VideoView {
@@ -657,7 +659,7 @@ struct VideoLayerView: UIViewRepresentable {
     }
 
     final class VideoView: UIView {
-        weak var receiver: PhoneReceiver?
+        weak var receiver: StreamReceiver?
         var metalRenderer: MetalVideoRenderer?
 
         private let cursorLayer: CALayer = {
@@ -723,10 +725,10 @@ struct VideoLayerView: UIViewRepresentable {
             CATransaction.commit()
         }
 
-        func setCursorSprite(_ image: UIImage, anchor: CGPoint, normSize: CGSize) {
+        func setCursorSprite(_ image: CGImage, anchor: CGPoint, normSize: CGSize) {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            cursorLayer.contents = image.cgImage
+            cursorLayer.contents = image
             cursorLayer.anchorPoint = anchor
             cursorNormSize = normSize
             cursorLayer.isHidden = !cursorVisible
