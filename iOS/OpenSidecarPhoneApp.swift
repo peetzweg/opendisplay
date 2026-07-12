@@ -121,6 +121,8 @@ struct ReceiverScreen: View {
             if let update = recommendedUpdate { Text(update.message) }
         }
         .task { await versionGate.check() }
+        // Merge the connected Mac's compatibility signal into the same gate.
+        .onReceive(model.receiver.$peerSignal) { versionGate.applyPeer($0) }
         .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
             showSettings = true
         }
