@@ -62,19 +62,49 @@
                       Command="{Binding RefreshCommand, Mode=OneWay}" />
             </Grid>
 
-            <ComboBox Grid.Row="1" Margin="0,16,0,0" Height="50"
+            <StackPanel Grid.Row="1" Margin="0,16,0,0">
+              <Grid Margin="12,0,12,5">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="120" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="DEVICE" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
+                <TextBlock Grid.Column="1" Text="TRANSPORT" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
+                <TextBlock Grid.Column="2" Text="ACTION" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
+              </Grid>
+              <ListView MinHeight="62"
                       ItemsSource="{Binding Devices, Mode=OneWay}"
-                      SelectedItem="{Binding SelectedDevice, Mode=TwoWay}">
-              <ComboBox.ItemTemplate>
+                      SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
+                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                      Background="Transparent">
+              <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                  <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                  <Setter Property="Padding" Value="0" />
+                </Style>
+              </ListView.ItemContainerStyle>
+              <ListView.ItemTemplate>
                 <DataTemplate>
-                  <StackPanel Margin="1,2">
-                    <TextBlock Text="{Binding Name, Mode=OneWay}" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding TransportLabel, Mode=OneWay}"
-                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" />
-                  </StackPanel>
+                  <Grid Margin="12,8">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="120" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding Name, Mode=OneWay}" FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding TransportLabel, Mode=OneWay}"
+                               Style="{StaticResource SecondaryTextStyle}" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Content="Connect" MinWidth="82"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Command="{Binding DataContext.ConnectDeviceCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                            CommandParameter="{Binding}" />
+                  </Grid>
                 </DataTemplate>
-              </ComboBox.ItemTemplate>
-            </ComboBox>
+              </ListView.ItemTemplate>
+            </ListView>
+            </StackPanel>
 
             <StackPanel Grid.Row="2" Margin="0,8,0,0">
               <TextBlock Text="Devices on USB or this Wi-Fi network appear automatically."
@@ -98,19 +128,19 @@
                              Text="{Binding ManualHost, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              ToolTip="IP address or host:port; port 9000 is used by default">
                       <TextBox.InputBindings>
-                        <KeyBinding Key="Enter" Command="{Binding ConnectManualCommand, Mode=OneWay}" />
+                        <KeyBinding Key="Enter" Command="{Binding AddManualCommand, Mode=OneWay}" />
                       </TextBox.InputBindings>
                     </TextBox>
-                    <Button Grid.Column="1" Content="Connect by IP" Margin="8,0,0,0"
+                    <Button Grid.Column="1" Content="Add receiver" Margin="8,0,0,0"
                             Style="{StaticResource SecondaryButtonStyle}"
-                            Command="{Binding ConnectManualCommand, Mode=OneWay}" />
+                            Command="{Binding AddManualCommand, Mode=OneWay}" />
                   </Grid>
                   <Grid Margin="0,8,0,0">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*" />
                       <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="Enter an address such as 192.168.1.25:9000. It will be remembered."
+                    <TextBlock Text="Enter an address such as 192.168.1.25:9000. It will appear in the receiver list."
                                Style="{StaticResource SecondaryTextStyle}" VerticalAlignment="Center" />
                     <Button Grid.Column="1" Content="Remove selected saved address"
                             Style="{StaticResource LinkButtonStyle}"
@@ -127,7 +157,6 @@
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <Grid Grid.Row="0">
@@ -141,8 +170,8 @@
                            FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
               </Border>
               <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                <TextBlock Text="Choose how to share" Style="{StaticResource SectionTitleStyle}" />
-                <TextBlock Text="These settings apply when a new session starts."
+                <TextBlock Text="Sharing settings" Style="{StaticResource SectionTitleStyle}" />
+                <TextBlock Text="These settings apply when you connect a receiver."
                            Style="{StaticResource SecondaryTextStyle}" Margin="0,2,0,0" />
               </StackPanel>
             </Grid>
@@ -179,23 +208,22 @@
               </Border>
             </Grid>
 
-            <Grid Grid.Row="2" Margin="0,16,0,0">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-              </Grid.ColumnDefinitions>
-              <TextBlock Text="Select a receiver above, then start sharing."
-                         Style="{StaticResource SecondaryTextStyle}" VerticalAlignment="Center" />
-              <Button Grid.Column="1" Content="Start sharing" Width="150" Height="42"
-                      Style="{StaticResource PrimaryButtonStyle}"
-                      Command="{Binding ConnectCommand, Mode=OneWay}" />
-            </Grid>
           </Grid>
         </Border>
 
         <Border Style="{StaticResource CardStyle}" Margin="0,14,0,0">
           <StackPanel>
-            <TextBlock Text="Active sessions" Style="{StaticResource SectionTitleStyle}" />
+            <TextBlock Text="Active devices" Style="{StaticResource SectionTitleStyle}" />
+            <Grid Margin="0,10,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="STATUS" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
+              <TextBlock Grid.Column="1" Text="DEVICE" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
+              <TextBlock Grid.Column="2" Text="ACTION" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
+            </Grid>
             <Grid Margin="0,10,0,0" MinHeight="58">
               <ListView ItemsSource="{Binding Sessions, Mode=OneWay}"
                         BorderThickness="0" Background="Transparent">

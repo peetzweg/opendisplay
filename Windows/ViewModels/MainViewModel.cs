@@ -21,8 +21,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     private readonly PreferencesStore _preferencesStore;
     private readonly DependencyDiagnostics _dependencyDiagnostics;
     private readonly Preferences _preferences;
-    private readonly AsyncRelayCommand _connectCommand;
-    private readonly AsyncRelayCommand _connectManualCommand;
+    private readonly AsyncRelayCommand _connectDeviceCommand;
+    private readonly AsyncRelayCommand _addManualCommand;
     private readonly RelayCommand _forgetManualCommand;
     private IReadOnlyList<ReceiverEndpoint> _wifiDevices = [];
     private IReadOnlyList<AdbDevice> _adbDevices = [];
@@ -45,7 +45,6 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         set
         {
             if (!SetProperty(ref _selectedDevice, value)) return;
-            _connectCommand.RaiseCanExecuteChanged();
             _forgetManualCommand.RaiseCanExecuteChanged();
         }
     }
@@ -56,7 +55,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         set
         {
             if (!SetProperty(ref _manualHost, value)) return;
-            _connectManualCommand.RaiseCanExecuteChanged();
+            _addManualCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -98,8 +97,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     public Visibility EmptySessionsVisibility => Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
     public ICommand RefreshCommand { get; }
-    public ICommand ConnectCommand => _connectCommand;
-    public ICommand ConnectManualCommand => _connectManualCommand;
+    public ICommand ConnectDeviceCommand => _connectDeviceCommand;
+    public ICommand AddManualCommand => _addManualCommand;
     public ICommand ForgetManualCommand => _forgetManualCommand;
     public ICommand RefreshDiagnosticsCommand { get; }
     public ICommand OpenLogCommand { get; }
@@ -124,9 +123,10 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         _dependencyDiagnostics = dependencyDiagnostics;
         _preferences = preferencesStore.Load();
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
-        _connectCommand = new AsyncRelayCommand(ConnectSelectedAsync,
-            () => SelectedDevice?.IsReady == true);
-        _connectManualCommand = new AsyncRelayCommand(ConnectManualAsync,
+        _connectDeviceCommand = new AsyncRelayCommand(ConnectDeviceAsync,
+            parameter => parameter is ReceiverEndpoint endpoint && endpoint.IsReady &&
+                         !Sessions.Any(session => session.TargetId == endpoint.Id));
+        _addManualCommand = new AsyncRelayCommand(AddManualAsync,
             () => !string.IsNullOrWhiteSpace(ManualHost));
         RefreshDiagnosticsCommand = new AsyncRelayCommand(RefreshDiagnosticsAsync);
         OpenLogCommand = new RelayCommand(OpenLog);
@@ -139,7 +139,11 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
             SystemStatus = error;
         });
         adbWatcher.DevicesChanged += OnAdbDevicesChanged;
-        Sessions.CollectionChanged += (_, _) => OnPropertyChanged(nameof(EmptySessionsVisibility));
+        Sessions.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(EmptySessionsVisibility));
+            _connectDeviceCommand.RaiseCanExecuteChanged();
+        };
     }
 
     public void Start()
@@ -189,9 +193,9 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         await Task.WhenAll(_discovery.RefreshAsync(), _adbWatcher.RefreshAsync());
     }
 
-    private async Task ConnectSelectedAsync()
+    private async Task ConnectDeviceAsync(object? parameter)
     {
-        if (SelectedDevice is not { IsReady: true } endpoint) return;
+        if (parameter is not ReceiverEndpoint { IsReady: true } endpoint) return;
         if (endpoint.Transport == ReceiverTransport.Manual)
         {
             try { endpoint = await ManualEndpointParser.ParseAsync(endpoint.Name); }
@@ -204,21 +208,23 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         await ConnectEndpointAsync(endpoint);
     }
 
-    private async Task ConnectManualAsync()
+    private Task AddManualAsync()
     {
         try
         {
-            var endpoint = await ManualEndpointParser.ParseAsync(ManualHost);
             var parsed = ManualEndpointParser.ParseHostAndPort(ManualHost);
             _preferences.ManualEndpoints.Add(ManualEndpointParser.Format(parsed.Host, parsed.Port));
             _preferencesStore.Save(_preferences);
-            RebuildDevices(endpoint.Id);
-            await ConnectEndpointAsync(endpoint);
+            var id = $"manual:{parsed.Host}:{parsed.Port}";
+            RebuildDevices(id);
+            ManualHost = string.Empty;
+            SystemStatus = $"Added {ManualEndpointParser.Format(parsed.Host, parsed.Port)}. Select Connect when the receiver is ready.";
         }
         catch (Exception ex) when (ex is FormatException or System.Net.Sockets.SocketException or ArgumentException)
         {
             SystemStatus = $"Invalid receiver address: {ex.Message}";
         }
+        return Task.CompletedTask;
     }
 
     private Task ConnectEndpointAsync(ReceiverEndpoint endpoint)
