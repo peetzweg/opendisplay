@@ -71,8 +71,11 @@ struct PhoneInfo: Decodable {
     let id: String?       // per-install identity (older receivers omit it) —
                           // lets the controller match the same physical device
                           // across USB and WiFi
+    let pv: Int?          // receiver protocol version (issue #132); absent on
+                          // every pre-handshake install → treat as protocol 1
 
     var kind: String { device ?? "device" }
+    var protocolVersion: Int { pv ?? WireProtocol.assumedWhenAbsent }
 }
 
 /// How the sender reaches the receiver. Reconnects re-dial from scratch, so
@@ -806,6 +809,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 let previous = lastHello
                 lastHello = info
                 Task { @MainActor in self.onHello?(info) }
+                // Version handshake (issue #132). Reply with our identity, and
+                // if the receiver is below the version we support, tell it to
+                // update. Both are additive: older receivers ignore unknown
+                // message types. Sending on every hello is idempotent — the
+                // phone dedupes by content.
+                sendWelcome()
+                if info.protocolVersion < WireProtocol.minSupportedPeer {
+                    Log.info("receiver protocol \(info.protocolVersion) below supported \(WireProtocol.minSupportedPeer) — requesting update")
+                    sendUpdateRequired(kind: info.kind)
+                }
                 if let continuation = helloContinuation {
                     helloContinuation = nil
                     continuation.resume(returning: info)
@@ -1012,6 +1025,29 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Control messages on the video channel (pong etc.) — framed JSON without
     /// start codes; the receiver routes payloads starting with '{'.
+    // MARK: - Version handshake (issue #132)
+
+    /// Identify ourselves to the receiver: our protocol version and the oldest
+    /// receiver version we still support.
+    private func sendWelcome() {
+        sendJSONFrame("{\"type\":\"\(WireMessage.welcome)\",\"pv\":\(WireProtocol.version),\"min\":\(WireProtocol.minSupportedPeer)}")
+    }
+
+    /// Ask the receiver to update from the App Store (built via JSONSerialization
+    /// because the message text is user-facing prose).
+    private func sendUpdateRequired(kind: String) {
+        let dict: [String: Any] = [
+            "type": WireMessage.updateRequired,
+            "target": "ios",
+            "store": AppStore.updateURL.absoluteString,
+            "message": "This \(kind) app is too old for this Mac. Update OpenDisplay from the App Store to reconnect.",
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: dict),
+           let json = String(data: data, encoding: .utf8) {
+            sendJSONFrame(json)
+        }
+    }
+
     private func sendJSONFrame(_ json: String) {
         guard let connection, connectionReady else { return }
         let payload = Data(json.utf8)

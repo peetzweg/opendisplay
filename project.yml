@@ -39,6 +39,7 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - Mac
+      - Shared
     dependencies:
       - package: Sparkle
     info:
@@ -89,6 +90,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - iOS
+      - Shared
     info:
       path: iOS/Info.plist
       properties:

@@ -1,0 +1,9 @@
+{
+  "_comment": "iOS/iPadOS update policy, served at https://opendisplay.app/ios-version.json (see issue #135). hardMinimumVersion is the FORCE FLOOR: installs below it get a blocking update screen — edit it by hand via PR, deliberately and rarely. Keep it at 0.0.0 (dormant, nobody forced) until a force-capable build has saturated the field, then raise it. recommendedVersion is the soft-nag threshold and may be auto-stamped by release CI. The app fails open: if this file is unreachable or malformed, no gate is shown.",
+  "ios": {
+    "hardMinimumVersion": "0.0.0",
+    "recommendedVersion": "0.11.0",
+    "storeURL": "itms-apps://apps.apple.com/app/id6780264891",
+    "message": "A newer version of OpenDisplay is available with important fixes. Update to keep your second display working smoothly."
+  }
+}

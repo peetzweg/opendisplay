@@ -37,8 +37,10 @@ extension UIWindow {
 
 struct ReceiverScreen: View {
     @StateObject private var model = ReceiverModel()
+    @StateObject private var versionGate = VersionGate()
     @State private var showSettings = false
     @State private var showOnboarding = false
+    @State private var nagDismissed = false
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
@@ -50,6 +52,19 @@ struct ReceiverScreen: View {
     // Streaming = connected and the video format is known.
     private var isStreaming: Bool {
         model.receiver.connected && model.receiver.videoSize != .zero
+    }
+
+    // Below the force floor → present the blocking gate (issue #135). The
+    // fullScreenCover binding's setter is a no-op so the user can't dismiss it.
+    private var requiredUpdate: VersionGate.Update? {
+        if case let .required(update) = versionGate.status { return update }
+        return nil
+    }
+
+    // Soft nag: shown once per launch, dismissible.
+    private var recommendedUpdate: VersionGate.Update? {
+        if case let .recommended(update) = versionGate.status, !nagDismissed { return update }
+        return nil
     }
 
     var body: some View {
@@ -89,6 +104,25 @@ struct ReceiverScreen: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(receiver: model.receiver)
         }
+        // Below the force floor → blocking gate. Setter is a no-op: the user
+        // cannot dismiss it, only update.
+        .fullScreenCover(item: Binding(get: { requiredUpdate }, set: { _ in })) { update in
+            UpdateRequiredView(update: update)
+        }
+        // At/above the floor but behind the recommended version → soft nag.
+        .alert("Update available",
+               isPresented: Binding(get: { recommendedUpdate != nil },
+                                    set: { if !$0 { nagDismissed = true } })) {
+            Button("Update") {
+                if let update = recommendedUpdate { UIApplication.shared.open(update.url) }
+            }
+            Button("Later", role: .cancel) { nagDismissed = true }
+        } message: {
+            if let update = recommendedUpdate { Text(update.message) }
+        }
+        .task { await versionGate.check() }
+        // Merge the connected Mac's compatibility signal into the same gate.
+        .onReceive(model.receiver.$peerSignal) { versionGate.applyPeer($0) }
         .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
             showSettings = true
         }

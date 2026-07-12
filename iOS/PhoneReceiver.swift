@@ -49,6 +49,9 @@ final class PhoneReceiver: ObservableObject {
     @Published var connected = false
     @Published var videoSize = CGSize.zero   // for touch coordinate mapping
     @Published var perf = PerfStats()
+    // Compatibility signal from the connected Mac (issue #132). Nil = no signal.
+    // Merged into the update gate by ReceiverScreen.
+    @Published var peerSignal: PeerUpdateSignal?
 
     private var listener: NWListener?
     private var listenerHealthy = false
@@ -161,6 +164,7 @@ final class PhoneReceiver: ObservableObject {
     private var advertisedService: NWListener.Service {
         var txt = NWTXTRecord()
         txt["id"] = Self.installID
+        txt["pv"] = String(WireProtocol.version)   // issue #132
         return NWListener.Service(name: serviceName, type: "_opensidecar._tcp",
                                   domain: nil, txtRecord: txt)
     }
@@ -343,6 +347,21 @@ final class PhoneReceiver: ObservableObject {
             let anchor = CGPoint(x: obj["ax"] as? Double ?? 0, y: obj["ay"] as? Double ?? 0)
             let normSize = CGSize(width: nw, height: nh)
             DispatchQueue.main.async { self.onCursorImage?(image, anchor, normSize) }
+        case WireMessage.welcome:
+            // The Mac identified itself (issue #132). If it speaks a protocol
+            // older than we support, it's the Mac that needs updating — and an
+            // old Mac can't diagnose that itself, so we surface it here.
+            let macPV = obj["pv"] as? Int ?? WireProtocol.assumedWhenAbsent
+            if macPV < WireProtocol.minSupportedPeer {
+                let msg = "The OpenDisplay app on your Mac is too old for this \(deviceKind) app. Update OpenDisplay on your Mac to reconnect."
+                DispatchQueue.main.async { self.peerSignal = .updateMac(message: msg) }
+            }
+        case WireMessage.updateRequired:
+            // The Mac refuses this pairing until we update from the App Store.
+            let message = obj["message"] as? String
+                ?? "Update OpenDisplay from the App Store to keep using your second display."
+            let store = (obj["store"] as? String).flatMap { URL(string: $0) } ?? AppStore.updateURL
+            DispatchQueue.main.async { self.peerSignal = .updateIPhone(message: message, storeURL: store) }
         default:
             break
         }
@@ -389,6 +408,7 @@ final class PhoneReceiver: ObservableObject {
             "scale": deviceScale,
             "device": UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
             "id": Self.installID,
+            "pv": WireProtocol.version,   // issue #132 — absent on old receivers
         ], on: conn)
         Log.info("hello sent")
     }
