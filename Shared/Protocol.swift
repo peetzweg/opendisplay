@@ -29,3 +29,24 @@ enum WireMessage {
     static let welcome = "welcome"                  // Mac -> phone: Mac's pv + min supported
     static let updateRequired = "updateRequired"    // Mac -> phone: peer is below the Mac's floor
 }
+
+/// The reverse direction (issue #122, iPad -> Mac): the device's broadcast
+/// extension captures the screen and streams it to a Mac window. Same framing
+/// and roles as the forward direction — the receiver LISTENS, the sender
+/// dials — but discovered under its own Bonjour type so the Mac's existing
+/// device browser and the receiving Mac never mistake each other for a
+/// forward-direction peer. (Bonjour service labels max out at 15 chars —
+/// "opensidecar-rev" is exactly 15.)
+enum ReverseWire {
+    static let serviceType = "_opensidecar-rev._tcp"
+
+    /// App-group container shared by the iOS app and its broadcast upload
+    /// extension: the app writes the chosen Mac's service name, the extension
+    /// reads it and reports its status back. Must match
+    /// `com.apple.security.application-groups` in both entitlements files.
+    static let appGroup = "group.com.peetzweg.opensidecar.ios"
+
+    /// App-group defaults keys.
+    static let targetNameKey = "sendTargetName"     // Mac service name to dial
+    static let statusKey = "broadcastStatus"        // extension -> app, for UI
+}

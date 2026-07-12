@@ -704,6 +704,7 @@ final class PermissionMonitor: ObservableObject {
 
 struct ContentView: View {
     @ObservedObject var controller: SenderController
+    @ObservedObject private var receiver = MacReceiverController.shared
     @StateObject private var permissions = PermissionMonitor()
     // Optional so the view still compiles/previews without an updater (e.g.
     // if Sparkle ever fails to start); the button just disables itself then.
@@ -812,6 +813,28 @@ struct ContentView: View {
                     .controlSize(.small)
                 }
                 .help("Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device.")
+
+                // The reverse direction (issue #122): this Mac as the screen.
+                Section("iPad → Mac") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Receive from iPad / iPhone", isOn: $receiver.enabled)
+                        Text(receiver.enabled
+                             ? "In the OpenDisplay app on the device, choose “Show this iPad on a Mac” and start broadcasting — its screen opens here as a window (view-only mirror)."
+                             : "Off — the Mac doesn't advertise itself to devices.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if receiver.enabled {
+                        ForEach(receiver.sessions) { session in
+                            ReceiverSessionRow(session: session)
+                        }
+                        if receiver.sessions.isEmpty {
+                            Text(receiver.status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
 
                 Section("Permissions") {
                     permissionRow(
@@ -928,6 +951,30 @@ struct CheckForUpdatesView: View {
         Button("Check for Updates…") { updater.checkForUpdates() }
             .controlSize(.small)
             .disabled(!viewModel.canCheckForUpdates)
+    }
+}
+
+/// One inbound iPad->Mac stream: device name, format, and a disconnect.
+struct ReceiverSessionRow: View {
+    @ObservedObject var session: MacReceiverSession
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Circle()
+                .fill(session.videoSize == .zero ? .orange : .green)
+                .frame(width: 9, height: 9)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.deviceName)
+                Text(session.videoSize == .zero
+                     ? "Connecting…"
+                     : "\(Int(session.videoSize.width))×\(Int(session.videoSize.height)) @ \(session.fps) fps")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Disconnect") { session.close() }
+                .controlSize(.small)
+        }
     }
 }
 
