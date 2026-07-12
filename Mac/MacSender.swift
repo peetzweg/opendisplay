@@ -284,6 +284,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         var vd: VirtualDisplay?
         for attempt in 0..<8 {
             if attempt > 0 { try await Task.sleep(for: .seconds(2)) }
+            // A Disconnect during the retry window tore the session down. Bail
+            // before creating/assigning the display: the serial the old display
+            // held is likely free now, so a late attempt would *succeed* and
+            // resurrect the very zombie this retry exists to avoid. (Mirrors the
+            // `if stopped` checks in the permission-poll loops above.)
+            if stopped { return }
             vd = await MainActor.run {
                 VirtualDisplay(name: displayName,
                                pointsWide: pointsWide, pointsHigh: pointsHigh,
