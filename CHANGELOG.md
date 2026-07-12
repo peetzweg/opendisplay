@@ -6,13 +6,10 @@
 ### Features
 
 * **ios:** add remote-config force-update gate ([#135](https://github.com/peetzweg/opendisplay/issues/135)) ([b4133f2](https://github.com/peetzweg/opendisplay/commit/b4133f25e27c6f8937b4cbf4b3985b82265068f7))
-* **mac:** seamless transport switching between USB and WiFi ([413a5ac](https://github.com/peetzweg/opendisplay/commit/413a5ac24a93c1963515e07a66349ab048873741))
 * **mac:** seamless transport switching between USB and WiFi ([8fecc3c](https://github.com/peetzweg/opendisplay/commit/8fecc3c4147da4778ce0111c55eb1aecd6bde22a))
 * **protocol:** add version handshake on the wire ([#132](https://github.com/peetzweg/opendisplay/issues/132)) ([d506e6c](https://github.com/peetzweg/opendisplay/commit/d506e6cfc9c8ac43b5e56093ea5665df9426d86b))
-* version compatibility handshake + iOS update gates ([#132](https://github.com/peetzweg/opendisplay/issues/132), [#135](https://github.com/peetzweg/opendisplay/issues/135)) ([d2da62b](https://github.com/peetzweg/opendisplay/commit/d2da62b4bd85b21906df4ff369ab852c6af3eb5a))
 * **web:** add four community posts to demo showcase ([3f13f9c](https://github.com/peetzweg/opendisplay/commit/3f13f9c0ef71fe666fadd46b48fe14887cba42c1))
 * **web:** add Ko-fi support nudge banner under downloads ([10bfcdc](https://github.com/peetzweg/opendisplay/commit/10bfcdcceda08d6a948f14fed7e070cee717aba0))
-* **web:** add Ko-fi support nudge banner under downloads ([6ea8e0a](https://github.com/peetzweg/opendisplay/commit/6ea8e0aa60d574fe7c23d151bc4e815445aed116))
 * **web:** center hero Ko-fi nudge, move second to end of demo section ([d2256d4](https://github.com/peetzweg/opendisplay/commit/d2256d43e48292a4d4dd5297a8ece1b035430fdf))
 * **web:** drop side borders on mobile Ko-fi nudge, keep top/bottom band ([2dd6b26](https://github.com/peetzweg/opendisplay/commit/2dd6b267514333394ffb4c8d54b0aa79ed17bc61))
 * **web:** extract Ko-fi nudge into repeatable borderless SupportNudge section ([b12e00b](https://github.com/peetzweg/opendisplay/commit/b12e00b6202a5ec13995b5d9c278ce3f8db029e8))
@@ -29,7 +26,6 @@
 * **mac:** cancel virtual display retry on disconnect ([a131076](https://github.com/peetzweg/opendisplay/commit/a131076892780d0a9dcdc12aa9047d1240598999))
 * **mac:** generation-guard the reconnect dial ([79452c7](https://github.com/peetzweg/opendisplay/commit/79452c7bef3e9b356d5e72b7401a8d4d9025cad2))
 * **mac:** latest arrangement wins across orientation flips ([ad7800d](https://github.com/peetzweg/opendisplay/commit/ad7800dcb12a4557bd07a8481f7913da3b762fdd))
-* **mac:** remember virtual display arrangement across reconnects ([2324757](https://github.com/peetzweg/opendisplay/commit/232475724fd263f1f2c4861cdee4a5b2b197c333))
 * **mac:** remember virtual display arrangement across reconnects ([72d4578](https://github.com/peetzweg/opendisplay/commit/72d45781c05ce9cf43e38476460e3b32977e17b6)), closes [#116](https://github.com/peetzweg/opendisplay/issues/116)
 * **mac:** retry virtual display creation while a stale serial lingers ([8acc36c](https://github.com/peetzweg/opendisplay/commit/8acc36c3690351cd74541e0cf583c80c578435ef))
 
