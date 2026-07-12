@@ -623,11 +623,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         connectionReady = false
         dialGeneration += 1   // a USB dial still in flight must not adopt
+        let generation = dialGeneration
         connection?.cancel()
         connection = nil
         pendingSends = 0
         queue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.connect()
+            // Generation-guarded so a switchTransport (or another reconnect)
+            // that landed in this 1s window supersedes this dial instead of
+            // racing it — otherwise the queued connect() re-dials the new
+            // transport, briefly running two live connections. (No bare
+            // self-rescheduling asyncAfter — the pattern banned in #76.)
+            guard let self, generation == self.dialGeneration, !self.stopped else { return }
+            self.connect()
         }
     }
 
