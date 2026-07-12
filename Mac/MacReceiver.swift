@@ -11,6 +11,7 @@
 import AppKit
 import AVFoundation
 import Combine
+import SwiftUI
 
 @MainActor
 final class ReceiverController: ObservableObject {
@@ -229,25 +230,23 @@ final class ReceiverVideoView: NSView {
         videoSizeObserver = receiver.$videoSize
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.needsLayout = true }
+
+        // The shared perf HUD (same as iOS), toggled by "showAnalytics".
+        let overlay = OverlayHostingView(rootView: ReceiverPerfOverlay(receiver: receiver))
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+            overlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    // This Mac's own pointer over the video reads as a second, dead cursor
-    // on the "monitor" — blank it over this view. The streamed sender
-    // cursor (cursorLayer) is the pointer that matters on a display.
-    private static let blankCursor: NSCursor = {
-        let size = NSSize(width: 1, height: 1)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSColor.clear.set()
-        NSRect(origin: .zero, size: size).fill()
-        image.unlockFocus()
-        return NSCursor(image: image, hotSpot: .zero)
-    }()
-
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: Self.blankCursor)
+        addCursorRect(bounds, cursor: blankCursor)
     }
 
     override func layout() {
@@ -301,5 +300,55 @@ final class ReceiverVideoView: NSView {
         // Video-space y grows downward, view coords grow upward — flip.
         cursorLayer.position = CGPoint(x: rect.minX + cursorNorm.x * rect.width,
                                        y: rect.maxY - cursorNorm.y * rect.height)
+    }
+}
+
+// MARK: - Performance overlay host
+
+// This Mac's own pointer over the video reads as a second, dead cursor on
+// what acts as a monitor — blank it there. The streamed sender cursor
+// (cursorLayer) is the pointer that matters. File-scope so both the video
+// view and the overlay above it use the same cursor.
+private let blankCursor: NSCursor = {
+    let size = NSSize(width: 1, height: 1)
+    let image = NSImage(size: size)
+    image.lockFocus()
+    NSColor.clear.set()
+    NSRect(origin: .zero, size: size).fill()
+    image.unlockFocus()
+    return NSCursor(image: image, hotSpot: .zero)
+}()
+
+/// The shared PerfOverlay pinned to the bottom of the video, driven by the
+/// same "showAnalytics" default the iOS app uses (toggled in the panel).
+struct ReceiverPerfOverlay: View {
+    @ObservedObject var receiver: StreamReceiver
+    @AppStorage("showAnalytics") private var showAnalytics = false
+
+    var body: some View {
+        if showAnalytics {
+            VStack {
+                Spacer()
+                PerfOverlay(stats: receiver.perf, videoSize: receiver.videoSize)
+                    .padding(.bottom, 10)
+            }
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+/// Full-bleed, non-interactive layer above the video. Subclassed only so the
+/// blank-cursor rect covers the HUD area too.
+private final class OverlayHostingView: NSHostingView<ReceiverPerfOverlay> {
+    required init(rootView: ReceiverPerfOverlay) {
+        super.init(rootView: rootView)
+    }
+
+    @MainActor required dynamic init?(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: blankCursor)
     }
 }

@@ -1073,6 +1073,7 @@ struct SessionRow: View {
 /// name, and how-to copy. Lives inside the shared grouped Form.
 struct ReceiverSections: View {
     @ObservedObject var controller: ReceiverController
+    @AppStorage("showAnalytics") private var showAnalytics = false
 
     var body: some View {
         // The receiver exists only while receiver mode is on; observed in a
@@ -1087,6 +1088,12 @@ struct ReceiverSections: View {
             Text("Name")
         } footer: {
             Text("How this Mac appears in the other Mac's Devices list.")
+        }
+
+        Section {
+            Toggle("Performance overlay", isOn: $showAnalytics)
+        } footer: {
+            Text("FPS, bitrate, frame timing, and latency graphs at the bottom of the video window while streaming — the same HUD the iPhone app has.")
         }
 
         Section("How to connect") {
