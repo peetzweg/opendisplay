@@ -32,8 +32,8 @@ VirtualDrivers/Virtual-Display-Driver (VDD / IddCx / UMDF 2)
 ```
 
 Mirror mode captures the primary physical monitor and does not require VDD.
-Extend mode claims an active VDD monitor, changes it to the receiver's native
-pixel dimensions, and captures that monitor.
+Extend mode automatically creates or enables a VDD monitor, adds the
+receiver's native pixel dimensions to VDD, and captures that monitor.
 
 ## Prerequisites
 
@@ -81,8 +81,18 @@ VDD reads its monitor count and available modes from:
 C:\VirtualDisplayDriver\vdd_settings.xml
 ```
 
-Configure at least one monitor. Add the native landscape and portrait modes
-used by each receiver, for example:
+OpenDisplay manages VDD outputs on demand. When a receiver connects in Extend
+mode, it adds the receiver's native resolution and creates an additional VDD
+output if none is available. The output remains in VDD after the session ends,
+so a later connection can start without reloading the driver.
+
+The first automatic setup changes this XML and reloads VDD. Windows may briefly
+rearrange displays while the driver is re-enumerated. OpenDisplay never reloads
+VDD while one of its Extend sessions is active; for concurrent receivers,
+connect them after an unused VDD output exists or configure additional outputs
+in advance.
+
+You can still configure modes manually, for example:
 
 ```xml
 <monitors>
@@ -102,18 +112,8 @@ used by each receiver, for example:
 </resolutions>
 ```
 
-Restart the VDD device after changing its XML, then set its outputs to
-"Extend these displays" in Windows Display Settings. OpenDisplay does not
-currently edit VDD configuration or change its persistent monitor count.
-
-This is intentional. The current upstream driver exposes
-`\\.\pipe\MTTVirtualDisplayPipe` and accepts `SETDISPLAYCOUNT N`, but its reload
-path reinitializes the adapter globally. Doing that when a stream starts could
-rearrange every desktop and interfere with other software using VDD.
-
-Configure one active VDD monitor for every concurrent receiver using Extend
-mode. Two connected tablets require `<count>2</count>`. A Mirror session does
-not consume a VDD monitor.
+If you change the XML yourself, restart/reload VDD before connecting. A Mirror
+session does not consume a VDD monitor.
 
 ## Connect a receiver
 
