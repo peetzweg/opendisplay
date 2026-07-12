@@ -31,7 +31,11 @@ internal sealed class FfmpegCaptureEncoder(string executable) : IAsyncDisposable
             $"-offset_x {target.Left} -offset_y {target.Top}",
             $"-video_size {target.Width}x{target.Height} -i desktop",
             $"-vf scale={width}:{height}:flags=fast_bilinear",
-            $"-c:v h264_mf -b:v {quality.Bitrate()} -maxrate {quality.Bitrate()}",
+            // h264_mf otherwise defaults to software encoding. Keep NV12,
+            // which is accepted by Media Foundation hardware encoders, and
+            // explicitly require the hardware path rather than silently
+            // falling back to the CPU encoder.
+            $"-c:v h264_mf -hw_encoding 1 -rate_control cbr -scenario display_remoting -b:v {quality.Bitrate()} -maxrate {quality.Bitrate()}",
             "-bf 0 -g 3600 -pix_fmt nv12",
             "-bsf:v h264_metadata=aud=insert -f h264 pipe:1");
 
