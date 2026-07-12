@@ -291,9 +291,14 @@
                  VerticalAlignment="Top" Margin="0,5,10,0" />
         <TextBlock Grid.Column="1" Text="{Binding SystemStatus, Mode=OneWay}"
                    Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
-        <TextBlock Grid.Column="2" Text="Runs in the notification area"
-                   Foreground="{StaticResource TextMutedBrush}" FontSize="11"
-                   Margin="18,1,0,0" VerticalAlignment="Top" />
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="18,0,0,0">
+          <TextBlock Text="Runs in the notification area"
+                     Foreground="{StaticResource TextMutedBrush}" FontSize="11"
+                     VerticalAlignment="Center" />
+          <Button Content="Exit OpenDisplay" Margin="12,0,0,0"
+                  Style="{StaticResource SecondaryButtonStyle}"
+                  Click="ExitButton_Click" />
+        </StackPanel>
       </Grid>
     </Border>
   </Grid>

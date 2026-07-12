@@ -42,4 +42,7 @@ public partial class MainWindow : System.Windows.Window
         Topmost = false;
         Focus();
     }
+
+    private void ExitButton_Click(object sender, RoutedEventArgs e) =>
+        ((App)System.Windows.Application.Current).ExitApplication();
 }
