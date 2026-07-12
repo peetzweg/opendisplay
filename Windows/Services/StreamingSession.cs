@@ -11,7 +11,7 @@ namespace OpenDisplay.Windows.Services;
 internal sealed class StreamingSession : IAsyncDisposable
 {
     private readonly ReceiverEndpoint _endpoint;
-    private readonly CaptureMode _mode;
+    private readonly DisplayTarget? _selectedTarget;
     private readonly StreamQuality _quality;
     private readonly IVirtualDisplayProvider _virtualDisplays;
     private readonly MonitorLocator _monitors;
@@ -23,6 +23,7 @@ internal sealed class StreamingSession : IAsyncDisposable
     private FfmpegCaptureEncoder? _capture;
     private WindowsInputInjector? _input;
     private DisplayTarget? _target;
+    private bool _ownsVirtualDisplay;
     private long _frames;
     private long _bytesThisWindow;
     private long _lastStatsTimestamp = Stopwatch.GetTimestamp();
@@ -41,14 +42,14 @@ internal sealed class StreamingSession : IAsyncDisposable
 
     public StreamingSession(
         ReceiverEndpoint endpoint,
-        CaptureMode mode,
+        DisplayTarget? selectedTarget,
         StreamQuality quality,
         IVirtualDisplayProvider virtualDisplays,
         MonitorLocator monitors,
         string ffmpeg)
     {
         _endpoint = endpoint;
-        _mode = mode;
+        _selectedTarget = selectedTarget;
         _quality = quality;
         _virtualDisplays = virtualDisplays;
         _monitors = monitors;
@@ -60,7 +61,7 @@ internal sealed class StreamingSession : IAsyncDisposable
         try
         {
             Log.Info($"Session {Id} starting: target={_endpoint.Id}, transport={_endpoint.Transport}, " +
-                     $"mode={_mode}, quality={_quality}, endpoint={_endpoint.Address}:{_endpoint.Port}");
+                     $"display={_selectedTarget?.DeviceName ?? "new virtual display"}, quality={_quality}, endpoint={_endpoint.Address}:{_endpoint.Port}");
             StatusChanged?.Invoke($"Connecting to {_endpoint.Address}:{_endpoint.Port}…");
             if (_endpoint.Transport == ReceiverTransport.Adb &&
                 _endpoint.AdbSerial is { Length: > 0 } serial)
@@ -78,15 +79,23 @@ internal sealed class StreamingSession : IAsyncDisposable
             StatusChanged?.Invoke("Connected; waiting for receiver geometry…");
             var hello = await _hello.Task.WaitAsync(TimeSpan.FromSeconds(10), _lifetime.Token);
 
-            _target = _mode == CaptureMode.Extend
-                ? await _virtualDisplays.AcquireAsync(new VirtualDisplayRequest(
+            if (_selectedTarget is null)
+            {
+                _target = await _virtualDisplays.AcquireAsync(new VirtualDisplayRequest(
                     $"OpenDisplay — {hello.Device ?? _endpoint.Name}",
                     Even(hello.PixelsWide), Even(hello.PixelsHigh), 60,
-                    StableSerial(hello.Id ?? _endpoint.Id)), _lifetime.Token)
-                : _monitors.GetPrimary();
+                    StableSerial(hello.Id ?? _endpoint.Id)), _lifetime.Token);
+                _ownsVirtualDisplay = true;
+            }
+            else
+            {
+                _target = _monitors.GetAll().FirstOrDefault(display =>
+                    display.DeviceName.Equals(_selectedTarget.DeviceName, StringComparison.OrdinalIgnoreCase))?.Target
+                    ?? throw new InvalidOperationException(
+                        $"The selected display {_selectedTarget.DeviceName} is no longer available.");
+            }
             _input = new WindowsInputInjector(_target);
-            StatusChanged?.Invoke($"{(_mode == CaptureMode.Extend ? "Extending" : "Mirroring")} " +
-                                  $"{_target.Width}×{_target.Height} via {_target.DeviceName}");
+            StatusChanged?.Invoke($"Sharing {_target.Width}x{_target.Height} via {_target.DeviceName}");
 
             while (!_lifetime.IsCancellationRequested)
             {
@@ -200,7 +209,7 @@ internal sealed class StreamingSession : IAsyncDisposable
     {
         _input?.ReleaseButtons();
         if (_capture is not null) await _capture.DisposeAsync();
-        if (_target is { IsVirtual: true } target) await _virtualDisplays.ReleaseAsync(target);
+        if (_ownsVirtualDisplay && _target is { } target) await _virtualDisplays.ReleaseAsync(target);
         if (_connection is not null) await _connection.DisposeAsync();
         _capture = null;
         _connection = null;

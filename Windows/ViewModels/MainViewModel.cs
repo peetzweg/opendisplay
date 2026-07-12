@@ -6,7 +6,6 @@ using System.Windows.Input;
 using OpenDisplay.Windows.Infrastructure;
 using OpenDisplay.Windows.Models;
 using OpenDisplay.Windows.Services;
-using CaptureMode = OpenDisplay.Windows.Models.CaptureMode;
 
 namespace OpenDisplay.Windows.ViewModels;
 
@@ -26,8 +25,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     private IReadOnlyList<ReceiverEndpoint> _wifiDevices = [];
     private IReadOnlyList<AdbDevice> _adbDevices = [];
     private ReceiverRowViewModel? _selectedReceiver;
+    private DisplaySelection? _selectedDisplay;
     private string _manualHost = string.Empty;
-    private CaptureMode _mode = CaptureMode.Extend;
     private StreamQuality _quality = StreamQuality.Best;
     private string _systemStatus = "Starting…";
     private string _diagnostics = "Diagnostics have not run yet.";
@@ -35,7 +34,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<ReceiverRowViewModel> Receivers { get; } = [];
     public ObservableCollection<SessionViewModel> Sessions { get; } = [];
-    public IReadOnlyList<CaptureMode> Modes { get; } = Enum.GetValues<CaptureMode>();
+    public ObservableCollection<DisplaySelection> Displays { get; } = [];
     public IReadOnlyList<StreamQuality> Qualities { get; } = Enum.GetValues<StreamQuality>();
 
     public ReceiverRowViewModel? SelectedReceiver
@@ -58,13 +57,15 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public CaptureMode Mode
+    public DisplaySelection? SelectedDisplay
     {
-        get => _mode;
+        get => _selectedDisplay;
         set
         {
-            if (!SetProperty(ref _mode, value)) return;
-            OnPropertyChanged(nameof(ModeDescription));
+            if (!SetProperty(ref _selectedDisplay, value)) return;
+            _preferences.DisplaySelectionId = value?.Id;
+            _preferencesStore.Save(_preferences);
+            OnPropertyChanged(nameof(DisplayDescription));
         }
     }
 
@@ -78,9 +79,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public string ModeDescription => Mode == CaptureMode.Extend
-        ? "Creates an additional Windows display. Requires Virtual Display Driver."
-        : "Copies your primary display. A virtual display is not required.";
+    public string DisplayDescription => SelectedDisplay?.Description ??
+        "Choose an existing display to share, or create one for the receiver.";
 
     public string QualityDescription => Quality switch
     {
@@ -93,6 +93,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     public string LogFilePath => Log.FilePath;
     public bool AdbAvailable { get => _adbAvailable; private set => SetProperty(ref _adbAvailable, value); }
     public Visibility AdbMissingVisibility => AdbAvailable ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility EmptyReceiversVisibility => Receivers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     public Visibility EmptySessionsVisibility => Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
     public ICommand RefreshCommand { get; }
@@ -145,6 +146,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     {
         _discovery.Start();
         _adbWatcher.Start();
+        RefreshDisplays();
         var encoder = _ffmpeg.Find();
         SystemStatus = encoder is null
             ? "FFmpeg not found. Put ffmpeg.exe beside OpenDisplay.exe, on PATH, or set OPENDISPLAY_FFMPEG."
@@ -186,6 +188,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     {
         SystemStatus = "Searching for WiFi and ADB receivers…";
         await Task.WhenAll(_discovery.RefreshAsync(), _adbWatcher.RefreshAsync());
+        RefreshDisplays();
     }
 
     private async Task ConnectDeviceAsync(ReceiverRowViewModel receiver)
@@ -234,7 +237,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         Log.Info($"Connecting to {endpoint.Id} via {endpoint.TransportLabel}");
-        var session = new StreamingSession(endpoint, Mode, Quality,
+        var display = SelectedDisplay ?? DisplaySelection.CreateNewVirtualDisplay();
+        var session = new StreamingSession(endpoint, display.Target, Quality,
             _virtualDisplays, _monitors, executable);
         var viewModel = new SessionViewModel(session);
         viewModel.DisconnectRequested += Disconnect;
@@ -242,7 +246,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         viewModel.Failed += OnSessionFailed;
         viewModel.HelloReceived += OnSessionHello;
         Sessions.Add(viewModel);
-        SystemStatus = $"Starting {Mode.ToString().ToLowerInvariant()} session for {endpoint.Name} over {endpoint.TransportLabel}.";
+        SystemStatus = $"Starting {display.Name.ToLowerInvariant()} for {endpoint.Name} over {endpoint.TransportLabel}.";
         _ = viewModel.RunAsync();
         return Task.CompletedTask;
     }
@@ -374,6 +378,44 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         Receivers.Clear();
         foreach (var receiver in rebuilt) Receivers.Add(receiver);
         SelectedReceiver = Receivers.FirstOrDefault(receiver => receiver.Id == previous) ?? Receivers.FirstOrDefault();
+        OnPropertyChanged(nameof(EmptyReceiversVisibility));
+    }
+
+    private void RefreshDisplays()
+    {
+        var selectedId = SelectedDisplay?.Id ?? _preferences.DisplaySelectionId;
+        var displays = new List<DisplaySelection> { DisplaySelection.CreateNewVirtualDisplay() };
+        try
+        {
+            displays.AddRange(_monitors.GetAll()
+                .OrderByDescending(display => display.IsPrimary)
+                .ThenBy(display => display.DeviceName)
+                .Select(display => new DisplaySelection(
+                    $"display:{display.DeviceName}",
+                    DisplayName(display),
+                    $"{display.Target.Width} x {display.Target.Height}" +
+                    (display.IsPrimary ? " - Primary display" : display.Target.IsVirtual ? " - Virtual display" : string.Empty),
+                    display.Target)));
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Could not enumerate displays", ex);
+            SystemStatus = $"Could not enumerate displays: {ex.Message}";
+        }
+
+        Displays.Clear();
+        foreach (var display in displays) Displays.Add(display);
+        SelectedDisplay = Displays.FirstOrDefault(display => display.Id == selectedId)
+            ?? Displays.First();
+    }
+
+    private static string DisplayName(MonitorLocator.WindowsMonitor display)
+    {
+        var name = string.IsNullOrWhiteSpace(display.FriendlyName)
+            ? display.DeviceName
+            : display.FriendlyName;
+        var label = $"{name} ({display.DeviceName})";
+        return display.IsPrimary ? $"Primary - {label}" : label;
     }
 
     private void ToggleConnection(ReceiverRowViewModel receiver)

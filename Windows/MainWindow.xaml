@@ -62,53 +62,91 @@
                       Command="{Binding RefreshCommand, Mode=OneWay}" />
             </Grid>
 
-            <StackPanel Grid.Row="1" Margin="0,16,0,0">
-              <Grid Margin="12,0,12,5">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="*" />
-                  <ColumnDefinition Width="120" />
-                  <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="DEVICE" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
-                <TextBlock Grid.Column="1" Text="TRANSPORT" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
-                <TextBlock Grid.Column="2" Text="ACTION" Style="{StaticResource SecondaryTextStyle}" FontSize="10" />
+            <Border Grid.Row="1" Margin="0,16,0,0" MinHeight="76"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="6" Background="{StaticResource SubtleBackgroundBrush}">
+              <Grid>
+                <ListBox ItemsSource="{Binding Receivers, Mode=OneWay}"
+                         SelectedItem="{Binding SelectedReceiver, Mode=TwoWay}"
+                         BorderThickness="0" Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                  <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                      <Setter Property="Padding" Value="0" />
+                      <Setter Property="Background" Value="Transparent" />
+                      <Setter Property="Template">
+                        <Setter.Value>
+                          <ControlTemplate TargetType="ListBoxItem">
+                            <Border x:Name="Row" Background="{TemplateBinding Background}"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                              <ContentPresenter />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                              <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                              </Trigger>
+                              <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="#EEF3F9" />
+                              </Trigger>
+                            </ControlTemplate.Triggers>
+                          </ControlTemplate>
+                        </Setter.Value>
+                      </Setter>
+                    </Style>
+                  </ListBox.ItemContainerStyle>
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <Grid Margin="14,10">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto" />
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Ellipse Width="9" Height="9" Fill="{Binding StatusBrush, Mode=OneWay}"
+                                 VerticalAlignment="Top" Margin="0,6,10,0" />
+                        <StackPanel Grid.Column="1" MinWidth="0">
+                          <TextBlock Text="{Binding Name, Mode=OneWay}" FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Style="{StaticResource SecondaryTextStyle}" Margin="0,3,0,0"
+                                     TextTrimming="CharacterEllipsis">
+                            <Run Text="{Binding TransportLabel, Mode=OneWay}" />
+                            <Run Text="  ·  " />
+                            <Run Text="{Binding Status, Mode=OneWay}" />
+                          </TextBlock>
+                          <TextBlock Text="{Binding Activity, Mode=OneWay}" FontSize="11"
+                                     Foreground="{StaticResource TextMutedBrush}" Margin="0,4,0,0">
+                            <TextBlock.Style>
+                              <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding Session, Mode=OneWay}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </TextBlock.Style>
+                          </TextBlock>
+                        </StackPanel>
+                        <Button Grid.Column="2" Content="{Binding ActionLabel, Mode=OneWay}" MinWidth="88"
+                                Margin="14,0,0,0" Style="{StaticResource SecondaryButtonStyle}"
+                                IsEnabled="{Binding CanToggle, Mode=OneWay}"
+                                Command="{Binding ActionCommand, Mode=OneWay}"
+                                VerticalAlignment="Center" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding EmptyReceiversVisibility, Mode=OneWay}">
+                  <TextBlock Text="No receivers found" Foreground="{StaticResource TextSecondaryBrush}"
+                             HorizontalAlignment="Center" />
+                  <TextBlock Text="Open OpenDisplay on a device, then refresh or add its address."
+                             Style="{StaticResource SecondaryTextStyle}" FontSize="11"
+                             Margin="0,3,0,0" HorizontalAlignment="Center" />
+                </StackPanel>
               </Grid>
-              <ListView MinHeight="62"
-                      ItemsSource="{Binding Receivers, Mode=OneWay}"
-                      SelectedItem="{Binding SelectedReceiver, Mode=TwoWay}"
-                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                      Background="Transparent">
-              <ListView.ItemContainerStyle>
-                <Style TargetType="ListViewItem">
-                  <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                  <Setter Property="Padding" Value="0" />
-                </Style>
-              </ListView.ItemContainerStyle>
-              <ListView.ItemTemplate>
-                <DataTemplate>
-                  <Grid Margin="12,8">
-                    <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="*" />
-                      <ColumnDefinition Width="120" />
-                      <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="{Binding Name, Mode=OneWay}" FontWeight="SemiBold"
-                               VerticalAlignment="Center" />
-                    <StackPanel Grid.Column="1">
-                      <TextBlock Text="{Binding TransportLabel, Mode=OneWay}"
-                               Style="{StaticResource SecondaryTextStyle}" VerticalAlignment="Center" />
-                      <TextBlock Text="{Binding Status, Mode=OneWay}"
-                                 Style="{StaticResource SecondaryTextStyle}" FontSize="11" />
-                    </StackPanel>
-                    <Button Grid.Column="2" Content="{Binding ActionLabel, Mode=OneWay}" MinWidth="82"
-                            Style="{StaticResource SecondaryButtonStyle}"
-                            IsEnabled="{Binding CanToggle, Mode=OneWay}"
-                            Command="{Binding ActionCommand, Mode=OneWay}" />
-                  </Grid>
-                </DataTemplate>
-              </ListView.ItemTemplate>
-            </ListView>
-            </StackPanel>
+            </Border>
 
             <StackPanel Grid.Row="2" Margin="0,8,0,0">
               <TextBlock Text="Devices on USB or this Wi-Fi network appear automatically."
@@ -190,10 +228,11 @@
               <Border Grid.Column="0" Background="{StaticResource SubtleBackgroundBrush}"
                       CornerRadius="6" Padding="12">
                 <StackPanel>
-                  <TextBlock Text="Display mode" FontWeight="SemiBold" />
-                  <ComboBox ItemsSource="{Binding Modes, Mode=OneWay}"
-                            SelectedItem="{Binding Mode, Mode=TwoWay}" Margin="0,8,0,0" />
-                  <TextBlock Text="{Binding ModeDescription, Mode=OneWay}"
+                  <TextBlock Text="Display to share" FontWeight="SemiBold" />
+                  <ComboBox ItemsSource="{Binding Displays, Mode=OneWay}"
+                            SelectedItem="{Binding SelectedDisplay, Mode=TwoWay}"
+                            DisplayMemberPath="Name" Margin="0,8,0,0" />
+                  <TextBlock Text="{Binding DisplayDescription, Mode=OneWay}"
                              Style="{StaticResource SecondaryTextStyle}"
                              TextWrapping="Wrap" Margin="0,7,0,0" />
                 </StackPanel>

@@ -38,7 +38,7 @@ HARDWARECURSOR true|false
 SETGPU "<friendly name>"
 ```
 
-OpenDisplay sends `PING` as a presence probe. When an Extend receiver needs a
+OpenDisplay sends `PING` as a presence probe. When a receiver requests a new virtual display and needs a
 mode or output that does not yet exist, it appends the receiver's exact
 width/height/refresh tuple to the settings XML and then uses `RELOAD_DRIVER`.
 When an extra output is needed, it uses `SETDISPLAYCOUNT N`, which persists the
@@ -68,7 +68,7 @@ receiver-native mode requires editing the XML and restarting/reloading VDD.
 
 `SETDISPLAYCOUNT` edits the XML and invokes the global adapter reload path.
 OpenDisplay uses it only before it owns a VDD output; it refuses to reload VDD
-while another OpenDisplay Extend session is active because:
+while another OpenDisplay virtual-display session is active because:
 
 - it persists a product-wide setting rather than leasing one monitor;
 - re-enumeration can rearrange the user's desktop;

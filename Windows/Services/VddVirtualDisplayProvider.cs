@@ -26,7 +26,7 @@ internal sealed class VddVirtualDisplayProvider(
     {
         if (!await _pipe.IsAvailableAsync(cancellationToken))
             throw new InvalidOperationException(
-                "Virtual Display Driver is not running. Install/enable VirtualDrivers/Virtual-Display-Driver before using Extend mode.");
+                "Virtual Display Driver is not running. Install/enable VirtualDrivers/Virtual-Display-Driver before creating a new virtual display.");
 
         var selected = ClaimActiveOutput();
         if (selected is null)

@@ -29,7 +29,7 @@ internal sealed class MonitorLocator
             if (!EnumDisplaySettingsEx(adapter.DeviceName, EnumCurrentSettings, ref mode, 0)) continue;
             result.Add(new WindowsMonitor(
                 adapter.DeviceName,
-                adapter.DeviceString,
+                GetFriendlyName(adapter),
                 adapter.DeviceID,
                 (adapter.StateFlags & DisplayDevicePrimary) != 0,
                 true,
@@ -68,7 +68,7 @@ internal sealed class MonitorLocator
             var active = (adapter.StateFlags & DisplayDeviceActive) != 0;
             result.Add(new WindowsMonitor(
                 adapter.DeviceName,
-                adapter.DeviceString,
+                GetFriendlyName(adapter),
                 adapter.DeviceID,
                 (adapter.StateFlags & DisplayDevicePrimary) != 0,
                 active,
@@ -113,6 +113,15 @@ internal sealed class MonitorLocator
             result = ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
         error = result == DispChangeSuccessful ? string.Empty : $"ChangeDisplaySettingsEx returned {result}.";
         return result == DispChangeSuccessful;
+    }
+
+    private static string GetFriendlyName(DISPLAY_DEVICE adapter)
+    {
+        var monitor = DISPLAY_DEVICE.Create();
+        return EnumDisplayDevices(adapter.DeviceName, 0, ref monitor, 0) &&
+               !string.IsNullOrWhiteSpace(monitor.DeviceString)
+            ? monitor.DeviceString
+            : adapter.DeviceString;
     }
 
     private static bool IsVdd(DISPLAY_DEVICE adapter)

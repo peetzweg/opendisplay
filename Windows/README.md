@@ -31,9 +31,9 @@ VirtualDrivers/Virtual-Display-Driver (VDD / IddCx / UMDF 2)
   creates the real extended Windows monitor captured by the app
 ```
 
-Mirror mode captures the primary physical monitor and does not require VDD.
-Extend mode automatically creates or enables a VDD monitor, adds the
-receiver's native pixel dimensions to VDD, and captures that monitor.
+Choose any active Windows display by name to share it. Alternatively, choose
+**Create a new virtual display** and OpenDisplay will create or enable a VDD
+monitor sized to the receiver's native pixel dimensions.
 
 ## Prerequisites
 
@@ -47,12 +47,15 @@ You need the following on the Windows sender PC:
    project. A packaged release will only need the .NET Desktop Runtime, unless
    it is published self-contained.
 4. **FFmpeg** with all three of these components:
-   `gdigrab`, the Media Foundation `h264_mf` encoder, and the `h264_metadata`
-   bitstream filter. Put `ffmpeg.exe` beside `OpenDisplay.exe`, put it on
-   `PATH`, or set `OPENDISPLAY_FFMPEG` to its full path.
-5. **Virtual Display Driver for Extend mode.** Install a signed release of
-   [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver).
-   Mirror mode does not need VDD.
+   `gdigrab`, the Media Foundation `h264_mf` encoder with its `hw_encoding`
+   option, and the `h264_metadata` bitstream filter. OpenDisplay explicitly
+   requires Media Foundation hardware H.264 encoding; it will not silently
+   fall back to the CPU encoder. Put `ffmpeg.exe` beside `OpenDisplay.exe`, put
+   it on `PATH`, or set `OPENDISPLAY_FFMPEG` to its full path.
+5. **Virtual Display Driver for new virtual displays.** Install a signed
+   release of [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
+   when using **Create a new virtual display**. Sharing an existing display
+   does not need VDD.
 6. **Android Platform Tools for Android USB.** `adb.exe` is optional for WiFi
    and manual connections. OpenDisplay searches `ANDROID_SDK_ROOT`,
    `ANDROID_HOME`, `%LOCALAPPDATA%\Android\Sdk\platform-tools`, and `PATH`.
@@ -62,6 +65,7 @@ Check the FFmpeg features from PowerShell:
 ```powershell
 ffmpeg -hide_banner -devices | Select-String gdigrab
 ffmpeg -hide_banner -encoders | Select-String h264_mf
+ffmpeg -hide_banner -h encoder=h264_mf | Select-String hw_encoding
 ffmpeg -hide_banner -bsfs | Select-String h264_metadata
 ```
 
@@ -81,14 +85,15 @@ VDD reads its monitor count and available modes from:
 C:\VirtualDisplayDriver\vdd_settings.xml
 ```
 
-OpenDisplay manages VDD outputs on demand. When a receiver connects in Extend
-mode, it adds the receiver's native resolution and creates an additional VDD
-output if none is available. The output remains in VDD after the session ends,
-so a later connection can start without reloading the driver.
+OpenDisplay manages VDD outputs on demand. When a receiver connects after you
+choose **Create a new virtual display**, it adds the receiver's native
+resolution and creates an additional VDD output if none is available. The
+output remains in VDD after the session ends, so a later connection can start
+without reloading the driver.
 
 The first automatic setup changes this XML and reloads VDD. Windows may briefly
 rearrange displays while the driver is re-enumerated. OpenDisplay never reloads
-VDD while one of its Extend sessions is active; for concurrent receivers,
+VDD while one of its virtual-display sessions is active; for concurrent receivers,
 connect them after an unused VDD output exists or configure additional outputs
 in advance.
 
@@ -112,8 +117,8 @@ You can still configure modes manually, for example:
 </resolutions>
 ```
 
-If you change the XML yourself, restart/reload VDD before connecting. A Mirror
-session does not consume a VDD monitor.
+If you change the XML yourself, restart/reload VDD before connecting. Sharing
+an existing display does not consume a VDD monitor.
 
 ## Connect a receiver
 
@@ -132,7 +137,8 @@ macOS application artwork from `Mac/Assets.xcassets/AppIcon.appiconset`.
 1. Put the Windows PC and receiver on the same local network.
 2. Open the OpenDisplay receiver app and keep it in the foreground.
 3. Start the Windows app. The device should appear with a `WiFi` label.
-4. Select Mirror or Extend, choose a quality preset, and click **Connect**.
+4. Choose a Windows display to share, or **Create a new virtual display**,
+   choose a quality preset, and click **Connect**.
 
 Discovery uses `_opensidecar._tcp.local` multicast DNS. Guest networks, VPNs,
 and enterprise WiFi can filter multicast; use Manual mode in that case.
@@ -317,24 +323,24 @@ process exceptions are also logged. A fatal-error dialog includes the log path
 before the application closes.
 
 When reporting a crash, include `OpenDisplay.log`, the expanded Diagnostics
-text, the selected Mirror/Extend mode, and whether the receiver used WiFi, ADB,
+text, the selected display target, and whether the receiver used WiFi, ADB,
 or a manual address. Screen contents are not written to the log.
 
 Recommended first validation sequence:
 
 1. Build with nullable warnings enabled and fix any Windows SDK projection or
    P/Invoke layout issues found by the compiler.
-2. Start in Mirror mode with the receiver on WiFi.
+2. Start by sharing an existing display with the receiver on WiFi.
 3. Verify mDNS discovery and manual IPv4, DNS, and IPv6 parsing.
 4. Verify authorized, unauthorized, offline, attach, detach, and multiple-device
    ADB behavior, including forward cleanup on exit.
 5. Validate H.264 compatibility with both iOS and Android receivers.
-6. Install VDD, add the exact receiver resolutions, then test Extend mode.
+6. Install VDD, add the exact receiver resolutions, then test creating a new virtual display.
 7. Measure capture, encode, network, decode, and input latency.
 
 ## What is implemented
 
-- WPF control window with receiver, mode, quality, and multi-session UI
+- WPF control window with receiver, display target, quality, and multi-session UI
 - `_opensidecar._tcp.local` multicast-DNS discovery without a NuGet dependency
 - Manual IPv4, DNS, bracketed IPv6, and bare IPv6 targets, with persistence
 - Android ADB discovery, device-state UI, per-device dynamic port forwarding,
@@ -343,8 +349,8 @@ Recommended first validation sequence:
 - Receiver `hello`, touch, scroll, keyframe, and ping/pong handling
 - VDD named-pipe probe using the upstream pipe and UTF-16 command format
 - Detection and reservation of active VDD monitor outputs
-- Display mode selection through `ChangeDisplaySettingsEx`
-- Primary-monitor mirror target
+- Existing-display selection and virtual-display provisioning through `ChangeDisplaySettingsEx`
+- Existing-display selection or receiver-sized virtual-display provisioning
 - FFmpeg `gdigrab` capture and Media Foundation `h264_mf` encoding
 - H.264 access-unit parsing using inserted AUD NAL units
 - Windows mouse injection using `SetCursorPos` and `SendInput`

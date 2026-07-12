@@ -32,6 +32,7 @@ internal sealed class DependencyDiagnostics(
             report.AppendLine($"[OK] FFmpeg: {ffmpegPath}");
             await AppendFfmpegCheckAsync(report, ffmpegPath, "gdigrab", ["-hide_banner", "-devices"], cancellationToken);
             await AppendFfmpegCheckAsync(report, ffmpegPath, "h264_mf", ["-hide_banner", "-encoders"], cancellationToken);
+            await AppendFfmpegCheckAsync(report, ffmpegPath, "hw_encoding", ["-hide_banner", "-h", "encoder=h264_mf"], cancellationToken);
             await AppendFfmpegCheckAsync(report, ffmpegPath, "h264_metadata", ["-hide_banner", "-bsfs"], cancellationToken);
         }
 
@@ -42,7 +43,7 @@ internal sealed class DependencyDiagnostics(
             report.AppendLine($"[OK] Active Windows displays: {all.Count}");
             report.AppendLine(virtualDisplays.Length > 0
                 ? $"[OK] Active VDD outputs: {virtualDisplays.Length} ({string.Join(", ", virtualDisplays.Select(x => x.DeviceName))})"
-                : "[MISSING for Extend] No active Virtual Display Driver output. Mirror mode can still work.");
+                : "[INFO] No active VDD output. You can still select an existing Windows display to share.");
         }
         catch (Exception ex)
         {
@@ -54,7 +55,7 @@ internal sealed class DependencyDiagnostics(
             var available = await vddPipe.IsAvailableAsync(cancellationToken);
             report.AppendLine(available
                 ? "[OK] VDD control pipe: MTTVirtualDisplayPipe"
-                : "[MISSING for Extend] VDD control pipe is unavailable. Mirror mode can still work.");
+                : "[INFO] VDD control pipe is unavailable. You can still select an existing Windows display to share.");
         }
         catch (Exception ex)
         {

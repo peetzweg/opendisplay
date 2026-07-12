@@ -30,8 +30,7 @@ internal sealed class SessionViewModel : ObservableObject
     public string? ReceiverId { get => _receiverId; private set => SetProperty(ref _receiverId, value); }
     public string Name => _session.Name;
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
-    public MediaBrush StatusBrush => Status.StartsWith("Extending", StringComparison.OrdinalIgnoreCase) ||
-                                     Status.StartsWith("Mirroring", StringComparison.OrdinalIgnoreCase)
+    public MediaBrush StatusBrush => Status.StartsWith("Sharing", StringComparison.OrdinalIgnoreCase)
         ? MediaBrushes.SeaGreen
         : Status.StartsWith("Stopped", StringComparison.OrdinalIgnoreCase)
             ? MediaBrushes.IndianRed

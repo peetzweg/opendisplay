@@ -34,7 +34,6 @@
     <Compile Include="Infrastructure\Log.cs" />
     <Compile Include="Infrastructure\TrayIconService.cs" />
     <Compile Include="Models\AdbDevice.cs" />
-    <Compile Include="Models\CaptureMode.cs" />
     <Compile Include="Models\DisplayTarget.cs" />
     <Compile Include="Models\ReceiverEndpoint.cs" />
     <Compile Include="Models\ReceiverHello.cs" />
@@ -58,6 +57,7 @@
     <Compile Include="Services\VddVirtualDisplayProvider.cs" />
     <Compile Include="Services\WindowsInputInjector.cs" />
     <Compile Include="ViewModels\MainViewModel.cs" />
+    <Compile Include="ViewModels\DisplaySelection.cs" />
     <Compile Include="ViewModels\ReceiverRowViewModel.cs" />
     <Compile Include="ViewModels\SessionViewModel.cs" />
 

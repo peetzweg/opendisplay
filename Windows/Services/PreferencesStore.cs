@@ -44,4 +44,5 @@ internal sealed record Preferences
 {
     public HashSet<string> ManualEndpoints { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> AdbReceiverIds { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public string? DisplaySelectionId { get; set; }
 }
