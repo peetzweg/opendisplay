@@ -21,12 +21,11 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     private readonly PreferencesStore _preferencesStore;
     private readonly DependencyDiagnostics _dependencyDiagnostics;
     private readonly Preferences _preferences;
-    private readonly AsyncRelayCommand _connectDeviceCommand;
     private readonly AsyncRelayCommand _addManualCommand;
     private readonly RelayCommand _forgetManualCommand;
     private IReadOnlyList<ReceiverEndpoint> _wifiDevices = [];
     private IReadOnlyList<AdbDevice> _adbDevices = [];
-    private ReceiverEndpoint? _selectedDevice;
+    private ReceiverRowViewModel? _selectedReceiver;
     private string _manualHost = string.Empty;
     private CaptureMode _mode = CaptureMode.Extend;
     private StreamQuality _quality = StreamQuality.Best;
@@ -34,17 +33,17 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     private string _diagnostics = "Diagnostics have not run yet.";
     private bool _adbAvailable;
 
-    public ObservableCollection<ReceiverEndpoint> Devices { get; } = [];
+    public ObservableCollection<ReceiverRowViewModel> Receivers { get; } = [];
     public ObservableCollection<SessionViewModel> Sessions { get; } = [];
     public IReadOnlyList<CaptureMode> Modes { get; } = Enum.GetValues<CaptureMode>();
     public IReadOnlyList<StreamQuality> Qualities { get; } = Enum.GetValues<StreamQuality>();
 
-    public ReceiverEndpoint? SelectedDevice
+    public ReceiverRowViewModel? SelectedReceiver
     {
-        get => _selectedDevice;
+        get => _selectedReceiver;
         set
         {
-            if (!SetProperty(ref _selectedDevice, value)) return;
+            if (!SetProperty(ref _selectedReceiver, value)) return;
             _forgetManualCommand.RaiseCanExecuteChanged();
         }
     }
@@ -97,7 +96,6 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     public Visibility EmptySessionsVisibility => Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
     public ICommand RefreshCommand { get; }
-    public ICommand ConnectDeviceCommand => _connectDeviceCommand;
     public ICommand AddManualCommand => _addManualCommand;
     public ICommand ForgetManualCommand => _forgetManualCommand;
     public ICommand RefreshDiagnosticsCommand { get; }
@@ -123,15 +121,12 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         _dependencyDiagnostics = dependencyDiagnostics;
         _preferences = preferencesStore.Load();
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
-        _connectDeviceCommand = new AsyncRelayCommand(ConnectDeviceAsync,
-            parameter => parameter is ReceiverEndpoint endpoint && endpoint.IsReady &&
-                         !Sessions.Any(session => session.TargetId == endpoint.Id));
         _addManualCommand = new AsyncRelayCommand(AddManualAsync,
             () => !string.IsNullOrWhiteSpace(ManualHost));
         RefreshDiagnosticsCommand = new AsyncRelayCommand(RefreshDiagnosticsAsync);
         OpenLogCommand = new RelayCommand(OpenLog);
         _forgetManualCommand = new RelayCommand(ForgetSelectedManual,
-            () => SelectedDevice?.Transport == ReceiverTransport.Manual);
+            () => SelectedReceiver?.Endpoint.Transport == ReceiverTransport.Manual);
         discovery.DevicesChanged += OnWifiDevicesChanged;
         discovery.Error += error => Dispatch(() =>
         {
@@ -142,7 +137,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         Sessions.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(EmptySessionsVisibility));
-            _connectDeviceCommand.RaiseCanExecuteChanged();
+            RebuildDevices();
         };
     }
 
@@ -193,9 +188,10 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
         await Task.WhenAll(_discovery.RefreshAsync(), _adbWatcher.RefreshAsync());
     }
 
-    private async Task ConnectDeviceAsync(object? parameter)
+    private async Task ConnectDeviceAsync(ReceiverRowViewModel receiver)
     {
-        if (parameter is not ReceiverEndpoint { IsReady: true } endpoint) return;
+        if (!receiver.IsReady) return;
+        var endpoint = receiver.Endpoint;
         if (endpoint.Transport == ReceiverTransport.Manual)
         {
             try { endpoint = await ManualEndpointParser.ParseAsync(endpoint.Name); }
@@ -273,7 +269,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 
     private void ForgetSelectedManual()
     {
-        if (SelectedDevice is not { Transport: ReceiverTransport.Manual } endpoint) return;
+        if (SelectedReceiver?.Endpoint is not { Transport: ReceiverTransport.Manual } endpoint) return;
         _preferences.ManualEndpoints.RemoveWhere(value =>
         {
             try
@@ -327,7 +323,7 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
 
     private void RebuildDevices(string? selectId = null)
     {
-        var previous = selectId ?? SelectedDevice?.Id;
+        var previous = selectId ?? SelectedReceiver?.Id;
         var combined = new List<ReceiverEndpoint>();
         combined.AddRange(_adbDevices.Select(device => device.ToEndpoint()));
         var adbReceiverIds = _adbDevices
@@ -349,9 +345,45 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
             catch (FormatException) { }
         }
 
-        Devices.Clear();
-        foreach (var device in combined.DistinctBy(device => device.Id)) Devices.Add(device);
-        SelectedDevice = Devices.FirstOrDefault(device => device.Id == previous) ?? Devices.FirstOrDefault();
+        var endpoints = combined.DistinctBy(device => device.Id).ToList();
+        foreach (var session in Sessions.Where(session => endpoints.All(device => device.Id != session.TargetId)))
+        {
+            endpoints.Add(new ReceiverEndpoint(session.TargetId, session.Name,
+                System.Net.IPAddress.None, 0, session.ReceiverId, session.Transport));
+        }
+
+        var existing = Receivers.ToDictionary(receiver => receiver.Id, StringComparer.OrdinalIgnoreCase);
+        var rebuilt = new List<ReceiverRowViewModel>();
+        foreach (var endpoint in endpoints)
+        {
+            var session = Sessions.FirstOrDefault(candidate => candidate.TargetId == endpoint.Id);
+            if (existing.Remove(endpoint.Id, out var receiver))
+            {
+                receiver.Update(endpoint, session);
+                rebuilt.Add(receiver);
+            }
+            else
+            {
+                var newReceiver = new ReceiverRowViewModel(endpoint, ToggleConnection);
+                newReceiver.Update(endpoint, session);
+                rebuilt.Add(newReceiver);
+            }
+        }
+        foreach (var removed in existing.Values) removed.Dispose();
+
+        Receivers.Clear();
+        foreach (var receiver in rebuilt) Receivers.Add(receiver);
+        SelectedReceiver = Receivers.FirstOrDefault(receiver => receiver.Id == previous) ?? Receivers.FirstOrDefault();
+    }
+
+    private void ToggleConnection(ReceiverRowViewModel receiver)
+    {
+        if (receiver.Session is { } session)
+        {
+            Disconnect(session);
+            return;
+        }
+        _ = ConnectDeviceAsync(receiver);
     }
 
     private static void Dispatch(Action action)
@@ -365,6 +397,8 @@ internal sealed class MainViewModel : ObservableObject, IDisposable
     {
         foreach (var session in Sessions.ToArray()) session.Stop();
         Sessions.Clear();
+        foreach (var receiver in Receivers) receiver.Dispose();
+        Receivers.Clear();
         _adbWatcher.Dispose();
     }
 }

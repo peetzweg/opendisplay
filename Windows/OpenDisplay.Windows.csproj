@@ -58,6 +58,7 @@
     <Compile Include="Services\VddVirtualDisplayProvider.cs" />
     <Compile Include="Services\WindowsInputInjector.cs" />
     <Compile Include="ViewModels\MainViewModel.cs" />
+    <Compile Include="ViewModels\ReceiverRowViewModel.cs" />
     <Compile Include="ViewModels\SessionViewModel.cs" />
 
     <ApplicationDefinition Include="App.xaml">
