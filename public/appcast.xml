@@ -3,12 +3,12 @@
     <channel>
         <title>OpenDisplay</title>
         <item>
-            <title>0.11.0</title>
-            <pubDate>Tue, 07 Jul 2026 16:46:08 +0000</pubDate>
-            <sparkle:version>103</sparkle:version>
-            <sparkle:shortVersionString>0.11.0</sparkle:shortVersionString>
+            <title>1.12.0</title>
+            <pubDate>Mon, 13 Jul 2026 07:25:24 +0000</pubDate>
+            <sparkle:version>113</sparkle:version>
+            <sparkle:shortVersionString>1.12.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/peetzweg/opendisplay/releases/download/v0.11.0/OpenDisplay.dmg" length="1911558" type="application/octet-stream" sparkle:edSignature="TgFgms7SUnZ18Brq5ADo9zDAVmdQpi0b0bk4KsCen0z6UIx4VL41wptkIMX1kN75aAOXZyhEmaA7PYSpJuMOAA=="/>
+            <enclosure url="https://github.com/peetzweg/opendisplay/releases/download/v1.12.0/OpenDisplay.dmg" length="1934401" type="application/octet-stream" sparkle:edSignature="1onTWr4/RY0ymqV7d2vDN7xC8yFxVdftJKG9OF7z0iCx1xqnPeL5tGw46qE5fFwjtL1JJZqZmU1TrVFAO6VmDA=="/>
         </item>
     </channel>
 </rss>
