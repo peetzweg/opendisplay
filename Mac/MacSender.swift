@@ -147,6 +147,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // is half-open (e.g. usbmuxd accepted but the device is gone) — reconnect.
     private var lastReceived = Date()
     private var dropsTotal = 0
+    // Rejected encodes (output handler status != noErr or nil buffer) —
+    // counted so failures can be logged rate-limited instead of flooding.
+    private var encodeFailures = 0
 
     // Local cursor echo: a cursor baked into the video carries the full
     // capture→encode→stream→display latency (~30ms perceived). Instead we
@@ -959,7 +962,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             frameProperties: frameProperties,
             infoFlagsOut: nil
         ) { [weak self] status, _, buffer in
-            guard status == noErr, let buffer, let self else { return }
+            guard let self else { return }
+            if status != noErr || buffer == nil {
+                // Encode failures must not be silent: a session that rejects
+                // EVERY frame looks exactly like a healthy-but-idle pipeline
+                // in all the other counters. Real example: H.264 has a hard
+                // level-5.2 pixel-rate ceiling (~535M luma samples/s), and
+                // VideoToolbox rejects each frame above it with noErr + a
+                // nil buffer — zero output, no error anywhere.
+                self.encodeFailures += 1
+                if self.encodeFailures % 120 == 1 {
+                    Log.info("encode output failed: status=\(status) buffer=\(buffer != nil) (\(self.encodeFailures) total)")
+                }
+                return
+            }
+            guard let buffer else { return }
             if let data = self.annexB(from: buffer) {
                 // Telemetry prefix before the first start code — the receiver
                 // parses it and skips to the H.264 payload. cap = capture time,
