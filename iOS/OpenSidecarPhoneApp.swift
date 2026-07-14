@@ -104,6 +104,17 @@ struct ReceiverScreen: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(receiver: model.receiver)
         }
+        // USB trust bootstrap confirmation (interactive dismiss = Deny).
+        // Programmatic clearing (bootstrap conn death) sets pendingTrust to
+        // nil directly on main and does NOT invoke this setter.
+        .sheet(item: Binding(
+            get: { model.receiver.pendingTrust },
+            set: { if $0 == nil { model.receiver.resolveTrust(allow: false) } }
+        )) { request in
+            TrustConfirmationView(request: request,
+                                  allow: { model.receiver.resolveTrust(allow: true) },
+                                  deny:  { model.receiver.resolveTrust(allow: false) })
+        }
         // Below the force floor → blocking gate. Setter is a no-op: the user
         // cannot dismiss it, only update.
         .fullScreenCover(item: Binding(get: { requiredUpdate }, set: { _ in })) { update in
@@ -138,6 +149,10 @@ struct ReceiverScreen: View {
             }
         }
         .onAppear {
+            if !UserDefaults.standard.bool(forKey: WireCrypto.trustStoreInitializedDefaultsKey) {
+                TrustStore.shared.purgeAll()
+                UserDefaults.standard.set(true, forKey: WireCrypto.trustStoreInitializedDefaultsKey)
+            }
             UIApplication.shared.isIdleTimerDisabled = true
             model.start()
             // Show the first-run hint unless the device has connected before
@@ -276,6 +291,81 @@ struct OnboardingView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - USB trust bootstrap confirmation (SEV-4 hardening)
+
+/// Confirmation sheet for a USB trust offer. The fingerprint is the PRIMARY
+/// identity — it's the only value that's cryptographically tied to the
+/// Mac's actual key; the Mac's self-reported name is decorative.
+struct TrustConfirmationView: View {
+    let request: TrustRequest
+    let allow: () -> Void
+    let deny: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                Spacer()
+
+                Text("Allow this Mac to connect over Wi-Fi?")
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                VStack(spacing: 6) {
+                    Text(request.fingerprint)
+                        .font(.system(.title2, design: .monospaced).bold())
+                        .multilineTextAlignment(.center)
+                    Text("Verify this key fingerprint matches the Mac")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(spacing: 4) {
+                    Text(request.macName)
+                        .font(.body)
+                    Text("Name reported by the device (unverified)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if request.isIdentityChange {
+                    Text("This Mac's identity is different from the last time — this can happen when the app was reinstalled. If you didn't expect this, don't allow.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                        .padding(12)
+                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal)
+                }
+
+                Spacer()
+
+                VStack(spacing: 12) {
+                    Button("Allow") {
+                        allow()
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+
+                    Button("Don't Allow") {
+                        deny()
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 24)
+            }
+            .padding(.top, 12)
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .interactiveDismissDisabled(false)
     }
 }
 
@@ -463,6 +553,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    @State private var pairedMacs: [(peerID: String, displayName: String)] = []
+    @State private var showResetIdentityConfirm = false
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -472,7 +564,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Status") {
-                    LabeledContent("Listening", value: "Port 9000")
+                    LabeledContent("Listening", value: "Ready")
                     LabeledContent("Connection",
                                    value: receiver.connected ? "Connected" : "Waiting for Mac")
                     if receiver.videoSize != .zero {
@@ -492,6 +584,40 @@ struct SettingsView: View {
                     Text("Name")
                 } footer: {
                     Text("Shown in the Mac app's WiFi connection menu. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
+                }
+
+                if !pairedMacs.isEmpty {
+                    Section {
+                        ForEach(pairedMacs, id: \.peerID) { mac in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mac.displayName)
+                                Text(mac.peerID)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .onDelete { offsets in
+                            for index in offsets {
+                                let peerID = pairedMacs[index].peerID
+                                receiver.sendUnpair(toPeerID: peerID)          // NEW — before forget/drop
+                                TrustStore.shared.forget(peerID: peerID)
+                                receiver.dropActiveConnection(peerID: peerID)
+                            }
+                            pairedMacs = TrustStore.shared.pinnedPeers()
+                        }
+                    } header: {
+                        Text("Paired Macs")
+                    } footer: {
+                        Text("Macs you've allowed to connect over Wi-Fi. Removing one requires pairing again over USB.")
+                    }
+                }
+
+                Section {
+                    Button("Reset identity", role: .destructive) {
+                        showResetIdentityConfirm = true
+                    }
+                } footer: {
+                    Text("Forgets all paired Macs and creates a new identity. Every Mac will need to re-pair over USB.")
                 }
 
                 Section {
@@ -552,6 +678,26 @@ struct SettingsView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .onAppear {
+                pairedMacs = TrustStore.shared.pinnedPeers()
+            }
+            .confirmationDialog(
+                "This forgets all paired Macs and creates a new identity. Every Mac will need to re-pair over USB.",
+                isPresented: $showResetIdentityConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Reset identity", role: .destructive) {
+                    for mac in TrustStore.shared.pinnedPeers() {               // NEW — before purgeAll
+                        receiver.sendUnpair(toPeerID: mac.peerID)
+                    }
+                    TrustStore.shared.purgeAll()
+                    _ = TrustStore.shared.ownIdentity()
+                    receiver.restartAllListeners()
+                    receiver.dropActiveConnection()
+                    pairedMacs = []
+                }
+                Button("Cancel", role: .cancel) {}
             }
         }
     }

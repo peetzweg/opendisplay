@@ -12,6 +12,8 @@ import AVFoundation
 import CoreMedia
 import VideoToolbox
 import UIKit
+import Security
+import CryptoKit
 
 /// One-second window of pipeline health, plus per-frame timing samples for
 /// the performance overlay graph.
@@ -42,6 +44,25 @@ struct PerfStats: Equatable {
     var photonP95 = 0.0
 }
 
+/// How an inbound connection was accepted — decided BY THE LISTENER (TLS
+/// listener ⇒ .tls; :9000 ⇒ loopback-prefix heuristic, which stays a mere
+/// transport label and priority rank, never a trust decision — invariant 4).
+private enum TransportLabel {
+    case loopback, tls, plaintextWiFi
+    var rank: Int { self == .loopback ? 2 : self == .tls ? 1 : 0 }
+    var statsName: String { self == .loopback ? "USB" : "WiFi" }
+}
+
+/// One pending USB trust offer, published for the confirmation sheet.
+struct TrustRequest: Identifiable, Equatable {
+    let macID: String
+    let macName: String        // cosmetic, UNVERIFIED
+    let spki: Data
+    let fingerprint: String    // TrustStore.fingerprint(spki:)
+    let isIdentityChange: Bool // pin exists but SPKI differs
+    var id: String { macID + "|" + fingerprint }
+}
+
 final class PhoneReceiver: ObservableObject {
 
     @Published var status = "Starting…"
@@ -52,15 +73,41 @@ final class PhoneReceiver: ObservableObject {
     // Compatibility signal from the connected Mac (issue #132). Nil = no signal.
     // Merged into the update gate by ReceiverScreen.
     @Published var peerSignal: PeerUpdateSignal?
+    // Main-thread mirror of pendingOffer; drives the trust-confirmation sheet.
+    @Published var pendingTrust: TrustRequest?
 
     private var listener: NWListener?
     private var listenerHealthy = false
     private var connection: NWConnection?
+    // peerID (TrustStore account) of the Mac behind `connection`, resolved
+    // from its TLS client certificate at `.ready`. Only ever set for `.tls`
+    // connections — loopback/USB has no cryptographic peer identity to
+    // resolve (invariant 4: never a trust decision), so this stays nil for
+    // it. Scopes per-Mac "forget" (dropActiveConnection(peerID:)) so
+    // forgetting Mac A can never kick an unrelated, still-trusted Mac B.
+    private var connectedPeerID: String?
     private let queue = DispatchQueue(label: "receiver.video")
     private var buffer = Data()
+    // Upper bound on a single length-prefixed video-channel frame, so a
+    // corrupt or hostile 4-byte length prefix can't grow `buffer` unbounded
+    // while trickled bytes keep resetting the liveness watchdog (mirrors the
+    // bound already enforced on the bootstrap channel via
+    // WireCrypto.maxBootstrapFrameBytes). Generous enough for any real H.264
+    // keyframe at the highest supported quality/resolution.
+    private static let maxVideoFrameBytes = 64 << 20   // 64 MiB
     private var formatDesc: CMVideoFormatDescription?
     private var sps: Data?
     private var pps: Data?
+
+    // USB trust bootstrap (loopback-only) + TLS listener state.
+    private var bootstrapListener: NWListener?
+    private var bootstrapListenerHealthy = false
+    private var tlsListener: NWListener?
+    private var tlsListenerHealthy = false
+    private var currentLabel: TransportLabel?          // label of self.connection
+    private var bootstrapConn: NWConnection?           // one at a time
+    private var bootstrapBuffer = Data()
+    private var pendingOffer: TrustRequest?             // queue-confined mirror of pendingTrust
 
     // Liveness: the Mac streams video and pings every 2s; if nothing arrives
     // for 5s the connection is half-open (Mac killed, tunnel died) — drop it
@@ -161,7 +208,7 @@ final class PhoneReceiver: ObservableObject {
         return fresh
     }()
 
-    private var advertisedService: NWListener.Service {
+    private func advertisedService() -> NWListener.Service {
         var txt = NWTXTRecord()
         txt["id"] = Self.installID
         txt["pv"] = String(WireProtocol.version)   // issue #132
@@ -176,8 +223,8 @@ final class PhoneReceiver: ObservableObject {
         queue.async {
             guard resolved != self.serviceName else { return }
             self.serviceName = resolved
-            if self.listener != nil {
-                self.listener?.service = self.advertisedService
+            if self.tlsListener != nil {
+                self.tlsListener?.service = self.advertisedService()
                 Log.info("re-advertising as \"\(resolved)\"")
             }
         }
@@ -210,7 +257,12 @@ final class PhoneReceiver: ObservableObject {
 
     func start(port: UInt16 = 9000) {
         self.port = port
-        queue.async { self.startListener() }
+        queue.async {
+            TrustStore.shared.refreshSnapshot()   // arm the verify-block snapshot before any TLS accept
+            self.startListener()                  // legacy :9000 — unchanged internals
+            self.startBootstrapListener()
+            self.startTLSListener()
+        }
         if !monitorsStarted {
             monitorsStarted = true
             schedulePing()
@@ -218,13 +270,69 @@ final class PhoneReceiver: ObservableObject {
         }
     }
 
-    /// Recreate the listener if it isn't healthy — called when the app
-    /// returns to the foreground (iOS may have torn it down while suspended).
+    /// Recreate any listener that isn't healthy — called when the app
+    /// returns to the foreground (iOS may have torn listeners down while
+    /// suspended). Per-listener recovery: a healthy listener (and its live
+    /// accepted connection) is never churned because a sibling is down.
     func ensureListening() {
         queue.async {
-            guard !self.listenerHealthy else { return }
-            Log.info("listener not healthy — restarting")
+            if !self.listenerHealthy          { Log.info("legacy listener unhealthy — restarting");    self.restartListener() }
+            if !self.bootstrapListenerHealthy { Log.info("bootstrap listener unhealthy — restarting"); self.restartBootstrapListener() }
+            if !self.tlsListenerHealthy       { Log.info("TLS listener unhealthy — restarting");       self.restartTLSListener() }
+        }
+    }
+
+    /// Reset-identity hook: tear down and rebuild all three listeners (e.g.
+    /// the TLS listener needs the freshly generated identity).
+    func restartAllListeners() {
+        queue.async {
             self.restartListener()
+            self.restartBootstrapListener()
+            self.restartTLSListener()
+        }
+    }
+
+    /// Per-Mac forget hook: kick the live connection ONLY if it belongs to
+    /// the forgotten peer. `peerID` is resolved from the peer's TLS client
+    /// certificate at connect time (see `resolvePeerID`), so this can't kick
+    /// an unrelated, still-trusted Mac's active session. If `connectedPeerID`
+    /// couldn't be resolved (e.g. USB/loopback, which has no cryptographic
+    /// peer identity — invariant 4) the active connection is left alone;
+    /// forgetting a USB-pinned peer while it's the live connection is a rare
+    /// edge case and erring toward NOT disconnecting an unrelated session is
+    /// the safer default.
+    func dropActiveConnection(peerID: String) {
+        queue.async {
+            guard let conn = self.connection, self.connectedPeerID == peerID else { return }
+            Log.info("dropping active connection for forgotten peer \(peerID)")
+            conn.cancel()
+        }
+    }
+
+    /// Reset-identity hook: purgeAll() drops every pin, so unlike the
+    /// per-Mac forget above there is no "unrelated" session to protect —
+    /// kick whatever is connected, unconditionally.
+    func dropActiveConnection() {
+        queue.async {
+            guard let conn = self.connection else { return }
+            Log.info("dropping active connection after identity reset")
+            conn.cancel()
+        }
+    }
+
+    /// Symmetric revoke: tell the connected Mac to drop its pin for us. On a
+    /// TLS connection the send is scoped to the forgotten peer via
+    /// `connectedPeerID`; on loopback/USB there is no cryptographic peer
+    /// identity (invariant 4), so the message is sent as-is and the Mac
+    /// ignores it unless `toID` matches its own installID.
+    func sendUnpair(toPeerID peerID: String) {
+        queue.async {
+            guard let conn = self.connection, conn.state == .ready else { return }
+            if self.currentLabel == .tls, self.connectedPeerID != peerID { return }
+            Log.info("unpair sent to \(peerID)")
+            self.sendControl(["type": WireMessage.unpair,
+                              "fromID": Self.installID,
+                              "toID": peerID], on: conn)
         }
     }
 
@@ -233,6 +341,20 @@ final class PhoneReceiver: ObservableObject {
         listener = nil
         listenerHealthy = false
         startListener()
+    }
+
+    private func restartBootstrapListener() {
+        bootstrapListener?.cancel()
+        bootstrapListener = nil
+        bootstrapListenerHealthy = false
+        startBootstrapListener()
+    }
+
+    private func restartTLSListener() {
+        tlsListener?.cancel()
+        tlsListener = nil
+        tlsListenerHealthy = false
+        startTLSListener()
     }
 
     private func startListener() {
@@ -245,46 +367,37 @@ final class PhoneReceiver: ObservableObject {
             let params = NWParameters(tls: nil, tcp: tcp)
             params.allowLocalEndpointReuse = true
             params.serviceClass = .interactiveVideo
-            listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
+            // Phase 2 (wifi-tls-pairing-plan §8): the legacy plaintext port now
+            // serves ONLY usbmux-forwarded traffic, which arrives on loopback —
+            // bind loopback-only so LAN plaintext can never reach it again. Same
+            // anchor as the bootstrap listener below: the port comes from
+            // requiredLocalEndpoint — do NOT also pass `on:`.
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(
+                host: "127.0.0.1",
+                port: NWEndpoint.Port(rawValue: port)!)
+            listener = try NWListener(using: params)
         } catch {
             setStatus("Listener failed: \(error.localizedDescription)")
             return
         }
-        // Advertise on the local network so the Mac can discover us for WiFi
-        // mode (USB/usbmux connects straight to the port and ignores this).
-        listener?.service = advertisedService
         listener?.newConnectionHandler = { [weak self] conn in
             guard let self else { return }
-            Log.info("new connection from \(String(describing: conn.endpoint))")
             // usbmux-forwarded (cable) connections arrive from loopback;
-            // anything else came over the network.
+            // anything else came over the network. This prefix check is a
+            // mere transport label / priority rank — never a trust decision
+            // (invariant 4); TLS acceptance derives solely from the
+            // completed pinned handshake in the TLS listener below.
             let peer = String(describing: conn.endpoint)
-            self.transport = (peer.hasPrefix("127.0.0.1") || peer.hasPrefix("::1")
-                              || peer.hasPrefix("localhost")) ? "USB" : "WiFi"
-            // Replace any existing connection and reset decoder state.
-            self.connection?.cancel()
-            self.connection = conn
-            self.resetStreamState()
-            conn.stateUpdateHandler = { [weak self] state in
-                switch state {
-                case .ready:
-                    self?.lastDataReceived = Date()
-                    self?.setConnected(true)
-                    self?.sendHello(on: conn)
-                case .failed, .cancelled:
-                    self?.setConnected(false)
-                default: break
-                }
-            }
-            conn.start(queue: self.queue)
-            self.receive(on: conn)
+            let label: TransportLabel = (peer.hasPrefix("127.0.0.1") || peer.hasPrefix("::1")
+                              || peer.hasPrefix("localhost")) ? .loopback : .plaintextWiFi
+            self.adopt(conn, label: label)
         }
         listener?.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
             case .ready:
                 self.listenerHealthy = true
-                self.setStatus("Listening on :\(self.port)")
+                self.setStatus("Waiting for your Mac to connect…")
             case .failed(let error):
                 Log.info("listener failed: \(error) — restarting in 1s")
                 self.listenerHealthy = false
@@ -296,6 +409,351 @@ final class PhoneReceiver: ObservableObject {
             }
         }
         listener?.start(queue: queue)
+    }
+
+    // MARK: - Connection adoption / replacement priority (§2)
+
+    /// Single adoption path for every inbound connection, regardless of
+    /// listener. Rank: loopback = 2, TLS = 1, plaintext-WiFi = 0. Accept iff
+    /// no active existing connection OR incoming.rank >= existing.rank.
+    /// Rejection cancels the INCOMING conn (never started); acceptance
+    /// cancels the existing one.
+    /// True unless the connection has cancelled or failed — `.failed` carries
+    /// an associated `NWError`, so it can't be matched with a bare `!=` and
+    /// needs an explicit switch instead.
+    private func isActive(_ state: NWConnection.State) -> Bool {
+        switch state {
+        case .cancelled, .failed: return false
+        default: return true
+        }
+    }
+
+    private func adopt(_ conn: NWConnection, label: TransportLabel) {
+        Log.info("new \(label) connection from \(String(describing: conn.endpoint))")
+        if let existing = connection,
+           isActive(existing.state),
+           let existingLabel = currentLabel,
+           label.rank < existingLabel.rank {
+            Log.info("rejecting \(label) connection — active \(existingLabel) connection has priority")
+            conn.cancel()
+            return
+        }
+        connection?.cancel()
+        connection = conn
+        currentLabel = label
+        transport = label.statsName          // stats/overlay label ONLY (invariant 4)
+        resetStreamState()
+        conn.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.lastDataReceived = Date()
+                self.setConnected(true)
+                if label == .tls {
+                    self.connectedPeerID = self.resolvePeerID(for: conn)
+                } else {
+                    self.connectedPeerID = nil   // loopback/USB: no cryptographic identity (invariant 4)
+                }
+                self.sendHello(on: conn)
+            case .failed, .cancelled:
+                if self.connection === conn {   // a replaced conn must not clobber its successor
+                    self.connection = nil
+                    self.currentLabel = nil
+                    self.connectedPeerID = nil
+                    self.setConnected(false)
+                }
+            default: break
+            }
+        }
+        conn.start(queue: queue)
+        receive(on: conn)
+    }
+
+    /// Resolves which pinned peerID's certificate matches this TLS
+    /// connection's peer, by re-deriving its SPKI the SAME way
+    /// TLSConfigurator's verify_block does (same-source encoding, so
+    /// pinned == extracted byte-for-byte) and looking it up against
+    /// TrustStore's pinned peers. Runs on `queue`, post-handshake, so the
+    /// connection has already passed pin verification — this only answers
+    /// "which pin", never "is it pinned".
+    private func resolvePeerID(for conn: NWConnection) -> String? {
+        guard let tlsMetadata = conn.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else {
+            return nil
+        }
+        let secMetadata = tlsMetadata.securityProtocolMetadata
+        var leaf: SecCertificate?
+        // Block is invoked once per chain certificate, leaf first — grab only
+        // the first and ignore the rest (self-signed world: pinning already
+        // verified the leaf's SPKI is trusted; we just need to know WHICH one).
+        _ = sec_protocol_metadata_access_peer_certificate_chain(secMetadata) { certificate in
+            if leaf == nil { leaf = sec_certificate_copy_ref(certificate).takeRetainedValue() }
+        }
+        guard let leaf,
+              let key = SecCertificateCopyKey(leaf),
+              let x963 = SecKeyCopyExternalRepresentation(key, nil) as Data?,
+              let pub = try? P256.Signing.PublicKey(x963Representation: x963) else {
+            return nil
+        }
+        let spki = pub.derRepresentation
+        return TrustStore.shared.pinnedPeers().first { TrustStore.shared.pin(peerID: $0.peerID) == spki }?.peerID
+    }
+
+    // MARK: - USB trust bootstrap listener (loopback-only; §5, §6)
+
+    private func startBootstrapListener() {
+        do {
+            let tcp = NWProtocolTCP.Options()
+            let params = NWParameters(tls: nil, tcp: tcp)
+            params.allowLocalEndpointReuse = true
+            // THE trust anchor: only loopback-delivered traffic (i.e. usbmux
+            // forwarding) can reach this listener. No .service ⇒ no Bonjour ⇒
+            // no Local Network prompt.
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(
+                host: "127.0.0.1",
+                port: NWEndpoint.Port(rawValue: WireCrypto.bootstrapPort)!)
+            bootstrapListener = try NWListener(using: params)   // port comes from requiredLocalEndpoint — do NOT also pass `on:`
+        } catch {
+            bootstrapListenerHealthy = false
+            Log.info("bootstrap listener bind failed: \(error)")
+            return
+        }
+        bootstrapListener?.newConnectionHandler = { [weak self] conn in
+            guard let self else { return }
+            // One at a time; a fresh dial (Mac retry) replaces a stale one.
+            self.bootstrapConn?.cancel()
+            self.bootstrapBuffer.removeAll()
+            self.clearPendingTrust()
+            self.bootstrapConn = conn
+            conn.stateUpdateHandler = { [weak self] state in
+                if case .failed = state { self?.dropBootstrapConn(conn) }
+                if case .cancelled = state { self?.dropBootstrapConn(conn) }
+            }
+            conn.start(queue: self.queue)
+            self.handleBootstrapData(on: conn)
+        }
+        bootstrapListener?.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready: self.bootstrapListenerHealthy = true
+            case .failed(let error):
+                Log.info("bootstrap listener failed: \(error) — restarting in 1s")
+                self.bootstrapListenerHealthy = false
+                self.queue.asyncAfter(deadline: .now() + 1) { self.restartBootstrapListener() }
+            case .cancelled: self.bootstrapListenerHealthy = false
+            default: break
+            }
+        }
+        bootstrapListener?.start(queue: queue)
+    }
+
+    /// If `conn` is still the active bootstrap connection, tear it down and
+    /// retract any pending sheet (pending unplug ⇒ sheet retracts; the Mac's
+    /// next USB hello retries).
+    private func dropBootstrapConn(_ conn: NWConnection) {
+        guard bootstrapConn === conn else { return }
+        bootstrapConn = nil
+        bootstrapBuffer.removeAll()
+        clearPendingTrust()
+    }
+
+    private func clearPendingTrust() {
+        pendingOffer = nil
+        DispatchQueue.main.async { self.pendingTrust = nil }
+    }
+
+    // MARK: - TLS listener (pinned mutual TLS; §4, §5)
+
+    private func startTLSListener() {
+        guard let identity = TrustStore.shared.ownIdentity() else {
+            tlsListenerHealthy = false
+            Log.info("TLS listener: no identity available — will retry via ensureListening")
+            return
+        }
+        guard let tlsOptions = TLSConfigurator.mutualTLSOptions(
+                identity: identity,
+                pinnedSPKIs: { TrustStore.shared.allPinnedPeerSPKIs() },   // live snapshot: new pins take effect with NO restart
+                isListener: true, queue: queue) else {
+            tlsListenerHealthy = false
+            Log.info("TLS listener: mutualTLSOptions failed — refusing TLS (never plaintext)")
+            return
+        }
+        do {
+            let tcp = NWProtocolTCP.Options()
+            tcp.noDelay = true
+            let params = NWParameters(tls: tlsOptions, tcp: tcp)
+            params.allowLocalEndpointReuse = true
+            params.serviceClass = .interactiveVideo
+            tlsListener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: WireCrypto.tlsPort)!)
+        } catch {
+            tlsListenerHealthy = false
+            Log.info("TLS listener bind failed: \(error)")
+            return
+        }
+        // Advertise on the local network so the Mac can discover us for WiFi
+        // mode. This is the ONE Bonjour advertisement — the same
+        // "_opensidecar._tcp" type the app has always declared, so upgrades
+        // never need a fresh Local Network grant (macOS snapshots the
+        // declared types at grant time; a new type browses as NoAuth -65555).
+        // It resolves to the TLS port: WiFi is mTLS-only by construction.
+        tlsListener?.service = advertisedService()
+        tlsListener?.newConnectionHandler = { [weak self] conn in
+            guard let self else { return }
+            // A completed handshake already proves pinned mutual auth by
+            // construction — always .tls, no endpoint-string inspection.
+            self.adopt(conn, label: .tls)
+        }
+        tlsListener?.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.tlsListenerHealthy = true
+            case .failed(let error):
+                Log.info("TLS listener failed: \(error) — restarting in 1s")
+                self.tlsListenerHealthy = false
+                self.queue.asyncAfter(deadline: .now() + 1) { self.restartTLSListener() }
+            case .cancelled:
+                self.tlsListenerHealthy = false
+            default: break
+            }
+        }
+        tlsListener?.start(queue: queue)
+    }
+
+    // MARK: - Bootstrap wire protocol (§3, §6)
+
+    /// Framed read loop on the bootstrap connection: [UInt32 BE length][UTF-8 JSON].
+    private func handleBootstrapData(on conn: NWConnection) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            guard self.bootstrapConn === conn else { return }   // superseded by a fresh dial
+            if let data, !data.isEmpty {
+                self.bootstrapBuffer.append(data)
+                self.drainBootstrapFrames(on: conn)
+            }
+            if error != nil || isComplete {
+                self.dropBootstrapConn(conn)
+                return
+            }
+            if self.bootstrapConn === conn {
+                self.handleBootstrapData(on: conn)
+            }
+        }
+    }
+
+    private func drainBootstrapFrames(on conn: NWConnection) {
+        while bootstrapBuffer.count >= 4 {
+            let len = bootstrapBuffer.prefix(4).withUnsafeBytes {
+                Int(UInt32(bigEndian: $0.loadUnaligned(as: UInt32.self)))
+            }
+            guard len > 0, len < WireCrypto.maxBootstrapFrameBytes else {
+                Log.info("bootstrap frame length out of bounds (\(len)) — closing")
+                conn.cancel()
+                return
+            }
+            guard bootstrapBuffer.count >= 4 + len else { break }
+            let payload = bootstrapBuffer.subdata(in: bootstrapBuffer.index(bootstrapBuffer.startIndex, offsetBy: 4)..<bootstrapBuffer.index(bootstrapBuffer.startIndex, offsetBy: 4 + len))
+            bootstrapBuffer.removeSubrange(bootstrapBuffer.startIndex..<bootstrapBuffer.index(bootstrapBuffer.startIndex, offsetBy: 4 + len))
+            processBootstrapFrame(payload, on: conn)
+        }
+    }
+
+    /// State machine (§6): idle → offerReceived → {autoAccepted | awaitingUser}
+    /// → {accepted | denied | aborted} → idle.
+    private func processBootstrapFrame(_ payload: Data, on conn: NWConnection) {
+        guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let type = obj["type"] as? String, type == WireMessage.trustOffer,
+              let macID = obj["macID"] as? String, !macID.isEmpty,
+              let spkiB64 = obj["spki"] as? String,
+              let spki = Data(base64Encoded: spkiB64),
+              spki.count >= 1, spki.count <= 4096 else {
+            sendBootstrapReply(["type": WireMessage.trustDeny], on: conn, thenClose: true)
+            return
+        }
+        let macName = (obj["macName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Mac"
+        let fingerprint = TrustStore.fingerprint(spki: spki)
+
+        if let existingPin = TrustStore.shared.pin(peerID: macID) {
+            if existingPin == spki {
+                // Auto-accept (idempotent): no write, no UI.
+                replyTrustAccept(on: conn)
+                return
+            }
+            // Changed identity: pin exists but SPKI differs. Old pin is NOT
+            // touched until Allow.
+            let request = TrustRequest(macID: macID, macName: macName, spki: spki,
+                                       fingerprint: fingerprint, isIdentityChange: true)
+            pendingOffer = request
+            DispatchQueue.main.async { self.pendingTrust = request }
+            return
+        }
+        // First contact: no pin.
+        let request = TrustRequest(macID: macID, macName: macName, spki: spki,
+                                   fingerprint: fingerprint, isIdentityChange: false)
+        pendingOffer = request
+        DispatchQueue.main.async { self.pendingTrust = request }
+    }
+
+    /// UI entry point (main thread) — hops to `queue`. Idempotent.
+    func resolveTrust(allow: Bool) {
+        queue.async {
+            guard let offer = self.pendingOffer, let conn = self.bootstrapConn else { return }
+            guard allow else {
+                self.sendBootstrapReply(["type": WireMessage.trustDeny], on: conn, thenClose: true)
+                self.pendingOffer = nil
+                DispatchQueue.main.async { self.pendingTrust = nil }
+                return
+            }
+            guard let mySPKI = TrustStore.shared.ownSPKI() else {
+                self.sendBootstrapReply(["type": WireMessage.trustDeny], on: conn, thenClose: true)
+                self.pendingOffer = nil
+                DispatchQueue.main.async { self.pendingTrust = nil }
+                return
+            }
+            guard TrustStore.shared.setPin(peerID: offer.macID, spki: offer.spki, displayName: offer.macName) else {
+                self.sendBootstrapReply(["type": WireMessage.trustDeny], on: conn, thenClose: true)
+                self.pendingOffer = nil
+                DispatchQueue.main.async { self.pendingTrust = nil }
+                return
+            }
+            if self.tlsListener == nil { self.startTLSListener() }
+            self.pendingOffer = nil
+            DispatchQueue.main.async { self.pendingTrust = nil }
+            self.replyTrustAccept(on: conn, mySPKI: mySPKI)
+        }
+    }
+
+    private func replyTrustAccept(on conn: NWConnection) {
+        guard let mySPKI = TrustStore.shared.ownSPKI() else {
+            sendBootstrapReply(["type": WireMessage.trustDeny], on: conn, thenClose: true)
+            return
+        }
+        replyTrustAccept(on: conn, mySPKI: mySPKI)
+    }
+
+    private func replyTrustAccept(on conn: NWConnection, mySPKI: Data) {
+        let message: [String: Any] = [
+            "type": WireMessage.trustAccept,
+            "phoneID": Self.installID,
+            "spki": mySPKI.base64EncodedString(),
+        ]
+        sendBootstrapReply(message, on: conn, thenClose: true)
+    }
+
+    private func sendBootstrapReply(_ message: [String: Any], on conn: NWConnection, thenClose: Bool) {
+        guard let payload = try? JSONSerialization.data(withJSONObject: message) else {
+            if thenClose { conn.cancel() }
+            return
+        }
+        var header = UInt32(payload.count).bigEndian
+        var frame = Data(bytes: &header, count: 4)
+        frame.append(payload)
+        conn.send(content: frame, completion: .contentProcessed { [weak self] error in
+            if let error { Log.info("bootstrap reply send error: \(error)") }
+            if thenClose {
+                conn.cancel()
+                if self?.bootstrapConn === conn { self?.bootstrapConn = nil }
+            }
+        })
     }
 
     // MARK: - Liveness (ping + watchdog)
@@ -362,6 +820,22 @@ final class PhoneReceiver: ObservableObject {
                 ?? "Update OpenDisplay from the App Store to keep using your second display."
             let store = (obj["store"] as? String).flatMap { URL(string: $0) } ?? AppStore.updateURL
             DispatchQueue.main.async { self.peerSignal = .updateIPhone(message: message, storeURL: store) }
+        case WireMessage.unpair:
+            guard let fromID = obj["fromID"] as? String, !fromID.isEmpty,
+                  let toID = obj["toID"] as? String, toID == Self.installID else {
+                Log.info("unpair ignored — malformed or not addressed to us")
+                break
+            }
+            // TLS: the authenticated peer must BE the revoking Mac. Loopback
+            // has no cryptographic peer identity (invariant 4) — the physical
+            // cable is the same trust anchor the bootstrap channel uses.
+            if currentLabel == .tls, connectedPeerID != fromID {
+                Log.info("unpair ignored — fromID \(fromID) does not match authenticated peer")
+                break
+            }
+            Log.info("Mac \(fromID) revoked pairing — forgetting pin and dropping connection")
+            TrustStore.shared.forget(peerID: fromID)   // no-op if not pinned; refreshes snapshot
+            connection?.cancel()                        // adopt()'s state handler clears connection/connectedPeerID/setConnected
         default:
             break
         }
@@ -375,6 +849,8 @@ final class PhoneReceiver: ObservableObject {
                 Log.info("watchdog: nothing from the Mac for >5s — dropping connection")
                 conn.cancel()
                 self.connection = nil
+                self.currentLabel = nil
+                self.connectedPeerID = nil
                 self.setConnected(false)
             }
             self.scheduleWatchdog()
@@ -448,7 +924,7 @@ final class PhoneReceiver: ObservableObject {
                 self.lastDataReceived = Date()
                 self.bytesThisWindow += data.count
                 self.buffer.append(data)
-                self.drainFrames()
+                self.drainFrames(on: conn)
             }
             if let error {
                 Log.info("receive error: \(error)")
@@ -463,12 +939,20 @@ final class PhoneReceiver: ObservableObject {
         }
     }
 
-    private func drainFrames() {
+    private func drainFrames(on conn: NWConnection) {
         // Cursor-based drain so we only compact the buffer once per batch.
         var cursor = buffer.startIndex
         while buffer.distance(from: cursor, to: buffer.endIndex) >= 4 {
             let len = buffer[cursor..<buffer.index(cursor, offsetBy: 4)]
                 .withUnsafeBytes { Int(UInt32(bigEndian: $0.loadUnaligned(as: UInt32.self))) }
+            // Bound the length prefix so a corrupt/hostile value can't grow
+            // `buffer` unboundedly — trickled bytes would otherwise keep
+            // resetting the liveness watchdog while data piles up in memory.
+            guard len <= Self.maxVideoFrameBytes else {
+                Log.info("video frame length out of bounds (\(len)) — closing")
+                conn.cancel()
+                return
+            }
             guard buffer.distance(from: cursor, to: buffer.endIndex) >= 4 + len else { break }
             let start = buffer.index(cursor, offsetBy: 4)
             let end = buffer.index(start, offsetBy: len)
@@ -823,7 +1307,7 @@ final class PhoneReceiver: ObservableObject {
 
     private func setConnected(_ value: Bool) {
         DispatchQueue.main.async { self.connected = value }
-        if !value { setStatus("Listening on :9000") }
+        if !value { setStatus("Waiting for your Mac to connect…") }
         else {
             setStatus("Connected")
             // Remember the first ever successful connection to a Mac so the

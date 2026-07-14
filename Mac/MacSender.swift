@@ -78,11 +78,19 @@ struct PhoneInfo: Decodable {
     var protocolVersion: Int { pv ?? WireProtocol.assumedWhenAbsent }
 }
 
+/// TLS session material for a pinned WiFi dial. Travels inside the transport
+/// so switchTransport needs zero changes (plan §5/§9).
+struct TLSSessionConfig {
+    let identity: SecIdentity
+    let pinnedPhoneSPKI: Data   // DER SPKI from TrustStore.pin(peerID:)
+    let peerID: String          // TrustStore account the SPKI was pinned under
+}
+
 /// How the sender reaches the receiver. Reconnects re-dial from scratch, so
 /// a USB device that was replugged (new usbmuxd DeviceID) is found again.
 enum SenderTransport {
-    case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
-    case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
+    case tcp(NWEndpoint, tls: TLSSessionConfig?)   // tls == nil ⇒ legacy plaintext / -host backdoor
+    case usb(udid: String?, port: UInt16)          // native usbmuxd dial; nil = first device
 }
 
 @available(macOS 14.0, *)
@@ -99,6 +107,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Fired on every hello — carries the receiver's install id so the
     // controller can deduplicate USB/WiFi sessions to the same device.
     @MainActor var onHello: ((PhoneInfo) -> Void)?
+    // Fired when the peer revokes the pairing (WireMessage.unpair). All
+    // validation and the pin drop live in the controller — it owns trust.
+    @MainActor var onUnpaired: ((_ fromID: String, _ toID: String) -> Void)?
+    // Fired when a pinned WiFi dial is rejected at the TLS layer repeatedly —
+    // the pin is stale (peer forgot us / reset identity). Carries the peerID
+    // from TLSSessionConfig; the controller drops the pin so the USB
+    // bootstrap trigger (!hasPin) fires on the next cable connect.
+    @MainActor var onPairingRejected: ((String) -> Void)?
 
     private var stream: SCStream?
     private var encoder: VTCompressionSession?
@@ -465,6 +481,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let self, !self.stopped else { return }
             Log.info("manual reconnect requested")
             self.disconnectedSince = Date()   // fresh grace window
+            self.consecutiveTLSDialFailures = 0   // Reconnect button always grants fresh attempts
+            self.consecutiveTLSAuthRejections = 0
             self.scheduleReconnect()
         }
     }
@@ -500,10 +518,23 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // manual reconnect) superseded it. Only touched on `queue`.
     private var dialGeneration = 0
 
+    // Consecutive TLS-dial failures for the current pinned WiFi transport.
+    // Caps out into a parked "pairing invalid" state instead of an infinite
+    // scheduleReconnect loop (plan §7). Reset on every successful TLS ready,
+    // on any USB adoption, and on a manual Reconnect.
+    private var consecutiveTLSDialFailures = 0
+    private static let maxTLSDialFailures = 5
+
+    // Consecutive TLS-layer (auth/cert) handshake rejections — distinct from
+    // transient network failures. Two in a row ⇒ the peer no longer trusts
+    // us (or we no longer match it): the pin is stale.
+    private var consecutiveTLSAuthRejections = 0
+    private static let maxTLSAuthRejections = 2
+
     private func connect() {
         guard !stopped else { return }
         switch transport {
-        case .tcp(let endpoint): connectTCP(endpoint)
+        case .tcp(let endpoint, let tls): connectTCP(endpoint, tls: tls)
         case .usb(let udid, let port): connectUSB(udid: udid, port: port)
         }
     }
@@ -527,20 +558,58 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { await self.status("Connected to \(self.endpointName)") }
     }
 
-    private func connectTCP(_ endpoint: NWEndpoint) {
+    private func connectTCP(_ endpoint: NWEndpoint, tls tlsConfig: TLSSessionConfig?) {
         let options = NWProtocolTCP.Options()
         options.noDelay = true   // latency matters more than throughput here
-        let params = NWParameters(tls: nil, tcp: options)
+        let params: NWParameters
+        if let tlsConfig {
+            let pinned = [tlsConfig.pinnedPhoneSPKI]     // captured copy — no Keychain I/O in the closure
+            guard let tlsOptions = TLSConfigurator.mutualTLSOptions(
+                    identity: tlsConfig.identity, pinnedSPKIs: { pinned },
+                    isListener: false, queue: queue) else {
+                Task { await self.status("TLS identity unavailable — reconnect via USB to re-pair") }
+                return   // hard stop: NEVER plaintext for a pinned peer (invariant 3)
+            }
+            params = NWParameters(tls: tlsOptions, tcp: options)
+        } else {
+            params = NWParameters(tls: nil, tcp: options)   // legacy pv≤2 phones, -host backdoor
+        }
         let conn = NWConnection(to: endpoint, using: params)
         connection = conn
         conn.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
             case .ready:
+                self.consecutiveTLSDialFailures = 0
+                self.consecutiveTLSAuthRejections = 0
                 self.becomeReady(conn)
             case .failed(let error):
                 Log.info("connection failed: \(error)")
                 self.connectionReady = false
+                if let tlsConfig {
+                    self.consecutiveTLSDialFailures += 1
+                    if case .tls = error {
+                        self.consecutiveTLSAuthRejections += 1
+                    } else {
+                        self.consecutiveTLSAuthRejections = 0   // transient — not evidence of a stale pin
+                    }
+                    if self.consecutiveTLSAuthRejections >= Self.maxTLSAuthRejections {
+                        // The peer actively rejected the handshake: our pin (or
+                        // its pin of us) is stale. Hand the peerID to the
+                        // controller to forget — USB bootstrap re-pairs. NEVER
+                        // fall back to plaintext (invariant 3).
+                        Log.info("TLS handshake rejected by pinned peer \(tlsConfig.peerID) — treating pin as stale")
+                        Task { await self.status("Pairing no longer valid — reconnect via USB to re-pair") }
+                        Task { @MainActor in self.onPairingRejected?(tlsConfig.peerID) }
+                        return   // park: controller tears the session down
+                    }
+                    if self.consecutiveTLSDialFailures >= Self.maxTLSDialFailures {
+                        // Pairing-invalid: phone forgot us / reinstalled. Park with
+                        // guidance — no infinite scheduleReconnect loop (plan §7).
+                        Task { await self.status("Pairing no longer valid — reconnect via USB to re-pair") }
+                        return
+                    }
+                }
                 self.scheduleReconnect()
             case .waiting(let error):
                 // On loopback there is no "path change" to wake us up again
@@ -573,6 +642,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         conn.cancel()
                         return
                     }
+                    self.consecutiveTLSDialFailures = 0
+                    self.consecutiveTLSAuthRejections = 0
                     self.connection = conn
                     conn.stateUpdateHandler = { [weak self] state in
                         guard let self else { return }
@@ -858,6 +929,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // periodic keyframes are off) — force an IDR on the next frame.
             Log.info("phone requested keyframe")
             needsKeyframe = true
+        case WireMessage.unpair:
+            if let fromID = obj["fromID"] as? String, !fromID.isEmpty,
+               let toID = obj["toID"] as? String, !toID.isEmpty {
+                Log.info("unpair received from \(fromID)")
+                Task { @MainActor in self.onUnpaired?(fromID, toID) }
+            }
         default:
             Log.info("unknown control message type: \(type)")
         }
@@ -1031,6 +1108,45 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// receiver version we still support.
     private func sendWelcome() {
         sendJSONFrame("{\"type\":\"\(WireMessage.welcome)\",\"pv\":\(WireProtocol.version),\"min\":\(WireProtocol.minSupportedPeer)}")
+    }
+
+    /// Symmetric unpair: tell the connected peer to drop its pin for us.
+    /// `completion` fires on the main actor once the frame is handed to the
+    /// transport (or immediately when there is no live connection), so the
+    /// caller can tear the session down without racing the send. Guarded so
+    /// it fires exactly once: a half-open TLS socket can leave
+    /// `.contentProcessed` pending until an OS-level timeout, which would
+    /// otherwise strand the doomed session (pin already dropped locally,
+    /// peer never told, socket never torn down) — a 2s fallback forces
+    /// teardown to proceed regardless.
+    func sendUnpair(fromID: String, toID: String, completion: @escaping @MainActor () -> Void) {
+        queue.async {
+            guard let connection = self.connection, self.connectionReady else {
+                Task { @MainActor in completion() }
+                return
+            }
+            let payload = Data("{\"type\":\"\(WireMessage.unpair)\",\"fromID\":\"\(fromID)\",\"toID\":\"\(toID)\"}".utf8)
+            var header = UInt32(payload.count).bigEndian
+            var frame = Data(bytes: &header, count: 4)
+            frame.append(payload)
+            Log.info("unpair sent to \(toID)")
+            let fired = NSLock()
+            var didFire = false
+            let fireOnce = {
+                fired.lock()
+                let shouldFire = !didFire
+                didFire = true
+                fired.unlock()
+                if shouldFire { Task { @MainActor in completion() } }
+            }
+            connection.send(content: frame, completion: .contentProcessed { _ in
+                fireOnce()
+            })
+            self.queue.asyncAfter(deadline: .now() + 2.0) {
+                Log.info("unpair send to \(toID) did not complete in time — tearing down anyway")
+                fireOnce()
+            }
+        }
     }
 
     /// Ask the receiver to update from the App Store (built via JSONSerialization
