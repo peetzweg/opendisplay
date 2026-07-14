@@ -26,9 +26,11 @@ final class TrustStore {
     static let shared = TrustStore()
 
     private let lock = NSLock()
-    /// In-memory snapshot of all pinned peer SPKI DER blobs. Refreshed
-    /// from the Keychain by `refreshSnapshot()`; read lock-only everywhere else.
-    private var snapshot: [Data] = []
+    /// In-memory snapshot of all pinned peers as (peerID, SPKI DER) pairs.
+    /// Refreshed from the Keychain by `refreshSnapshot()`; read lock-only
+    /// everywhere else, so both the TLS verify block (SPKI membership) and
+    /// resolvePeerID (SPKI → peerID) run with zero Keychain I/O on the queue.
+    private var snapshot: [(peerID: String, spki: Data)] = []
 
     private init() {
         refreshSnapshot()
@@ -221,7 +223,16 @@ final class TrustStore {
     func allPinnedPeerSPKIs() -> [Data] {
         lock.lock()
         defer { lock.unlock() }
-        return snapshot
+        return snapshot.map { $0.spki }
+    }
+
+    /// Which pinned peerID owns this leaf SPKI, from the in-memory snapshot
+    /// ONLY — no Keychain I/O, so it is safe on the TLS/video queue right after
+    /// a handshake (resolvePeerID). nil if the SPKI matches no current pin.
+    func peerID(forSPKI spki: Data) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshot.first { $0.spki == spki }?.peerID
     }
 
     /// Re-read all pins from the Keychain into the snapshot. Called by
@@ -230,19 +241,26 @@ final class TrustStore {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: WireCrypto.pinKeychainService,
+            kSecReturnAttributes: true,
             kSecReturnData: true,
             kSecMatchLimit: kSecMatchLimitAll,
             kSecUseDataProtectionKeychain: true,
         ]
         var out: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
-        var fresh: [Data] = []
-        // kSecReturnData + kSecMatchLimitAll returns an array of the raw value
-        // Data blobs — NOT an array of attribute dictionaries. Casting to
-        // [[CFString: Any]] silently fails and leaves the snapshot empty, which
-        // makes the TLS verify block reject every pinned peer (NoAuth).
-        if status == errSecSuccess, let items = out as? [Data] {
-            fresh = items
+        var fresh: [(peerID: String, spki: Data)] = []
+        // kSecReturnAttributes + kSecReturnData + kSecMatchLimitAll returns an
+        // array of attribute dictionaries, each carrying the pin bytes under
+        // kSecValueData and the peerID under kSecAttrAccount. (With
+        // kSecReturnData ALONE the shape is instead a bare [Data]; casting the
+        // wrong shape silently yields an empty snapshot, which makes the TLS
+        // verify block reject every pinned peer as NoAuth.)
+        if status == errSecSuccess, let items = out as? [[CFString: Any]] {
+            fresh = items.compactMap { item in
+                guard let spki = item[kSecValueData] as? Data,
+                      let peerID = item[kSecAttrAccount] as? String else { return nil }
+                return (peerID: peerID, spki: spki)
+            }
         } else if status != errSecItemNotFound {
             Log.info("ERROR: refreshSnapshot lookup failed (status \(status))")
         }

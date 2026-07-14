@@ -435,6 +435,15 @@ final class PhoneReceiver: ObservableObject {
 
     private func adopt(_ conn: NWConnection, label: TransportLabel) {
         Log.info("new \(label) connection from \(String(describing: conn.endpoint))")
+        // Higher rank preempts lower: loopback(2) > tls(1) > plaintextWiFi(0).
+        // A loopback (usbmux, 127.0.0.1:9000) connection is INTENTIONALLY
+        // allowed to take over an active WiFi TLS session — the cable is the
+        // stronger trust anchor and legit cable-in migration relies on it. That
+        // port is unreachable from the LAN; an app already running ON this
+        // device could reach loopback, but on-device compromise is out of scope
+        // (same posture as the :9010 bootstrap listener) and could at most
+        // DoS/spoof the local display — never read the Mac's screen or decrypt
+        // the WiFi session.
         if let existing = connection,
            isActive(existing.state),
            let existingLabel = currentLabel,
@@ -500,7 +509,9 @@ final class PhoneReceiver: ObservableObject {
             return nil
         }
         let spki = pub.derRepresentation
-        return TrustStore.shared.pinnedPeers().first { TrustStore.shared.pin(peerID: $0.peerID) == spki }?.peerID
+        // In-memory snapshot lookup — no Keychain I/O on `queue` (which also
+        // drives video framing); the snapshot is armed before any TLS accept.
+        return TrustStore.shared.peerID(forSPKI: spki)
     }
 
     // MARK: - USB trust bootstrap listener (loopback-only)
@@ -510,9 +521,12 @@ final class PhoneReceiver: ObservableObject {
             let tcp = NWProtocolTCP.Options()
             let params = NWParameters(tls: nil, tcp: tcp)
             params.allowLocalEndpointReuse = true
-            // THE trust anchor: only loopback-delivered traffic (i.e. usbmux
-            // forwarding) can reach this listener. No .service ⇒ no Bonjour ⇒
-            // no Local Network prompt.
+            // Loopback-bound: unreachable from the LAN — only traffic delivered
+            // to 127.0.0.1 (usbmux forwarding over the cable) reaches it, and
+            // with no .service there is no Bonjour and no Local Network prompt.
+            // An app already running ON this device could also reach loopback,
+            // but on-device compromise is out of scope: an offer still requires
+            // on-screen confirmation and cannot forge a real Mac's key.
             params.requiredLocalEndpoint = NWEndpoint.hostPort(
                 host: "127.0.0.1",
                 port: NWEndpoint.Port(rawValue: WireCrypto.bootstrapPort)!)

@@ -466,8 +466,14 @@ final class SenderController: ObservableObject {
             if wifiRemembered.contains(target.sessionID),
                activeSession(coveringWiFi: result) == nil,
                !cabled(result) {
-                // Only pinned peers are ever auto-dialed over WiFi.
-                guard let id = txtID(of: result), TrustStore.shared.hasPin(peerID: id) else {
+                // Only pinned peers are ever auto-dialed over WiFi. Resolve the
+                // peer the SAME way connect(to:) does: the TXT id is often
+                // absent from a browse result, so fall back to the WiFi-name →
+                // installID map (wifiTransport ORs txtID with knownPeerID) —
+                // otherwise an already-paired device never auto-reconnects over
+                // WiFi and is wrongly told to "connect via USB once".
+                let knownID = serviceName(of: result).flatMap { installIDByWifiName[$0] }
+                guard wifiTransport(for: result, knownPeerID: knownID) != nil else {
                     wifiGuidance[target.sessionID] = Self.usbOnceGuidance
                     continue
                 }
@@ -677,7 +683,17 @@ final class SenderController: ObservableObject {
                 Task { [weak self, weak session] in
                     await TrustBootstrapClient.run(udid: bootUDID, expectedPhoneID: phoneID,
                                                    phoneDisplayName: displayName) { text in
-                        Task { @MainActor in session?.pairingStatus = text }
+                        Task { @MainActor in
+                            session?.pairingStatus = text
+                            // text == nil signals a successful pin: the peer is
+                            // now trusted, so drop any stale "connect via USB
+                            // once" caption on its WiFi row. (No WiFi connect()
+                            // — which is what normally clears it — runs while the
+                            // device is still cabled.)
+                            if text == nil, let session {
+                                self?.wifiGuidance["wifi:\(session.wifiServiceName ?? session.name)"] = nil
+                            }
+                        }
                     }
                     await MainActor.run { self?.bootstrapInFlight.remove(bootUDID) }
                 }
