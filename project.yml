@@ -91,6 +91,11 @@ targets:
     sources:
       - iOS
       - Shared
+      # Only the app<->extension handoff contract — the rest of Broadcast/
+      # compiles solely into the extension.
+      - Broadcast/BroadcastTarget.swift
+    dependencies:
+      - target: OpenSidecarBroadcast
     info:
       path: iOS/Info.plist
       properties:
@@ -112,3 +117,38 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.ios
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # App group shared with the broadcast extension (issue #123): the send
+        # screen writes the chosen receiver there for the extension to dial.
+        CODE_SIGN_ENTITLEMENTS: iOS/OpenSidecariOS.entitlements
+  # iPad -> iPad screen mirroring (issue #123): a ReplayKit broadcast upload
+  # extension is the only sanctioned whole-screen capture on iOS. It runs the
+  # sender pipeline (capture -> H.264 -> framed TCP) against the existing
+  # receiver app.
+  OpenSidecarBroadcast:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Broadcast
+      - Shared/Protocol.swift
+      - iOS/Log.swift
+    info:
+      path: Broadcast/Info.plist
+      properties:
+        # Shown in the system broadcast picker and Control Center.
+        CFBundleDisplayName: OpenDisplay
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSLocalNetworkUsageDescription: OpenDisplay streams your screen to another iPad or iPhone over the local network.
+        NSBonjourServices: ["_opensidecar._tcp"]
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          NSExtensionAttributes:
+            RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.ios.broadcast
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: Broadcast/OpenSidecarBroadcast.entitlements
+        SKIP_INSTALL: YES
