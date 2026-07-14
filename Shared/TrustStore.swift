@@ -63,7 +63,9 @@ final class TrustStore {
 
     /// Keychain-backed install ID, created atomically with the identity and
     /// deleted by `purgeAll()` — id and key live and die together.
-    /// The Mac app adopts this as macInstallID in the next milestone.
+    /// The caller's own self-id: the Mac uses it as macInstallID for its wire
+    /// identity. Never called on iOS — the phone's wire id is
+    /// PhoneReceiver.installID (UserDefaults-backed).
     func installID() -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -187,7 +189,8 @@ final class TrustStore {
     }
 
     /// (peerID, displayName) rows for the "Paired Macs"/forget UI
-    /// (kSecMatchLimitAll enumeration). UI wiring is next milestone.
+    /// (kSecMatchLimitAll enumeration). Wired to the iOS Settings
+    /// "Paired Macs" list.
     func pinnedPeers() -> [(peerID: String, displayName: String)] {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,

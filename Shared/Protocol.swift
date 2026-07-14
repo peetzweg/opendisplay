@@ -78,8 +78,9 @@ enum WireCrypto {
     /// the SAME service namespace as the identity, so id+key live and die
     /// together.
     static let installIDAccount = "macInstallID"
-    /// UserDefaults flag for reinstall cleanup — consumed by the
-    /// platform apps in the NEXT milestone; defined here so both use one key.
+    /// UserDefaults flag for reinstall cleanup — both platform apps consume
+    /// it on first launch (purge stale Keychain state after a reinstall);
+    /// defined here so both use one key.
     static let trustStoreInitializedDefaultsKey = "trustStoreInitialized.v1"
 
     // Fingerprint derivation ("Signal safety-number" style).

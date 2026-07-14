@@ -199,6 +199,11 @@ final class PhoneReceiver: ObservableObject {
     // transport" — the service name can't serve that role since it's
     // user-editable, and iOS offers no public API for the hardware UDID
     // that usbmuxd reports.
+    //
+    // This UserDefaults UUID is the phone's wire identity everywhere (TXT
+    // "id", hello id, trustAccept.phoneID, unpair fromID/toID). The phone
+    // deliberately does NOT use TrustStore.installID() — that Keychain-backed
+    // id is the caller's own self-id, read only by the Mac.
     static let installID: String = {
         if let existing = UserDefaults.standard.string(forKey: "installID") {
             return existing
