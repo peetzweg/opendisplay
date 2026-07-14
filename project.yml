@@ -11,7 +11,7 @@ packages:
     # 2.x is the current major (latest 2.9.x) and the first Sparkle line to
     # support SPM. `from:` allows compatible 2.x updates.
     from: "2.6.0"
-  # X.509 identity minting for cert-pinned mutual TLS (wifi-tls-pairing-plan §3).
+  # X.509 identity minting for cert-pinned mutual TLS (issue #16).
   # Compiled into BOTH targets alongside Shared/TrustStore.swift.
   SwiftCertificates:
     url: https://github.com/apple/swift-certificates

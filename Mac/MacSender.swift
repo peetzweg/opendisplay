@@ -79,7 +79,7 @@ struct PhoneInfo: Decodable {
 }
 
 /// TLS session material for a pinned WiFi dial. Travels inside the transport
-/// so switchTransport needs zero changes (plan §5/§9).
+/// so switchTransport needs zero changes.
 struct TLSSessionConfig {
     let identity: SecIdentity
     let pinnedPhoneSPKI: Data   // DER SPKI from TrustStore.pin(peerID:)
@@ -520,7 +520,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // Consecutive TLS-dial failures for the current pinned WiFi transport.
     // Caps out into a parked "pairing invalid" state instead of an infinite
-    // scheduleReconnect loop (plan §7). Reset on every successful TLS ready,
+    // scheduleReconnect loop. Reset on every successful TLS ready,
     // on any USB adoption, and on a manual Reconnect.
     private var consecutiveTLSDialFailures = 0
     private static let maxTLSDialFailures = 5
@@ -568,7 +568,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     identity: tlsConfig.identity, pinnedSPKIs: { pinned },
                     isListener: false, queue: queue) else {
                 Task { await self.status("TLS identity unavailable — reconnect via USB to re-pair") }
-                return   // hard stop: NEVER plaintext for a pinned peer (invariant 3)
+                return   // hard stop: NEVER plaintext for a pinned peer
             }
             params = NWParameters(tls: tlsOptions, tcp: options)
         } else {
@@ -597,7 +597,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         // The peer actively rejected the handshake: our pin (or
                         // its pin of us) is stale. Hand the peerID to the
                         // controller to forget — USB bootstrap re-pairs. NEVER
-                        // fall back to plaintext (invariant 3).
+                        // fall back to plaintext.
                         Log.info("TLS handshake rejected by pinned peer \(tlsConfig.peerID) — treating pin as stale")
                         Task { await self.status("Pairing no longer valid — reconnect via USB to re-pair") }
                         Task { @MainActor in self.onPairingRejected?(tlsConfig.peerID) }
@@ -605,7 +605,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     }
                     if self.consecutiveTLSDialFailures >= Self.maxTLSDialFailures {
                         // Pairing-invalid: phone forgot us / reinstalled. Park with
-                        // guidance — no infinite scheduleReconnect loop (plan §7).
+                        // guidance — no infinite scheduleReconnect loop.
                         Task { await self.status("Pairing no longer valid — reconnect via USB to re-pair") }
                         return
                     }

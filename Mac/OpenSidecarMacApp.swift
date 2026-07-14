@@ -128,7 +128,7 @@ final class DeviceSession: ObservableObject, Identifiable {
     @Published var status = "Starting…"
     @Published var framesSent = 0
     @Published var mbps = 0.0
-    // USB trust-bootstrap diagnostics (plan §2/§7) — separate from the
+    // USB trust-bootstrap diagnostics — separate from the
     // streaming `status` line so a pairing message never clobbers it.
     @Published var pairingStatus: String?
     // Receiver's per-install identity (from hello) — the key for recognizing
@@ -313,9 +313,9 @@ final class SenderController: ObservableObject {
         return nil
     }
 
-    // MARK: - WiFi transport routing (SEV-1: THE single .tcp builder)
+    // MARK: - WiFi transport routing (THE single .tcp builder)
 
-    /// THE ONLY legal source of a WiFi SenderTransport (SEV-1). Both connect()
+    /// THE ONLY legal source of a WiFi SenderTransport. Both connect()
     /// and failover() route through here — no other call site may construct
     /// .tcp for a Bonjour result.
     private func wifiTransport(for result: NWBrowser.Result,
@@ -334,9 +334,10 @@ final class SenderController: ObservableObject {
                                                                pinnedPhoneSPKI: pin,
                                                                peerID: peerID))
         }
-        // Phase 2 (wifi-tls-pairing-plan §8): plaintext WiFi is gone. Any
-        // unpinned peer is refused (pv≤2 is hard-gated by minSupportedPeer
-        // anyway); callers show "Connect via USB once to enable Wi-Fi".
+        // Plaintext WiFi is gone: any unpinned peer is refused — pairing
+        // happens over the USB bootstrap, which a pre-TLS (pv < minWiFiPeer)
+        // peer can't complete, making old peers USB-only by construction.
+        // Callers show "Connect via USB once to enable Wi-Fi".
         return nil
     }
 
@@ -356,7 +357,7 @@ final class SenderController: ObservableObject {
     /// "Forget Pairing" context-menu action. Forgetting also drops any live
     /// session for that peer immediately — the pin is only checked at TLS
     /// handshake, so an established session would otherwise keep streaming
-    /// until it happened to reconnect. (Reverses plan §6(ii).)
+    /// until it happened to reconnect.
     ///
     /// Teardown uses `end(_:)`, not `disconnect(_:)`: this is a forget, not a
     /// user "disconnect this device" action, so a still-attached cable must
@@ -465,7 +466,7 @@ final class SenderController: ObservableObject {
             if wifiRemembered.contains(target.sessionID),
                activeSession(coveringWiFi: result) == nil,
                !cabled(result) {
-                // Phase 2: only pinned peers are ever auto-dialed over WiFi.
+                // Only pinned peers are ever auto-dialed over WiFi.
                 guard let id = txtID(of: result), TrustStore.shared.hasPin(peerID: id) else {
                     wifiGuidance[target.sessionID] = Self.usbOnceGuidance
                     continue
@@ -652,7 +653,13 @@ final class SenderController: ObservableObject {
             if let name = session.wifiServiceName, let installID = info.id {
                 self.installIDByWifiName[name] = installID   // remember for future manual WiFi connects
             }
-            // USB trust bootstrap (plan §2/§7): self-verifying — runs once per
+            // Pre-TLS receiver: streams fine over the cable, but can never
+            // pair for WiFi until it's updated — say so, instead of letting
+            // the "Connect via USB once to enable Wi-Fi" guidance loop.
+            if session.onUSB, info.protocolVersion < WireProtocol.minWiFiPeer {
+                session.pairingStatus = "Update the \(info.kind) app to enable Wi-Fi — USB works without updating."
+            }
+            // USB trust bootstrap: self-verifying — runs once per
             // USB session REGARDLESS of our own pin state; the phone is the
             // single source of truth (auto-accepts silently on an exact pin
             // match, prompts otherwise). This heals asymmetric trust (phone
@@ -661,7 +668,7 @@ final class SenderController: ObservableObject {
             // onto the cable is covered too; the -host backdoor has
             // usbUDID == nil and is excluded.
             if session.onUSB, let bootUDID = session.usbUDID,
-               let phoneID = info.id, info.protocolVersion >= 3,
+               let phoneID = info.id, info.protocolVersion >= WireProtocol.minWiFiPeer,
                !session.bootstrapAttempted,
                !self.bootstrapInFlight.contains(bootUDID) {
                 session.bootstrapAttempted = true

@@ -14,7 +14,7 @@ import SwiftASN1
 /// `WireCrypto.*` namespace. Thread-safe: every public method is internally
 /// synchronized (private `NSLock`); `allPinnedPeerSPKIs()` reads ONLY the
 /// in-memory snapshot (no Keychain I/O) so it is safe to call from a TLS
-/// verify block (wifi-tls-pairing-plan §4, SEV-7).
+/// verify block.
 ///
 /// Runtime caveat (not a compile-time concern): on macOS, the data-protection
 /// keychain requires the app to be signed with an application identifier
@@ -26,7 +26,7 @@ final class TrustStore {
     static let shared = TrustStore()
 
     private let lock = NSLock()
-    /// In-memory snapshot of all pinned peer SPKI DER blobs (SEV-7). Refreshed
+    /// In-memory snapshot of all pinned peer SPKI DER blobs. Refreshed
     /// from the Keychain by `refreshSnapshot()`; read lock-only everywhere else.
     private var snapshot: [Data] = []
 
@@ -34,7 +34,7 @@ final class TrustStore {
         refreshSnapshot()
     }
 
-    // MARK: - Own identity (plan §3, SEV-2 same-source fix)
+    // MARK: - Own identity
 
     /// Fetch the stored identity, generating and persisting a fresh one on
     /// first call. nil = keychain unusable (logged, never crashes).
@@ -62,7 +62,7 @@ final class TrustStore {
     }
 
     /// Keychain-backed install ID, created atomically with the identity and
-    /// deleted by `purgeAll()` — id and key live and die together (SEV-5).
+    /// deleted by `purgeAll()` — id and key live and die together.
     /// The Mac app adopts this as macInstallID in the next milestone.
     func installID() -> String? {
         lock.lock()
@@ -72,12 +72,12 @@ final class TrustStore {
         }
         // No identity yet ⇒ nothing generated ⇒ no install ID either. Drive
         // generation through the same path as ownIdentity() so the two never
-        // diverge (SEV-5: id+key created together, in the same call).
+        // diverge (id+key created together, in the same call).
         guard generateAndStoreIdentity() != nil else { return nil }
         return queryInstallID()
     }
 
-    // MARK: - Peer pins (kSecClassGenericPassword rows, plan §3 table)
+    // MARK: - Peer pins (kSecClassGenericPassword rows)
 
     func hasPin(peerID: String) -> Bool {
         pin(peerID: peerID) != nil
@@ -150,7 +150,7 @@ final class TrustStore {
     }
 
     /// Nuke everything in both namespaces: all pins, identity key+cert,
-    /// install-ID row; empty the snapshot. (Reinstall cleanup §6(ii) and
+    /// install-ID row; empty the snapshot. (Reinstall cleanup and
     /// "Reset identity" both land here.)
     func purgeAll() {
         let deletions: [[CFString: Any]] = [
@@ -187,7 +187,7 @@ final class TrustStore {
     }
 
     /// (peerID, displayName) rows for the "Paired Macs"/forget UI
-    /// (kSecMatchLimitAll enumeration, plan §3). UI wiring is next milestone.
+    /// (kSecMatchLimitAll enumeration). UI wiring is next milestone.
     func pinnedPeers() -> [(peerID: String, displayName: String)] {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
@@ -211,7 +211,7 @@ final class TrustStore {
         }
     }
 
-    // MARK: - In-memory SPKI snapshot (SEV-7)
+    // MARK: - In-memory SPKI snapshot
 
     /// Lock-protected copy of the snapshot. NEVER touches the Keychain —
     /// this is what TLS verify blocks read via the `pinnedSPKIs` closure.
@@ -248,7 +248,7 @@ final class TrustStore {
         lock.unlock()
     }
 
-    // MARK: - Fingerprint (plan §0/§6(iii))
+    // MARK: - Fingerprint
 
     /// Human-comparable grouped digits: HKDF-SHA256(ikm: spki,
     /// salt: WireCrypto.fingerprintHKDFSalt, info: WireCrypto.fingerprintHKDFInfo,
@@ -274,7 +274,7 @@ final class TrustStore {
 
     // MARK: - Private helpers
 
-    /// The ONLY sanctioned identity retrieval path (plan §3) — never
+    /// The ONLY sanctioned identity retrieval path — never
     /// `SecIdentityCreateWithCertificate`. Must be called with `lock` held.
     private func queryIdentity() -> SecIdentity? {
         let query: [CFString: Any] = [
@@ -309,9 +309,9 @@ final class TrustStore {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Frozen identity-generation call sequence (plan §3). Must be called
+    /// Frozen identity-generation call sequence. Must be called
     /// with `lock` held. On any failure, deletes whatever partial items were
-    /// added and returns nil — no orphans, no crash (SEV-2).
+    /// added and returns nil — no orphans, no crash.
     private func generateAndStoreIdentity() -> SecIdentity? {
         // 1. CryptoKit key — we own the SPKI bytes end to end.
         let priv = P256.Signing.PrivateKey()
@@ -398,7 +398,7 @@ final class TrustStore {
             return nil
         }
 
-        // 6. Persist installID in the SAME namespace (SEV-5: id+key die together).
+        // 6. Persist installID in the SAME namespace (id+key die together).
         status = SecItemAdd([
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: WireCrypto.identityKeychainLabel,
@@ -414,8 +414,8 @@ final class TrustStore {
         }
 
         // 7. Fetch the implicitly-formed identity — the ONLY sanctioned
-        //    retrieval (plan §3's fallback ladder item (a) is NOT
-        //    implemented in this phase).
+        //    retrieval (a SecIdentityCreateWithCertificate fallback is
+        //    deliberately NOT implemented).
         var out: CFTypeRef?
         status = SecItemCopyMatching([
             kSecClass: kSecClassIdentity,
@@ -455,7 +455,7 @@ final class TrustStore {
         ] as CFDictionary)
     }
 
-    /// SEV-2 same-source SPKI extraction from a certificate already in the
+    /// Same-source SPKI extraction from a certificate already in the
     /// Keychain: cert → SecKey → X9.63 → CryptoKit → DER. Never hand-assemble
     /// SPKI headers; never return raw X9.63 from any public API.
     private func spkiFromCertificate(_ cert: SecCertificate) -> Data? {

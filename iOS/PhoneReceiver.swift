@@ -46,7 +46,7 @@ struct PerfStats: Equatable {
 
 /// How an inbound connection was accepted — decided BY THE LISTENER (TLS
 /// listener ⇒ .tls; :9000 ⇒ loopback-prefix heuristic, which stays a mere
-/// transport label and priority rank, never a trust decision — invariant 4).
+/// transport label and priority rank, never a trust decision).
 private enum TransportLabel {
     case loopback, tls, plaintextWiFi
     var rank: Int { self == .loopback ? 2 : self == .tls ? 1 : 0 }
@@ -82,7 +82,7 @@ final class PhoneReceiver: ObservableObject {
     // peerID (TrustStore account) of the Mac behind `connection`, resolved
     // from its TLS client certificate at `.ready`. Only ever set for `.tls`
     // connections — loopback/USB has no cryptographic peer identity to
-    // resolve (invariant 4: never a trust decision), so this stays nil for
+    // resolve (never a trust decision), so this stays nil for
     // it. Scopes per-Mac "forget" (dropActiveConnection(peerID:)) so
     // forgetting Mac A can never kick an unrelated, still-trusted Mac B.
     private var connectedPeerID: String?
@@ -297,7 +297,7 @@ final class PhoneReceiver: ObservableObject {
     /// certificate at connect time (see `resolvePeerID`), so this can't kick
     /// an unrelated, still-trusted Mac's active session. If `connectedPeerID`
     /// couldn't be resolved (e.g. USB/loopback, which has no cryptographic
-    /// peer identity — invariant 4) the active connection is left alone;
+    /// peer identity) the active connection is left alone;
     /// forgetting a USB-pinned peer while it's the live connection is a rare
     /// edge case and erring toward NOT disconnecting an unrelated session is
     /// the safer default.
@@ -323,7 +323,7 @@ final class PhoneReceiver: ObservableObject {
     /// Symmetric revoke: tell the connected Mac to drop its pin for us. On a
     /// TLS connection the send is scoped to the forgotten peer via
     /// `connectedPeerID`; on loopback/USB there is no cryptographic peer
-    /// identity (invariant 4), so the message is sent as-is and the Mac
+    /// identity, so the message is sent as-is and the Mac
     /// ignores it unless `toID` matches its own installID.
     func sendUnpair(toPeerID peerID: String) {
         queue.async {
@@ -367,7 +367,7 @@ final class PhoneReceiver: ObservableObject {
             let params = NWParameters(tls: nil, tcp: tcp)
             params.allowLocalEndpointReuse = true
             params.serviceClass = .interactiveVideo
-            // Phase 2 (wifi-tls-pairing-plan §8): the legacy plaintext port now
+            // The legacy plaintext port now
             // serves ONLY usbmux-forwarded traffic, which arrives on loopback —
             // bind loopback-only so LAN plaintext can never reach it again. Same
             // anchor as the bootstrap listener below: the port comes from
@@ -384,8 +384,8 @@ final class PhoneReceiver: ObservableObject {
             guard let self else { return }
             // usbmux-forwarded (cable) connections arrive from loopback;
             // anything else came over the network. This prefix check is a
-            // mere transport label / priority rank — never a trust decision
-            // (invariant 4); TLS acceptance derives solely from the
+            // mere transport label / priority rank — never a trust decision;
+            // TLS acceptance derives solely from the
             // completed pinned handshake in the TLS listener below.
             let peer = String(describing: conn.endpoint)
             let label: TransportLabel = (peer.hasPrefix("127.0.0.1") || peer.hasPrefix("::1")
@@ -411,7 +411,7 @@ final class PhoneReceiver: ObservableObject {
         listener?.start(queue: queue)
     }
 
-    // MARK: - Connection adoption / replacement priority (§2)
+    // MARK: - Connection adoption / replacement priority
 
     /// Single adoption path for every inbound connection, regardless of
     /// listener. Rank: loopback = 2, TLS = 1, plaintext-WiFi = 0. Accept iff
@@ -441,7 +441,7 @@ final class PhoneReceiver: ObservableObject {
         connection?.cancel()
         connection = conn
         currentLabel = label
-        transport = label.statsName          // stats/overlay label ONLY (invariant 4)
+        transport = label.statsName          // stats/overlay label ONLY — never a trust decision
         resetStreamState()
         conn.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
@@ -452,7 +452,7 @@ final class PhoneReceiver: ObservableObject {
                 if label == .tls {
                     self.connectedPeerID = self.resolvePeerID(for: conn)
                 } else {
-                    self.connectedPeerID = nil   // loopback/USB: no cryptographic identity (invariant 4)
+                    self.connectedPeerID = nil   // loopback/USB: no cryptographic identity
                 }
                 self.sendHello(on: conn)
             case .failed, .cancelled:
@@ -498,7 +498,7 @@ final class PhoneReceiver: ObservableObject {
         return TrustStore.shared.pinnedPeers().first { TrustStore.shared.pin(peerID: $0.peerID) == spki }?.peerID
     }
 
-    // MARK: - USB trust bootstrap listener (loopback-only; §5, §6)
+    // MARK: - USB trust bootstrap listener (loopback-only)
 
     private func startBootstrapListener() {
         do {
@@ -561,7 +561,7 @@ final class PhoneReceiver: ObservableObject {
         DispatchQueue.main.async { self.pendingTrust = nil }
     }
 
-    // MARK: - TLS listener (pinned mutual TLS; §4, §5)
+    // MARK: - TLS listener (pinned mutual TLS)
 
     private func startTLSListener() {
         guard let identity = TrustStore.shared.ownIdentity() else {
@@ -619,7 +619,7 @@ final class PhoneReceiver: ObservableObject {
         tlsListener?.start(queue: queue)
     }
 
-    // MARK: - Bootstrap wire protocol (§3, §6)
+    // MARK: - Bootstrap wire protocol
 
     /// Framed read loop on the bootstrap connection: [UInt32 BE length][UTF-8 JSON].
     private func handleBootstrapData(on conn: NWConnection) {
@@ -657,7 +657,7 @@ final class PhoneReceiver: ObservableObject {
         }
     }
 
-    /// State machine (§6): idle → offerReceived → {autoAccepted | awaitingUser}
+    /// State machine: idle → offerReceived → {autoAccepted | awaitingUser}
     /// → {accepted | denied | aborted} → idle.
     private func processBootstrapFrame(_ payload: Data, on conn: NWConnection) {
         guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
@@ -806,12 +806,14 @@ final class PhoneReceiver: ObservableObject {
             let normSize = CGSize(width: nw, height: nh)
             DispatchQueue.main.async { self.onCursorImage?(image, anchor, normSize) }
         case WireMessage.welcome:
-            // The Mac identified itself (issue #132). If it speaks a protocol
-            // older than we support, it's the Mac that needs updating — and an
-            // old Mac can't diagnose that itself, so we surface it here.
+            // The Mac identified itself (issue #132). A Mac older than the
+            // TLS WiFi transport still streams over USB (which is how this
+            // welcome arrived — the plaintext port is loopback-only), but
+            // can never do Wi-Fi — and an old Mac can't diagnose that
+            // itself, so surface a soft hint here.
             let macPV = obj["pv"] as? Int ?? WireProtocol.assumedWhenAbsent
-            if macPV < WireProtocol.minSupportedPeer {
-                let msg = "The OpenDisplay app on your Mac is too old for this \(deviceKind) app. Update OpenDisplay on your Mac to reconnect."
+            if macPV < WireProtocol.minWiFiPeer {
+                let msg = "The OpenDisplay app on your Mac is too old for Wi-Fi streaming. Update OpenDisplay on your Mac to use Wi-Fi — USB keeps working."
                 DispatchQueue.main.async { self.peerSignal = .updateMac(message: msg) }
             }
         case WireMessage.updateRequired:
@@ -827,7 +829,7 @@ final class PhoneReceiver: ObservableObject {
                 break
             }
             // TLS: the authenticated peer must BE the revoking Mac. Loopback
-            // has no cryptographic peer identity (invariant 4) — the physical
+            // has no cryptographic peer identity — the physical
             // cable is the same trust anchor the bootstrap channel uses.
             if currentLabel == .tls, connectedPeerID != fromID {
                 Log.info("unpair ignored — fromID \(fromID) does not match authenticated peer")

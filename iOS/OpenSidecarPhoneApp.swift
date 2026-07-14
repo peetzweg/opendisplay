@@ -294,7 +294,7 @@ struct OnboardingView: View {
     }
 }
 
-// MARK: - USB trust bootstrap confirmation (SEV-4 hardening)
+// MARK: - USB trust bootstrap confirmation
 
 /// Confirmation sheet for a USB trust offer. The fingerprint is the PRIMARY
 /// identity — it's the only value that's cryptographically tied to the

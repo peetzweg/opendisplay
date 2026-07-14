@@ -1,5 +1,5 @@
-// TrustBootstrapClient — one-shot USB trust bootstrap (wifi-tls-pairing-plan
-// §2). Dials the phone's loopback-bound bootstrap listener through usbmuxd,
+// TrustBootstrapClient — one-shot USB trust bootstrap (issue #16).
+// Dials the phone's loopback-bound bootstrap listener through usbmuxd,
 // offers this Mac's identity, and waits for the phone's accept/deny.
 //
 // Owns a single dedicated connection on its own queue with its own
