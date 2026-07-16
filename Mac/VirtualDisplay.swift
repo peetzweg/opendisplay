@@ -38,7 +38,7 @@ func shouldReassertMode(currentWidth: Int, currentPixelWidth: Int,
                          published: [CGVirtualDisplayMode],
                          settled: Bool, missingTicks: Int) -> Bool {
     let inPublished = published.contains {
-        $0.width == UInt(currentWidth) && $0.pixelWidth == UInt(currentPixelWidth)
+        $0.width == UInt(currentWidth) && $0.width * 2 == UInt(currentPixelWidth)
     }
     if inPublished { return false }            // #9: user choice sticks
     if !settled { return true }                // startup: still enforcing
@@ -159,7 +159,7 @@ final class VirtualDisplay {
     @discardableResult
     private func enforceMode(settled: Bool) -> Bool {
         let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
-        guard let modes = CGDisplayCopyAllDisplayModes(display.displayID, opts) as? [CGDisplayMode] else {
+        guard let runtimeModes = CGDisplayCopyAllDisplayModes(display.displayID, opts) as? [CGDisplayMode] else {
             // Whole mode list gone — republish (mirrors old `recover` path).
             Log.info("@2x modes vanished from display \(display.displayID) — re-applying settings")
             _ = display.apply(settings)
@@ -168,6 +168,8 @@ final class VirtualDisplay {
         }
         guard let current = CGDisplayCopyDisplayMode(display.displayID) else { return false }
 
+        // `settings.modes` are the descriptor modes we published (W×H @2x).
+        // A published mode shows up at runtime as width=W, pixelWidth=2W.
         let reassert = shouldReassertMode(
             currentWidth: Int(current.width),
             currentPixelWidth: Int(current.pixelWidth),
@@ -180,7 +182,7 @@ final class VirtualDisplay {
             // Either a user-chosen published mode, or not-yet-debounced: don't touch.
             // Persist a published-but-non-native choice so it survives rebuilds (#9).
             if let idx = settings.modes.firstIndex(where: {
-                $0.width == current.width && $0.pixelWidth == current.pixelWidth
+                $0.width == current.width && $0.width * 2 == current.pixelWidth
             }), idx != 0, let key = deviceKey {
                 ResolutionStore.save(step: idx, device: key)
             }
@@ -189,14 +191,21 @@ final class VirtualDisplay {
         }
 
         missingTicks += 1
-        // Find the mode to restore to: the persisted per-device choice if it's
-        // still in the published set, else native @2x.
-        let target: CGVirtualDisplayMode
+        // Find the runtime CGDisplayMode to restore to: prefer the persisted
+        // per-device choice (if still offered), else native @2x.
+        let targetDescriptor: CGVirtualDisplayMode
         if let step = deviceKey.flatMap({ ResolutionStore.load(device: $0) }),
            settings.modes.indices.contains(step) {
-            target = settings.modes[step]
+            targetDescriptor = settings.modes[step]
         } else {
-            target = settings.modes[0]
+            targetDescriptor = settings.modes[0]
+        }
+        guard let target = runtimeModes.first(where: {
+            $0.width == targetDescriptor.width && $0.pixelWidth == targetDescriptor.width * 2
+        }) else {
+            Log.info("mode re-assert target \(targetDescriptor.width)x\(targetDescriptor.height) not in runtime list — republishing")
+            _ = display.apply(settings)
+            return false
         }
         var config: CGDisplayConfigRef?
         CGBeginDisplayConfiguration(&config)
