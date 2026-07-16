@@ -479,11 +479,42 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         scheduleCaptureRecovery()
     }
 
-    /// Retry until capture is back (a rebuild during display sleep can fail).
+    /// Retry until capture is back. Per issue #29 fix-plan point 1: a dead
+    /// stream does NOT mean the display is gone. If our own virtual display
+    /// still exists, just re-attach the capture to it — rebuilding the display
+    /// (destroy+create) is what killed the NEIGHBOR's stream and ping-ponged
+    /// the infinite rebuild loop. Only do a full `reconfigure` when the display
+    /// is actually gone (e.g. display sleep tore it down).
     private func scheduleCaptureRecovery() {
         queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             guard let self, !self.stopped, self.stream == nil,
                   let hello = self.lastHello else { return }
+            // Does our virtual display still exist? CGDisplayBounds returns a
+            // zero rect for an unknown id, so a non-zero bounds means it's live.
+            if let vd = self.virtualDisplay,
+               !CGDisplayBounds(vd.displayID).isNull {
+                Log.info("capture died — display still present, re-attaching capture only (#29)")
+                Task {
+                    do {
+                        let display = try await self.findSCDisplay(id: vd.displayID)
+                        // Capture at the display's pixel resolution (points ×2 @2x),
+                        // not SCDisplay.width (logical points) — matches setupExtend.
+                        let captureW = (Int(Double(vd.pointsWide * 2) * self.quality.scale)) & ~1
+                        let captureH = (Int(Double(vd.pointsHigh * 2) * self.quality.scale)) & ~1
+                        try await self.startCapture(display: display,
+                                                    pixelsWide: captureW, pixelsHigh: captureH)
+                        self.needsKeyframe = true
+                    } catch {
+                        Log.info("re-attach failed (\(error)) — falling back to full rebuild")
+                        await self.reconfigure(hello)
+                    }
+                    self.queue.async {
+                        if self.stream == nil { self.scheduleCaptureRecovery() }
+                    }
+                }
+                return
+            }
+            // Display genuinely gone — full rebuild (preserves old behavior).
             Log.info("capture died — rebuilding pipeline")
             Task {
                 await self.reconfigure(hello)
