@@ -3,6 +3,21 @@ import Network
 import Combine
 import Sparkle
 
+/// Which side of the wire this Mac plays (issue #82). One app, two roles,
+/// switched with the tab bar at the top of the panel: stream your displays
+/// out to devices (sender), or act as a display for another Mac (receiver).
+/// The roles are mutually exclusive — switching stops the other side.
+enum AppRole: String, CaseIterable {
+    case sender, receiver
+
+    var label: String {
+        switch self {
+        case .sender: return "Share to Devices"
+        case .receiver: return "Be a Display"
+        }
+    }
+}
+
 /// How the app presents itself. One bundle, switched at runtime via the
 /// activation policy — like Raycast/Hammerspoon style background agents.
 enum AppPresentation: String, CaseIterable {
@@ -21,6 +36,7 @@ enum AppPresentation: String, CaseIterable {
 struct OpenSidecarMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var controller = SenderController.shared
+    @StateObject private var receiverController = ReceiverController.shared
 
     var body: some Scene {
         MenuBarExtra(isInserted: Binding(
@@ -29,7 +45,7 @@ struct OpenSidecarMacApp: App {
         )) {
             ContentView(controller: controller, updater: appDelegate.updater)
         } label: {
-            Image(systemName: controller.running
+            Image(systemName: controller.running || receiverController.connected
                   ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle")
         }
         .menuBarExtraStyle(.window)
@@ -162,6 +178,27 @@ final class DeviceSession: ObservableObject, Identifiable {
 final class SenderController: ObservableObject {
     static let shared = SenderController()
 
+    // Sender or receiver (issue #82). Switching roles is exclusive: entering
+    // receiver mode stops all outbound sessions (without flipping any
+    // per-device auto-connect prefs — this is a mode switch, not the user
+    // disconnecting a device), and returning to sender mode stops the
+    // receiver and lets auto-connect bring remembered devices back.
+    @Published var role = AppRole(
+        rawValue: UserDefaults.standard.string(forKey: "appRole") ?? "") ?? .sender {
+        didSet {
+            guard role != oldValue else { return }
+            UserDefaults.standard.set(role.rawValue, forKey: "appRole")
+            if role == .receiver {
+                sessions.forEach { $0.sender.stop() }
+                sessions.removeAll()
+                ReceiverController.shared.start()
+            } else {
+                ReceiverController.shared.stop()
+                autoConnect()
+            }
+        }
+    }
+
     @Published var presentation = AppPresentation(
         rawValue: UserDefaults.standard.string(forKey: "presentation") ?? "") ?? .menuBar {
         didSet {
@@ -232,6 +269,11 @@ final class SenderController: ObservableObject {
     private let wifiAutoConnectDeadline = Date().addingTimeInterval(12)
 
     init() {
+        // The persisted role applies from launch, before any UI exists (a
+        // spare Mac may run background-only as a permanent display).
+        if role == .receiver {
+            ReceiverController.shared.start()
+        }
         startBrowsing()
         usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
             guard let self else { return }
@@ -315,7 +357,7 @@ final class SenderController: ObservableObject {
     // MARK: - Connection policy
 
     private func autoConnect() {
-        guard autoConnectEnabled else { return }
+        guard autoConnectEnabled, role == .sender else { return }
         dedupeSessions()
         // The -host/-port escape hatch is an explicit choice — dial it like
         // the wired devices (it joins them, not replaces them).
@@ -704,6 +746,7 @@ final class PermissionMonitor: ObservableObject {
 
 struct ContentView: View {
     @ObservedObject var controller: SenderController
+    @ObservedObject var receiverController = ReceiverController.shared
     @StateObject private var permissions = PermissionMonitor()
     // Optional so the view still compiles/previews without an updater (e.g.
     // if Sparkle ever fails to start); the button just disables itself then.
@@ -719,124 +762,41 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("OpenDisplay")
                         .font(.title3.bold())
-                    Text("Your iPads and iPhones as extra displays")
+                    Text(controller.role == .sender
+                         ? "Your iPads, iPhones and Macs as extra displays"
+                         : "This Mac as an extra display for another Mac")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if controller.running {
+                if controller.role == .sender, controller.running {
                     Button("Disconnect All") { controller.disconnectAll() }
                         .controlSize(.large)
                 }
             }
             .padding(16)
 
+            // Role tab bar (issue #82): this Mac sends to devices, or
+            // receives from another Mac. Exclusive; switching stops the
+            // other side.
+            Picker("Role", selection: $controller.role) {
+                ForEach(AppRole.allCases, id: \.self) { role in
+                    Text(role.label).tag(role)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+
             Divider()
 
             // Settings
             Form {
-                Section("Devices") {
-                    if controller.deviceEntries.isEmpty {
-                        Text("No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(controller.deviceEntries) { entry in
-                        if let session = controller.session(for: entry) {
-                            // Title from the entry, not the session: the
-                            // session name was snapshotted at connect time,
-                            // often before lockdown resolved the real name.
-                            SessionRow(title: entry.name, session: session,
-                                       controller: controller)
-                        } else {
-                            HStack(alignment: .firstTextBaseline) {
-                                Circle()
-                                    .fill(.secondary.opacity(0.5))
-                                    .frame(width: 9, height: 9)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.name)
-                                    Text(entry.transportLabel)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if let target = entry.preferredTarget {
-                                    Button("Connect") {
-                                        controller.connect(to: target, userInitiated: true)
-                                    }
-                                    .controlSize(.small)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Picker("Mode", selection: $controller.mode) {
-                    Text("Extend").tag(CaptureMode.extend)
-                    Text("Mirror").tag(CaptureMode.mirror)
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: controller.mode) { controller.restartAll() }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Picker("Quality", selection: $controller.quality) {
-                        ForEach(StreamQuality.allCases, id: \.self) { q in
-                            Text(q.label).tag(q)
-                        }
-                    }
-                    .onChange(of: controller.quality) { controller.restartAll() }
-                    Text(controller.quality.explanation)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Picker("Show app in", selection: $controller.presentation) {
-                        ForEach(AppPresentation.allCases, id: \.self) { p in
-                            Text(p.label).tag(p)
-                        }
-                    }
-                    if controller.presentation == .background {
-                        Text("No menu bar or Dock icon — streaming keeps running. Open the OpenDisplay app again (Spotlight/Finder) to show this window.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                LabeledContent("Display layout") {
-                    Button("Arrange Displays…") {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.Displays-Settings.extension") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                    .controlSize(.small)
-                }
-                .help("Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device.")
-
-                Section("Permissions") {
-                    permissionRow(
-                        "Screen Recording",
-                        granted: permissions.screenRecording,
-                        help: "Required to capture the display.",
-                        anchor: "Privacy_ScreenCapture",
-                        request: { permissions.requestScreenRecording() }
-                    )
-                    permissionRow(
-                        "Accessibility",
-                        granted: permissions.accessibility,
-                        help: "Required for touch input from the device.",
-                        anchor: "Privacy_Accessibility",
-                        request: { permissions.requestAccessibility() }
-                    )
-                    // macOS offers no API to query Local Network access, so
-                    // infer from discovery results and let the user check.
-                    permissionRow(
-                        "Local Network",
-                        granted: !controller.discovered.isEmpty,
-                        uncertain: controller.discovered.isEmpty,
-                        help: "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
-                        anchor: "Privacy_LocalNetwork"
-                    )
+                if controller.role == .receiver {
+                    ReceiverSections(controller: receiverController)
+                } else {
+                    senderSections
                 }
             }
             .formStyle(.grouped)
@@ -846,27 +806,155 @@ struct ContentView: View {
 
             Divider()
 
-            // Status bar
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(controller.running ? .green : .secondary.opacity(0.5))
-                    .frame(width: 9, height: 9)
-                Text(controller.running
-                     ? "\(controller.sessions.count) device\(controller.sessions.count == 1 ? "" : "s") connected"
-                     : "Idle")
-                    .font(.callout)
-                    .lineLimit(1)
-                Spacer()
-                if let updater {
-                    CheckForUpdatesView(updater: updater)
-                }
-                Button("Quit") { NSApp.terminate(nil) }
-                    .controlSize(.small)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            statusBar
         }
         .frame(width: 440, height: 540)
+    }
+
+    // MARK: - Sender sections
+
+    @ViewBuilder
+    private var senderSections: some View {
+        Section("Devices") {
+            if controller.deviceEntries.isEmpty {
+                Text("No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(controller.deviceEntries) { entry in
+                if let session = controller.session(for: entry) {
+                    // Title from the entry, not the session: the
+                    // session name was snapshotted at connect time,
+                    // often before lockdown resolved the real name.
+                    SessionRow(title: entry.name, session: session,
+                               controller: controller)
+                } else {
+                    HStack(alignment: .firstTextBaseline) {
+                        Circle()
+                            .fill(.secondary.opacity(0.5))
+                            .frame(width: 9, height: 9)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.name)
+                            Text(entry.transportLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if let target = entry.preferredTarget {
+                            Button("Connect") {
+                                controller.connect(to: target, userInitiated: true)
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                }
+            }
+        }
+
+        Picker("Mode", selection: $controller.mode) {
+            Text("Extend").tag(CaptureMode.extend)
+            Text("Mirror").tag(CaptureMode.mirror)
+        }
+        .pickerStyle(.segmented)
+        .onChange(of: controller.mode) { controller.restartAll() }
+
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Quality", selection: $controller.quality) {
+                ForEach(StreamQuality.allCases, id: \.self) { q in
+                    Text(q.label).tag(q)
+                }
+            }
+            .onChange(of: controller.quality) { controller.restartAll() }
+            Text(controller.quality.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Show app in", selection: $controller.presentation) {
+                ForEach(AppPresentation.allCases, id: \.self) { p in
+                    Text(p.label).tag(p)
+                }
+            }
+            if controller.presentation == .background {
+                Text("No menu bar or Dock icon — streaming keeps running. Open the OpenDisplay app again (Spotlight/Finder) to show this window.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+
+        LabeledContent("Display layout") {
+            Button("Arrange Displays…") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.Displays-Settings.extension") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .controlSize(.small)
+        }
+        .help("Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device.")
+
+        Section("Permissions") {
+            permissionRow(
+                "Screen Recording",
+                granted: permissions.screenRecording,
+                help: "Required to capture the display.",
+                anchor: "Privacy_ScreenCapture",
+                request: { permissions.requestScreenRecording() }
+            )
+            permissionRow(
+                "Accessibility",
+                granted: permissions.accessibility,
+                help: "Required for touch input from the device.",
+                anchor: "Privacy_Accessibility",
+                request: { permissions.requestAccessibility() }
+            )
+            // macOS offers no API to query Local Network access, so
+            // infer from discovery results and let the user check.
+            permissionRow(
+                "Local Network",
+                granted: !controller.discovered.isEmpty,
+                uncertain: controller.discovered.isEmpty,
+                help: "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
+                anchor: "Privacy_LocalNetwork"
+            )
+        }
+    }
+
+    // MARK: - Status bar
+
+    private var statusBar: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(statusIsActive ? .green : .secondary.opacity(0.5))
+                .frame(width: 9, height: 9)
+            Text(statusText)
+                .font(.callout)
+                .lineLimit(1)
+            Spacer()
+            if let updater {
+                CheckForUpdatesView(updater: updater)
+            }
+            Button("Quit") { NSApp.terminate(nil) }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var statusIsActive: Bool {
+        controller.role == .sender ? controller.running : receiverController.connected
+    }
+
+    private var statusText: String {
+        switch controller.role {
+        case .sender:
+            return controller.running
+                ? "\(controller.sessions.count) device\(controller.sessions.count == 1 ? "" : "s") connected"
+                : "Idle"
+        case .receiver:
+            return receiverController.connected
+                ? "Receiving from a Mac" : "Waiting for a Mac to connect"
+        }
     }
 
     @ViewBuilder
@@ -976,5 +1064,107 @@ struct SessionRow: View {
             Button("Disconnect") { controller.disconnect(session) }
                 .controlSize(.small)
         }
+    }
+}
+
+// MARK: - Receiver panel (issue #82)
+
+/// The receiver-mode sections of the panel: live status, the advertised
+/// name, and how-to copy. Lives inside the shared grouped Form.
+struct ReceiverSections: View {
+    @ObservedObject var controller: ReceiverController
+    @AppStorage("showAnalytics") private var showAnalytics = false
+
+    var body: some View {
+        // The receiver exists only while receiver mode is on; observed in a
+        // subview because nested ObservableObjects don't republish.
+        if let receiver = controller.receiver {
+            ReceiverStatusSection(receiver: receiver, controller: controller)
+        }
+
+        Section {
+            ReceiverNameField { controller.setAdvertisedName($0) }
+        } header: {
+            Text("Name")
+        } footer: {
+            Text("How this Mac appears in the other Mac's Devices list.")
+        }
+
+        Section {
+            Toggle("Performance overlay", isOn: $showAnalytics)
+        } footer: {
+            Text("FPS, bitrate, frame timing, and latency graphs at the bottom of the video window while streaming — the same HUD the iPhone app has.")
+        }
+
+        Section("How to connect") {
+            Label("Install and open OpenDisplay on the Mac whose screen you want to extend.",
+                  systemImage: "macbook.and.macbook")
+            Label("With both Macs on the same network, this Mac appears in its Devices list — click Connect there.",
+                  systemImage: "wifi")
+            Label("The stream opens in a window here — use the green traffic light for full screen.",
+                  systemImage: "arrow.up.left.and.arrow.down.right")
+        }
+        .font(.subheadline)
+    }
+}
+
+/// Live state of the running receiver: connection, stream format, and any
+/// compatibility signal from the connected Mac.
+private struct ReceiverStatusSection: View {
+    @ObservedObject var receiver: StreamReceiver
+    let controller: ReceiverController
+
+    var body: some View {
+        Section("This Mac as a display") {
+            HStack(alignment: .firstTextBaseline) {
+                Circle()
+                    .fill(receiver.connected ? Color.green : Color.orange)
+                    .frame(width: 9, height: 9)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(receiver.connected ? "Connected" : "Waiting for a Mac…")
+                    Text(receiver.status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if controller.streaming {
+                    Button("Show Window") { controller.showWindow() }
+                        .controlSize(.small)
+                        .help("Bring the video window back if you closed it — the stream keeps running either way.")
+                }
+            }
+            if receiver.videoSize != .zero {
+                LabeledContent("Stream",
+                               value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
+            }
+            if let message = peerMessage {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// Compatibility copy from the sender (issue #132) — surfaced inline;
+    /// the Mac app has Sparkle, so there is no blocking gate like on iOS.
+    private var peerMessage: String? {
+        switch receiver.peerSignal {
+        case let .updateReceiver(message, _): return message
+        case let .updateMac(message): return message
+        case nil: return nil
+        }
+    }
+}
+
+/// The advertised-name editor — kept out of any high-frequency observed
+/// object so streaming updates can't rebuild it mid-edit (same reasoning as
+/// the iOS DeviceNameField).
+private struct ReceiverNameField: View {
+    @AppStorage("receiverName") private var name = Host.current().localizedName ?? "Mac"
+    let onChange: (String) -> Void
+
+    var body: some View {
+        TextField("Name", text: $name)
+            .onChange(of: name) { _, value in onChange(value) }
     }
 }

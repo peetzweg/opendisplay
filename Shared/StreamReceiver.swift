@@ -1,17 +1,24 @@
-// PhoneReceiver — Milestone 1: receive H.264 over TCP and display it.
+// StreamReceiver — the listening half of OpenDisplay: receive H.264 over
+// TCP and display it. Compiled into BOTH targets (see project.yml): it is
+// the iOS app's core, and the Mac app's receiver mode (issue #82) reuses it
+// unchanged to turn a spare Mac into a display.
 //
 // Pipeline:  TCP socket -> deframe -> Annex B parse -> CMSampleBuffer
 //            -> AVSampleBufferDisplayLayer (decodes + renders)
 //
-// The phone LISTENS; the Mac connects (required for usbmux/USB).
+// The receiver LISTENS; the sending Mac connects (required for usbmux/USB).
 // Wire protocol: [4-byte big-endian length][Annex B payload].
+//
+// Keep this file UIKit/AppKit-free — platform specifics (device kind,
+// default names, cursor drawing, orientation) are injected by the app layer.
 
 import Foundation
 import Network
 import AVFoundation
 import CoreMedia
 import VideoToolbox
-import UIKit
+import QuartzCore
+import ImageIO
 
 /// One-second window of pipeline health, plus per-frame timing samples for
 /// the performance overlay graph.
@@ -42,7 +49,16 @@ struct PerfStats: Equatable {
     var photonP95 = 0.0
 }
 
-final class PhoneReceiver: ObservableObject {
+// MARK: - Peer-driven update signals (issue #132)
+
+/// What the connected (sending) Mac tells us about compatibility. The iOS app
+/// feeds this into its VersionGate; the Mac receiver panel shows it inline.
+enum PeerUpdateSignal: Equatable {
+    case updateReceiver(message: String, storeURL: URL)  // Mac sent `updateRequired`
+    case updateMac(message: String)                      // sender's pv is below our floor
+}
+
+final class StreamReceiver: ObservableObject {
 
     @Published var status = "Starting…"
     @Published var fps = 0
@@ -98,9 +114,17 @@ final class PhoneReceiver: ObservableObject {
 
     // Local cursor echo (both called on the main thread): position is
     // normalized [0,1] in video space; the sprite arrives as a PNG with its
-    // hotspot anchor and size normalized against the Mac display.
+    // hotspot anchor and size normalized against the Mac display. The anchor
+    // and normalized coordinates use a TOP-LEFT origin (video space).
     var onCursor: ((_ x: Double, _ y: Double, _ visible: Bool) -> Void)?
-    var onCursorImage: ((_ image: UIImage, _ anchor: CGPoint, _ normSize: CGSize) -> Void)?
+    var onCursorImage: ((_ image: CGImage, _ anchor: CGPoint, _ normSize: CGSize) -> Void)?
+    // The video view attaches only once frames are on screen — usually AFTER
+    // the connect-time sprite already arrived (the sender re-sends it only
+    // when the cursor changes shape, so a plain arrow would stay invisible
+    // forever). Keep the latest of each so a late-attaching view replays
+    // them. Main-thread, like the callbacks.
+    private(set) var cursorState: (x: Double, y: Double, visible: Bool) = (0.5, 0.5, false)
+    private(set) var cursorSprite: (image: CGImage, anchor: CGPoint, normSize: CGSize)?
 
     // Metal renderer path (experimental, "metalRenderer" setting): we decode
     // explicitly and hand BGRA buffers out; called on the receiver queue.
@@ -147,6 +171,13 @@ final class PhoneReceiver: ObservableObject {
     // the real name host-side via lockdownd regardless.
     var serviceName = "OpenDisplay"
 
+    // Platform identity, injected at init so this file stays UI-framework-free.
+    /// "iPhone" / "iPad" / "Mac" — announced in the hello (the sender names
+    /// the virtual display after it) and used in peer-update copy.
+    private let deviceKind: String
+    /// What to advertise when the user-set service name is empty.
+    private let fallbackServiceName: String
+
     // Stable per-install identity, advertised in the Bonjour TXT record and
     // sent in every hello. The Mac uses it to recognize "same device, other
     // transport" — the service name can't serve that role since it's
@@ -172,7 +203,7 @@ final class PhoneReceiver: ObservableObject {
     /// Update the advertised name and re-publish if already listening.
     func setServiceName(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolved = trimmed.isEmpty ? UIDevice.current.name : trimmed
+        let resolved = trimmed.isEmpty ? fallbackServiceName : trimmed
         queue.async {
             guard resolved != self.serviceName else { return }
             self.serviceName = resolved
@@ -194,17 +225,30 @@ final class PhoneReceiver: ObservableObject {
     }
 
     func setOrientation(portrait: Bool) {
-        let w = portrait ? nativeShort : nativeLong
-        let h = portrait ? nativeLong : nativeShort
-        guard w > 0, w != devicePixelsWide else { return }
+        guard nativeLong > 0 else { return }
+        setPanel(pixelsWide: portrait ? nativeShort : nativeLong,
+                 pixelsHigh: portrait ? nativeLong : nativeShort,
+                 scale: deviceScale)
+    }
+
+    /// Announce the panel this receiver renders onto. Called before start()
+    /// and again whenever it changes (iOS rotation via setOrientation, macOS
+    /// display-mode changes) — a live connection re-sends hello so the sender
+    /// rebuilds the virtual display for the new dimensions.
+    func setPanel(pixelsWide w: Int, pixelsHigh h: Int, scale: Double) {
+        deviceScale = scale
+        guard w > 0, h > 0, w != devicePixelsWide || h != devicePixelsHigh else { return }
         devicePixelsWide = w
         devicePixelsHigh = h
-        Log.info("orientation changed -> \(portrait ? "portrait" : "landscape") \(w)x\(h)")
+        Log.info("panel changed -> \(w)x\(h) @\(scale)x")
         if let connection { sendHello(on: connection) }
     }
 
-    init(displayLayer: AVSampleBufferDisplayLayer) {
+    init(displayLayer: AVSampleBufferDisplayLayer, deviceKind: String,
+         fallbackServiceName: String) {
         self.displayLayer = displayLayer
+        self.deviceKind = deviceKind
+        self.fallbackServiceName = fallbackServiceName
         displayLayer.videoGravity = .resizeAspect
     }
 
@@ -215,6 +259,21 @@ final class PhoneReceiver: ObservableObject {
             monitorsStarted = true
             schedulePing()
             scheduleWatchdog()
+        }
+    }
+
+    /// Stop listening and drop any live connection — the Mac app calls this
+    /// when the user leaves receiver mode. The liveness monitors stay armed
+    /// but idle; the instance can be restarted with start() or discarded.
+    func stop() {
+        queue.async {
+            self.listener?.cancel()
+            self.listener = nil
+            self.listenerHealthy = false
+            self.connection?.cancel()
+            self.connection = nil
+            self.setConnected(false)
+            self.setStatus("Stopped")
         }
     }
 
@@ -338,15 +397,22 @@ final class PhoneReceiver: ObservableObject {
             let visible = (obj["v"] as? Int ?? 0) == 1
             let x = obj["x"] as? Double ?? 0
             let y = obj["y"] as? Double ?? 0
-            DispatchQueue.main.async { self.onCursor?(x, y, visible) }
+            DispatchQueue.main.async {
+                self.cursorState = (x, y, visible)
+                self.onCursor?(x, y, visible)
+            }
         case "cursorImg":
             guard let b64 = obj["png"] as? String,
                   let png = Data(base64Encoded: b64),
-                  let image = UIImage(data: png),
+                  let source = CGImageSourceCreateWithData(png as CFData, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
                   let nw = obj["nw"] as? Double, let nh = obj["nh"] as? Double else { return }
             let anchor = CGPoint(x: obj["ax"] as? Double ?? 0, y: obj["ay"] as? Double ?? 0)
             let normSize = CGSize(width: nw, height: nh)
-            DispatchQueue.main.async { self.onCursorImage?(image, anchor, normSize) }
+            DispatchQueue.main.async {
+                self.cursorSprite = (image, anchor, normSize)
+                self.onCursorImage?(image, anchor, normSize)
+            }
         case WireMessage.welcome:
             // The Mac identified itself (issue #132). If it speaks a protocol
             // older than we support, it's the Mac that needs updating — and an
@@ -361,7 +427,7 @@ final class PhoneReceiver: ObservableObject {
             let message = obj["message"] as? String
                 ?? "Update OpenDisplay from the App Store to keep using your second display."
             let store = (obj["store"] as? String).flatMap { URL(string: $0) } ?? AppStore.updateURL
-            DispatchQueue.main.async { self.peerSignal = .updateIPhone(message: message, storeURL: store) }
+            DispatchQueue.main.async { self.peerSignal = .updateReceiver(message: message, storeURL: store) }
         default:
             break
         }
@@ -406,7 +472,7 @@ final class PhoneReceiver: ObservableObject {
             "pixelsWide": devicePixelsWide,
             "pixelsHigh": devicePixelsHigh,
             "scale": deviceScale,
-            "device": UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
+            "device": deviceKind,
             "id": Self.installID,
             "pv": WireProtocol.version,   // issue #132 — absent on old receivers
         ], on: conn)
