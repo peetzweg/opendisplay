@@ -118,8 +118,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private let displaySerial: UInt32
 
     // Backpressure: outstanding sends. If the socket can't keep up we drop
-    // frames instead of queueing latency, then force a keyframe to resync.
-    // Kept tight: at 60fps each queued send is ~17ms of added latency.
+    // frames instead of queueing latency. Kept tight: at 60fps each queued
+    // send is ~17ms of added latency.
     private var pendingSends = 0
     private let maxPendingSends = 3
     private var dropsThisWindow = 0
@@ -934,7 +934,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // No receiver, or the socket is backed up: skip this frame entirely.
         guard connectionReady else { return }
         if pendingSends > maxPendingSends {
-            needsKeyframe = true   // dropped frames break the P-frame chain
+            // Pre-encode skip: the P-frame chain stays valid — the encoder
+            // references its own last output, and TCP delivers every encoded
+            // frame in order. Forcing an IDR here (as this path once did)
+            // turned each drop into a multi-hundred-KB keyframe, which backed
+            // the socket up further — a drop→IDR→drop spiral under sustained
+            // pressure (measured on a 120Hz fork of this pipeline: delivered
+            // fps collapsing to 0 while capture held 80+).
             dropsThisWindow += 1
             dropsTotal += 1
             return
