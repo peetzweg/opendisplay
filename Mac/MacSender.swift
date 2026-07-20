@@ -1000,8 +1000,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 inputInjector?.handleScroll(dx: dx, dy: dy)
             }
         case "pencil":
-            if let phaseStr = obj["phase"] as? String,
-               let phase = PencilPhase(rawValue: phaseStr),
+            if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
                 inputInjector?.handlePencil(
@@ -1017,12 +1016,6 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         if inputLatencies.count > 240 { inputLatencies.removeFirst(120) }
                     }
                 }
-            }
-        case "barrelButton":
-            if let down = obj["down"] as? Bool {
-                inputInjector?.handleBarrelButton(down: down,
-                                                  x: obj["x"] as? Double,
-                                                  y: obj["y"] as? Double)
             }
         case "kf":
             // The phone's decoder lost sync (e.g. it attached mid-GOP and

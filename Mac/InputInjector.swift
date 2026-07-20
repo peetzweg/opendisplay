@@ -4,8 +4,6 @@ import AppKit
 /// Turns normalized touch coordinates from the phone into mouse events on a
 /// target display. Touch semantics: finger down = left button down, finger
 /// move = drag, finger up = button up — i.e. the phone acts as a touchscreen.
-/// Pencil uses additional wire message types handled by `handlePencil` and
-/// `handleBarrelButton`.
 final class InputInjector {
 
     private let displayID: CGDirectDisplayID
@@ -35,7 +33,7 @@ final class InputInjector {
 
     /// x/y are normalized [0,1] in video space (origin top-left).
     func handleTouch(phase: String, x: Double, y: Double) {
-        let bounds = CGDisplayBounds(displayID)
+        let bounds = CGDisplayBounds(displayID)   // global CG coords, y-down
         let point = CGPoint(
             x: bounds.origin.x + x * bounds.width,
             y: bounds.origin.y + y * bounds.height
@@ -49,7 +47,7 @@ final class InputInjector {
         case "moved":
             type = isDown ? .leftMouseDragged : .mouseMoved
         case "ended", "cancelled":
-            guard isDown else { return }
+            guard isDown else { return }   // spurious up without a down
             type = .leftMouseUp
             isDown = false
         default:
@@ -75,13 +73,13 @@ final class InputInjector {
         event.post(tap: .cghidEventTap)
     }
 
-    func handlePencil(phase: PencilPhase, x: Double, y: Double,
+    func handlePencil(phase: String, x: Double, y: Double,
                       pressure: Double, azimuth: Double, altitude: Double,
                       rotation: Double) {
         let (tiltX, tiltY) = deriveTilt(azimuth: azimuth, altitude: altitude)
 
         switch phase {
-        case .down:
+        case "down":
             if pressure < 0.01 {
                 pencilTapMode = true
                 postMouse(type: .leftMouseDown, at: screenPoint(nx: x, ny: y))
@@ -91,14 +89,14 @@ final class InputInjector {
                                 tiltX: tiltX, tiltY: tiltY, rotation: rotation)
             }
             penDown = true
-        case .move:
+        case "move":
             if penDown {
                 postTabletPoint(phase: .drag, x: x, y: y, pressure: pressure,
                                 tiltX: tiltX, tiltY: tiltY, rotation: rotation)
             } else {
                 postMouse(type: .mouseMoved, at: screenPoint(nx: x, ny: y))
             }
-        case .up:
+        case "up":
             if pencilTapMode {
                 postMouse(type: .leftMouseUp, at: screenPoint(nx: x, ny: y))
                 pencilTapMode = false
@@ -107,20 +105,11 @@ final class InputInjector {
                                 tiltX: tiltX, tiltY: tiltY, rotation: rotation)
             }
             penDown = false
-        case .hover:
+        case "hover":
             postMouse(type: .mouseMoved, at: screenPoint(nx: x, ny: y))
+        default:
+            return
         }
-    }
-
-    func handleBarrelButton(down: Bool, x: Double?, y: Double?) {
-        let p: CGPoint
-        if let nx = x, let ny = y { p = screenPoint(nx: nx, ny: ny) }
-        else { p = currentCursor() }
-        let type: CGEventType = down ? .rightMouseDown : .rightMouseUp
-        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
-                                  mouseCursorPosition: p, mouseButton: .right) else { return }
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
-        event.post(tap: .cghidEventTap)
     }
 
     private enum PointPhase { case down, drag, up }
