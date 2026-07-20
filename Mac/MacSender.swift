@@ -1017,6 +1017,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     }
                 }
             }
+        case "proximity":
+            if let entering = obj["entering"] as? Bool,
+               let x = obj["x"] as? Double,
+               let y = obj["y"] as? Double {
+                inputInjector?.handleProximity(entering: entering, x: x, y: y)
+            }
         case "kf":
             // The phone's decoder lost sync (e.g. it attached mid-GOP and
             // periodic keyframes are off) — force an IDR on the next frame.

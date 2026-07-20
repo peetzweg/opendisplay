@@ -750,6 +750,9 @@ struct VideoLayerView: UIViewRepresentable {
                                  pressure: pressure, azimuth: azimuth,
                                  altitude: altitude, rotation: rotation)
         }
+        view.inputEngine.onProximity = { [weak receiver] entering, x, y in
+            receiver?.sendProximity(entering: entering, x: x, y: y)
+        }
         view.inputEngine.install(on: view)
 
         let pan = UIPanGestureRecognizer(target: view, action: #selector(VideoView.didTwoFingerPan(_:)))
@@ -982,6 +985,7 @@ final class InputCaptureEngine: NSObject {
     var onPencil: ((_ phase: String, _ x: Double, _ y: Double,
                     _ pressure: Double, _ azimuth: Double, _ altitude: Double,
                     _ rotation: Double) -> Void)?
+    var onProximity: ((_ entering: Bool, _ x: Double, _ y: Double) -> Void)?
 
     /// Map a point in the host view to normalized video coordinates.
     var normalize: ((CGPoint) -> (x: Double, y: Double)?)?
@@ -989,6 +993,7 @@ final class InputCaptureEngine: NSObject {
     private weak var hostView: UIView?
     private var activePens: Set<UInt64> = []
     private var hoverInRange = false
+    private var proximityActive = false
     private var penStrokes: [UInt64: PenStroke] = [:]
     private let tapMoveThreshold: CGFloat = 8
 
@@ -1010,8 +1015,12 @@ final class InputCaptureEngine: NSObject {
         guard activePens.isEmpty, let view = hostView else { return }
         guard let n = normalize?(gr.location(in: view)) else { return }
         switch gr.state {
-        case .began, .changed:
+        case .began:
             hoverInRange = true
+            openProximity(x: n.x, y: n.y)
+            fallthrough
+        case .changed:
+            guard hoverInRange else { return }
             let azimuth = Double(gr.azimuthAngle(in: view))
             let altitude = Double(gr.altitudeAngle)
             var rotationDeg: Double = 0
@@ -1020,7 +1029,10 @@ final class InputCaptureEngine: NSObject {
             }
             onPencil?("hover", n.x, n.y, 0, azimuth, altitude, rotationDeg)
         case .ended, .cancelled, .failed:
-            hoverInRange = false
+            if hoverInRange {
+                hoverInRange = false
+                closeProximity(x: n.x, y: n.y)
+            }
         default:
             break
         }
@@ -1031,6 +1043,18 @@ final class InputCaptureEngine: NSObject {
         for touch in touches where touch.type == .pencil || touch.type == .stylus {
             emitPen(touch, event: event, ended: ended)
         }
+    }
+
+    private func openProximity(x: Double, y: Double) {
+        guard !proximityActive else { return }
+        proximityActive = true
+        onProximity?(true, x, y)
+    }
+
+    private func closeProximity(x: Double, y: Double) {
+        guard proximityActive else { return }
+        proximityActive = false
+        onProximity?(false, x, y)
     }
 
     private func emitPen(_ touch: UITouch, event: UIEvent?, ended: Bool) {
@@ -1066,6 +1090,7 @@ final class InputCaptureEngine: NSObject {
                 stroke.sentDown = true
                 penStrokes[id] = stroke
                 if let start = normalize?(stroke.start) {
+                    openProximity(x: start.x, y: start.y)
                     emitPencil("down", x: start.x, y: start.y, pressure: pressure,
                                azimuth: azimuth, altitude: altitude, rotation: rotationDeg)
                 }
@@ -1089,10 +1114,12 @@ final class InputCaptureEngine: NSObject {
         }
 
         if let stroke = penStrokes[id], !stroke.sentDown {
+            openProximity(x: nx, y: ny)
             emitPencil("down", x: nx, y: ny, pressure: pressure,
                        azimuth: azimuth, altitude: altitude, rotation: rotationDeg)
             emitPencil("up", x: nx, y: ny, pressure: 0,
                        azimuth: azimuth, altitude: altitude, rotation: rotationDeg)
+            closeProximity(x: nx, y: ny)
             return
         }
 

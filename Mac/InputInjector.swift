@@ -16,7 +16,15 @@ final class InputInjector {
     // open but their tracking session breaks, leaving zombie menu windows
     // composited on the display (visible in the stream, unclickable).
     private let source = CGEventSource(stateID: .hidSystemState)
-    private let deviceID: Int64 = 1
+    // Synthetic OpenDisplay tablet — conspicuous in logs; not Wacom (0x056A) or
+    // typical small driver IDs (1, 2, …).
+    private let tabletVendorID: Int64 = 0x0D15       // "ODIS"
+    private let tabletProductID: Int64 = 0x0101
+    private let deviceID: Int64 = 424242
+    private let pointerID: Int64 = 0x0D02              // pen tip
+    private let vendorPointerType: Int64 = 0x0802    // Grip Pen (what apps expect)
+    private let capabilityMask: Int64 = 0x05C7       // pressure + tilt + rotation + buttons
+    private var inRange = false
 
     init(displayID: CGDirectDisplayID) {
         self.displayID = displayID
@@ -73,9 +81,17 @@ final class InputInjector {
         event.post(tap: .cghidEventTap)
     }
 
+    func handleProximity(entering: Bool, x: Double, y: Double) {
+        setProximity(entering: entering, at: screenPoint(nx: x, ny: y))
+    }
+
     func handlePencil(phase: String, x: Double, y: Double,
                       pressure: Double, azimuth: Double, altitude: Double,
                       rotation: Double) {
+        let p = screenPoint(nx: x, ny: y)
+        if phase == "down", !inRange {
+            setProximity(entering: true, at: p)
+        }
         let (tiltX, tiltY) = deriveTilt(azimuth: azimuth, altitude: altitude)
 
         switch phase {
@@ -111,6 +127,29 @@ final class InputInjector {
         default:
             return
         }
+    }
+
+    private func setProximity(entering: Bool, at p: CGPoint) {
+        guard entering != inRange else { return }
+        inRange = entering
+        postProximityEvent(entering: entering, at: p)
+    }
+
+    private func postProximityEvent(entering: Bool, at p: CGPoint) {
+        guard let ev = CGEvent(source: source) else { return }
+        ev.type = .tabletProximity
+        ev.location = p
+        ev.setIntegerValueField(.tabletProximityEventVendorID, value: tabletVendorID)
+        ev.setIntegerValueField(.tabletProximityEventTabletID, value: tabletProductID)
+        ev.setIntegerValueField(.tabletProximityEventPointerID, value: pointerID)
+        ev.setIntegerValueField(.tabletProximityEventDeviceID, value: deviceID)
+        ev.setIntegerValueField(.tabletProximityEventSystemTabletID, value: 0)
+        ev.setIntegerValueField(.tabletProximityEventPointerType, value: entering ? 1 : 0)
+        ev.setIntegerValueField(.tabletProximityEventVendorPointerType, value: vendorPointerType)
+        ev.setIntegerValueField(.tabletProximityEventCapabilityMask, value: capabilityMask)
+        ev.setIntegerValueField(.tabletProximityEventEnterProximity, value: entering ? 1 : 0)
+        ev.flags = .maskNonCoalesced
+        ev.post(tap: .cghidEventTap)
     }
 
     private enum PointPhase { case down, drag, up, hover }

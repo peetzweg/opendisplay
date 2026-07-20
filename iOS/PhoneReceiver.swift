@@ -529,6 +529,10 @@ final class PhoneReceiver: ObservableObject {
         sendControl(msg)
     }
 
+    func sendProximity(entering: Bool, x: Double, y: Double) {
+        sendControl(["type": "proximity", "entering": entering, "x": x, "y": y])
+    }
+
     private func sendControl(_ message: [String: Any], on conn: NWConnection? = nil,
                              completion: (() -> Void)? = nil) {
         guard let conn = conn ?? connection,
