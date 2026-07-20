@@ -21,8 +21,8 @@ final class InputInjector {
     private let tabletVendorID: Int64 = 0x0D15       // "ODIS"
     private let tabletProductID: Int64 = 0x0101
     private let deviceID: Int64 = 424242
-    private let pointerID: Int64 = 0x0D02              // pen tip
-    private let vendorPointerType: Int64 = 0x0802    // Grip Pen (what apps expect)
+    private let pointerID: Int64 = 0x0012              // Art Pen subtype (barrel rotation)
+    private let vendorPointerType: Int64 = 0x0812    // Art Pen (rotation field is meaningful)
     private let capabilityMask: Int64 = 0x05C7       // pressure + tilt + rotation + buttons
     private var inRange = false
 
@@ -88,6 +88,8 @@ final class InputInjector {
     func handlePencil(phase: String, x: Double, y: Double,
                       pressure: Double, azimuth: Double, altitude: Double,
                       rotation: Double) {
+        // rotation: barrel roll in radians (UIKit rollAngle), same unit as azimuth/altitude.
+        // CGEvent.tabletEventRotation is radians; NSEvent.rotation is degrees via AppKit.
         let p = screenPoint(nx: x, ny: y)
         if phase == "down", !inRange {
             setProximity(entering: true, at: p)
