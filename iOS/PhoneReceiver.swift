@@ -513,8 +513,8 @@ final class PhoneReceiver: ObservableObject {
         sendControl(["type": "scroll", "dx": dx, "dy": dy])
     }
 
-    /// Apple Pencil stroke/hover. azimuth, altitude, and rotation are radians
-    /// (UIKit rollAngle for barrel rotation).
+    /// Apple Pencil stroke/hover. azimuth, altitude, and rotation are radians.
+    /// rotation is UIKit rollAngle (π = neutral barrel orientation).
     func sendPencil(phase: String, x: Double, y: Double,
                     pressure: Double, azimuth: Double, altitude: Double,
                     rotation: Double) {

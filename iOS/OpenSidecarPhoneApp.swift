@@ -1012,7 +1012,19 @@ final class InputCaptureEngine: NSObject {
     }
 
     private func barrelRotation(from rollAngle: CGFloat) -> Double {
-        Double(rollAngle)   // radians — matches azimuth/altitude on the wire
+        Double(rollAngle)   // radians; π = neutral (matches UIKit / WebKit)
+    }
+
+    private var lastLoggedRoll: Double?
+
+    private func logRollIfNeeded(_ phase: String, _ roll: Double, pressure: Double) {
+        let delta = abs(roll - Double.pi)
+        guard delta > 0.03 || phase == "down" || phase == "up" else { return }
+        if let last = lastLoggedRoll, abs(last - roll) < 0.02, phase == "move" { return }
+        lastLoggedRoll = roll
+        let twistDeg = (roll - Double.pi) * 180.0 / Double.pi
+        Log.info(String(format: "pencil %@ rollAngle=%.3f (twist %.1f°) prs=%.2f",
+                        phase, roll, twistDeg, pressure))
     }
 
     @objc private func hoverChanged(_ gr: UIHoverGestureRecognizer) {
@@ -1140,6 +1152,7 @@ final class InputCaptureEngine: NSObject {
     private func emitPencil(_ phase: String, x: Double, y: Double,
                             pressure: Double, azimuth: Double, altitude: Double,
                             rotation: Double) {
+        logRollIfNeeded(phase, rotation, pressure: pressure)
         onPencil?(phase, x, y, pressure, azimuth, altitude, rotation)
     }
 }
