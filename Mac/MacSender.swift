@@ -129,11 +129,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // fresh buffer when the callback clears the slot. The H.264 reference chain
     // stays valid (pre-encode skip → normal P-frame n→n+2); we do NOT force
     // keyframes on enc drops.
-    //
-    // Separate from network backpressure below (maxPendingSends): enc drops mean
-    // “encoder busy”; net drops mean “TCP send queue full”.
     private var pendingEncodes = 0
     private let maxPendingEncodes = 1
+
+    // ── Outstanding send backpressure (maxPendingSends = 3) ──────────────────
+    //
+    // pendingSends counts video frames whose NWConnection.send completion has
+    // not fired yet — i.e. bytes still in flight / waiting on TCP ACKs. Allow a
+    // small pipeline (3) so the link is not idle between ACKs; unlike the encoder,
+    // a few outstanding sends helps throughput without piling up seconds of lag.
+    //
+    // When pendingSends hits the cap we skip the capture before encode (net
+    // drops). Same drop point as enc drops, but means “TCP send queue full”, not
+    // “encoder busy” — split counters (enc↓ vs net↓) so the HUD shows which
+    // bottleneck fired. Never encode-then-discard: dropping here avoids wasting
+    // VT work on frames that would only add latency.
     private var pendingSends = 0
     private let maxPendingSends = 3
     private let pipelineLock = NSLock()
@@ -958,8 +968,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
         // No receiver, or a pipeline stage is backed up: skip this frame.
         guard connectionReady else { return }
-        if shouldDropFrame(reason: "pending_encode") { return }
-        if shouldDropFrame(reason: "pending_sends") { return }
+        if shouldDropFrame(reason: "pending_encode") { return }  // encoder busy
+        if shouldDropFrame(reason: "pending_sends") { return }   // TCP send queue full
 
         encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
     }
