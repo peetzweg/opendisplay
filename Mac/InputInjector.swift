@@ -122,6 +122,16 @@ final class InputInjector {
             }
             penDown = false
         case "hover":
+            if penDown {
+                if pencilTapMode {
+                    postMouse(type: .leftMouseUp, at: p)
+                    pencilTapMode = false
+                } else {
+                    postTabletPoint(phase: .up, x: x, y: y, pressure: 0,
+                                    tiltX: tiltX, tiltY: tiltY, rotation: rotation)
+                }
+                penDown = false
+            }
             postTabletPoint(phase: .hover, x: x, y: y, pressure: 0,
                             tiltX: tiltX, tiltY: tiltY, rotation: rotation)
         default:
