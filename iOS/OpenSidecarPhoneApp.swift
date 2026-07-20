@@ -994,7 +994,6 @@ final class InputCaptureEngine: NSObject {
 
     private weak var hostView: UIView?
     private var activePens: Set<UInt64> = []
-    private var hoverInRange = false
     private var proximityActive = false
     private var penStrokes: [UInt64: PenStroke] = [:]
     private let tapMoveThreshold: CGFloat = 8
@@ -1018,19 +1017,15 @@ final class InputCaptureEngine: NSObject {
         guard let n = normalize?(gr.location(in: view)) else { return }
         switch gr.state {
         case .began:
-            hoverInRange = true
             openProximity(x: n.x, y: n.y)
             fallthrough
         case .changed:
-            guard hoverInRange else { return }
             let azimuth = Double(gr.azimuthAngle(in: view))
             let altitude = Double(gr.altitudeAngle)
             onPencil?("hover", n.x, n.y, 0, azimuth, altitude)
         case .ended, .cancelled, .failed:
-            if hoverInRange {
-                hoverInRange = false
-                closeProximity(x: n.x, y: n.y)
-            }
+            guard activePens.isEmpty else { return }
+            closeProximity(x: n.x, y: n.y)
         default:
             break
         }
@@ -1065,8 +1060,6 @@ final class InputCaptureEngine: NSObject {
         let pressure = min(Double(touch.force), 1.0)
         let azimuth = Double(touch.azimuthAngle(in: view))
         let altitude = Double(touch.altitudeAngle)
-
-        if hoverInRange { hoverInRange = false }
 
         if !ended && !activePens.contains(id) {
             activePens.insert(id)
