@@ -1012,7 +1012,13 @@ final class InputCaptureEngine: NSObject {
         switch gr.state {
         case .began, .changed:
             hoverInRange = true
-            onPencil?("hover", n.x, n.y, 0, 0, .pi / 2, 0)
+            let azimuth = Double(gr.azimuthAngle(in: view))
+            let altitude = Double(gr.altitudeAngle)
+            var rotationDeg: Double = 0
+            if #available(iOS 17.5, *) {
+                rotationDeg = Double(gr.rollAngle) * 180.0 / .pi
+            }
+            onPencil?("hover", n.x, n.y, 0, azimuth, altitude, rotationDeg)
         case .ended, .cancelled, .failed:
             hoverInRange = false
         default:

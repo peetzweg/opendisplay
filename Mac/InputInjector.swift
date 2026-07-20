@@ -106,13 +106,14 @@ final class InputInjector {
             }
             penDown = false
         case "hover":
-            postMouse(type: .mouseMoved, at: screenPoint(nx: x, ny: y))
+            postTabletPoint(phase: .hover, x: x, y: y, pressure: 0,
+                            tiltX: tiltX, tiltY: tiltY, rotation: rotation)
         default:
             return
         }
     }
 
-    private enum PointPhase { case down, drag, up }
+    private enum PointPhase { case down, drag, up, hover }
 
     private func postTabletPoint(phase: PointPhase, x: Double?, y: Double?,
                                  pressure: Double, tiltX: Double, tiltY: Double,
@@ -126,10 +127,13 @@ final class InputInjector {
         case .down:  type = .leftMouseDown
         case .drag:  type = .leftMouseDragged
         case .up:    type = .leftMouseUp
+        case .hover: type = .mouseMoved
         }
 
         guard let ev = CGEvent(mouseEventSource: source, mouseType: type,
                                mouseCursorPosition: p, mouseButton: .left) else { return }
+        ev.setIntegerValueField(.mouseEventDeltaX, value: 0)
+        ev.setIntegerValueField(.mouseEventDeltaY, value: 0)
         ev.setIntegerValueField(.mouseEventSubtype, value: Int64(CGEventMouseSubtype.tabletPoint.rawValue))
         ev.setIntegerValueField(.tabletEventDeviceID, value: deviceID)
         ev.setDoubleValueField(.mouseEventPressure, value: pressure)
