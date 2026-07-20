@@ -999,7 +999,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let dx = obj["dx"] as? Double, let dy = obj["dy"] as? Double {
                 inputInjector?.handleScroll(dx: dx, dy: dy)
             }
-        case WireInput.pencil:
+        case "pencil":
             if let phaseStr = obj["phase"] as? String,
                let phase = PencilPhase(rawValue: phaseStr),
                let x = obj["x"] as? Double,
@@ -1018,12 +1018,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     }
                 }
             }
-        case WireInput.proximity:
-            if let entering = obj["entering"] as? Bool {
-                inputInjector?.handleProximity(entering: entering,
-                                               eraser: obj["eraser"] as? Bool ?? false)
-            }
-        case WireInput.barrelButton:
+        case "barrelButton":
             if let down = obj["down"] as? Bool {
                 inputInjector?.handleBarrelButton(down: down,
                                                   x: obj["x"] as? Double,

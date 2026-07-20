@@ -745,11 +745,10 @@ struct VideoLayerView: UIViewRepresentable {
         }
 
         view.inputEngine.normalize = { [weak view] point in view?.normalized(point) }
-        view.inputEngine.onPencil = { [weak receiver] phase, x, y, pressure, azimuth, altitude, rotation, osMs, captureMs in
+        view.inputEngine.onPencil = { [weak receiver] phase, x, y, pressure, azimuth, altitude, rotation in
             receiver?.sendPencil(phase: phase, x: x, y: y,
                                  pressure: pressure, azimuth: azimuth,
-                                 altitude: altitude, rotation: rotation,
-                                 osMs: osMs, captureMs: captureMs)
+                                 altitude: altitude, rotation: rotation)
         }
         view.inputEngine.onBarrelButton = { [weak receiver] down, x, y in
             receiver?.sendBarrelButton(down: down, x: x, y: y)
@@ -865,13 +864,13 @@ struct VideoLayerView: UIViewRepresentable {
                                            y: rect.minY + cursorNorm.y * rect.height)
         }
 
-        // Map view coords into the displayed video rect; reject outside points.
+        // The video is aspect-fit inside the view; map view coords into the
+        // displayed video rect and normalize to [0,1].
         fileprivate func normalized(_ point: CGPoint) -> (x: Double, y: Double)? {
             guard let rect = videoRect() else { return nil }
-            guard rect.contains(point) else { return nil }
-            let x = Double((point.x - rect.minX) / rect.width)
-            let y = Double((point.y - rect.minY) / rect.height)
-            return (x, y)
+            let x = (point.x - rect.minX) / rect.width
+            let y = (point.y - rect.minY) / rect.height
+            return (min(max(x, 0), 1), min(max(y, 0), 1))
         }
 
         private func isFinger(_ touch: UITouch) -> Bool {
@@ -948,11 +947,10 @@ struct VideoLayerView: UIViewRepresentable {
         }
 
         private func routeTouches(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?, ended: Bool) {
-            let osMs = Date().timeIntervalSince1970 * 1000
             let pencil = touches.filter { isPencil($0) }
             let finger = touches.filter { isFinger($0) }
             if !pencil.isEmpty {
-                inputEngine.handle(pencil, event: event, phase: phase, ended: ended, osDeliveredMs: osMs)
+                inputEngine.handle(pencil, event: event, ended: ended)
             }
             if !finger.isEmpty {
                 send(phase, finger, event)

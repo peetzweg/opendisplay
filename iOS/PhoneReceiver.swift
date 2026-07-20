@@ -515,9 +515,9 @@ final class PhoneReceiver: ObservableObject {
 
     func sendPencil(phase: PencilPhase, x: Double, y: Double,
                     pressure: Double, azimuth: Double, altitude: Double,
-                    rotation: Double, osMs: Double, captureMs: Double) {
+                    rotation: Double) {
         var msg: [String: Any] = [
-            "type": WireInput.pencil,
+            "type": "pencil",
             "phase": phase.rawValue,
             "x": x, "y": y,
             "pressure": pressure,
@@ -529,12 +529,8 @@ final class PhoneReceiver: ObservableObject {
         sendControl(msg)
     }
 
-    func sendProximity(entering: Bool, eraser: Bool) {
-        sendControl(["type": WireInput.proximity, "entering": entering, "eraser": eraser])
-    }
-
     func sendBarrelButton(down: Bool, x: Double, y: Double) {
-        sendControl(["type": WireInput.barrelButton, "down": down, "x": x, "y": y])
+        sendControl(["type": "barrelButton", "down": down, "x": x, "y": y])
     }
 
     private func sendControl(_ message: [String: Any], on conn: NWConnection? = nil,
