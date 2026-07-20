@@ -744,6 +744,18 @@ struct VideoLayerView: UIViewRepresentable {
             view.layer.addSublayer(displayLayer)
         }
 
+        view.inputEngine.normalize = { [weak view] point in view?.normalized(point) }
+        view.inputEngine.onPencil = { [weak receiver] phase, x, y, pressure, azimuth, altitude, rotation, osMs, captureMs in
+            receiver?.sendPencil(phase: phase, x: x, y: y,
+                                 pressure: pressure, azimuth: azimuth,
+                                 altitude: altitude, rotation: rotation,
+                                 osMs: osMs, captureMs: captureMs)
+        }
+        view.inputEngine.onBarrelButton = { [weak receiver] down, x, y in
+            receiver?.sendBarrelButton(down: down, x: x, y: y)
+        }
+        view.inputEngine.install(on: view)
+
         let pan = UIPanGestureRecognizer(target: view, action: #selector(VideoView.didTwoFingerPan(_:)))
         pan.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 2
@@ -768,6 +780,7 @@ struct VideoLayerView: UIViewRepresentable {
     final class VideoView: UIView {
         weak var receiver: PhoneReceiver?
         var metalRenderer: MetalVideoRenderer?
+        let inputEngine = InputCaptureEngine()
 
         private let cursorLayer: CALayer = {
             let layer = CALayer()
@@ -852,18 +865,29 @@ struct VideoLayerView: UIViewRepresentable {
                                            y: rect.minY + cursorNorm.y * rect.height)
         }
 
-        // The video is aspect-fit inside the view; map view coords into the
-        // displayed video rect and normalize to [0,1].
-        private func normalized(_ point: CGPoint) -> (x: Double, y: Double)? {
-            guard let video = receiver?.videoSize, video != .zero,
-                  bounds.width > 0, bounds.height > 0 else { return nil }
-            let scale = min(bounds.width / video.width, bounds.height / video.height)
-            let size = CGSize(width: video.width * scale, height: video.height * scale)
-            let origin = CGPoint(x: (bounds.width - size.width) / 2,
-                                 y: (bounds.height - size.height) / 2)
-            let x = (point.x - origin.x) / size.width
-            let y = (point.y - origin.y) / size.height
-            return (min(max(x, 0), 1), min(max(y, 0), 1))
+        // Map view coords into the displayed video rect; reject outside points.
+        fileprivate func normalized(_ point: CGPoint) -> (x: Double, y: Double)? {
+            guard let rect = videoRect() else { return nil }
+            guard rect.contains(point) else { return nil }
+            let x = Double((point.x - rect.minX) / rect.width)
+            let y = Double((point.y - rect.minY) / rect.height)
+            return (x, y)
+        }
+
+        private func isFinger(_ touch: UITouch) -> Bool {
+            switch touch.type {
+            case .direct: return true
+            default:
+                if #available(iOS 17.0, *), touch.type == .indirectPointer { return true }
+                return false
+            }
+        }
+
+        private func isPencil(_ touch: UITouch) -> Bool {
+            switch touch.type {
+            case .pencil, .stylus: return true
+            default: return false
+            }
         }
 
         private var twoFingerActive = false
@@ -889,15 +913,17 @@ struct VideoLayerView: UIViewRepresentable {
         }
 
         private func send(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?) {
+            let fingers = touches.filter { isFinger($0) }
+            guard !fingers.isEmpty else { return }
             // Ignore single-finger events while a two-finger gesture runs,
             // and end the click if a second finger joins mid-press.
-            if twoFingerActive || (event?.allTouches?.count ?? 1) > 1 {
+            if twoFingerActive || (event?.allTouches?.filter { isFinger($0) }.count ?? 1) > 1 {
                 if phase != "began" {
                     receiver?.sendTouch(phase: "cancelled", x: lastNorm.x, y: lastNorm.y)
                 }
                 return
             }
-            guard let touch = touches.first,
+            guard let touch = fingers.first,
                   let norm = normalized(touch.location(in: self)) else { return }
             lastNorm = norm
             if phase == "moved", let event {
@@ -921,9 +947,29 @@ struct VideoLayerView: UIViewRepresentable {
             receiver?.sendTouch(phase: phase, x: norm.x, y: norm.y)
         }
 
-        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { send("began", touches, event) }
-        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { send("moved", touches, event) }
-        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { send("ended", touches, event) }
-        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { send("cancelled", touches, event) }
+        private func routeTouches(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?, ended: Bool) {
+            let osMs = Date().timeIntervalSince1970 * 1000
+            let pencil = touches.filter { isPencil($0) }
+            let finger = touches.filter { isFinger($0) }
+            if !pencil.isEmpty {
+                inputEngine.handle(pencil, event: event, phase: phase, ended: ended, osDeliveredMs: osMs)
+            }
+            if !finger.isEmpty {
+                send(phase, finger, event)
+            }
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            routeTouches("began", touches, event, ended: false)
+        }
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+            routeTouches("moved", touches, event, ended: false)
+        }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            routeTouches("ended", touches, event, ended: true)
+        }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            routeTouches("cancelled", touches, event, ended: true)
+        }
     }
 }

@@ -513,6 +513,30 @@ final class PhoneReceiver: ObservableObject {
         sendControl(["type": "scroll", "dx": dx, "dy": dy])
     }
 
+    func sendPencil(phase: PencilPhase, x: Double, y: Double,
+                    pressure: Double, azimuth: Double, altitude: Double,
+                    rotation: Double, osMs: Double, captureMs: Double) {
+        var msg: [String: Any] = [
+            "type": WireInput.pencil,
+            "phase": phase.rawValue,
+            "x": x, "y": y,
+            "pressure": pressure,
+            "azimuth": azimuth,
+            "altitude": altitude,
+            "rotation": rotation,
+        ]
+        if let offset = clockOffsetMs { msg["t"] = nowMs + offset }
+        sendControl(msg)
+    }
+
+    func sendProximity(entering: Bool, eraser: Bool) {
+        sendControl(["type": WireInput.proximity, "entering": entering, "eraser": eraser])
+    }
+
+    func sendBarrelButton(down: Bool, x: Double, y: Double) {
+        sendControl(["type": WireInput.barrelButton, "down": down, "x": x, "y": y])
+    }
+
     private func sendControl(_ message: [String: Any], on conn: NWConnection? = nil,
                              completion: (() -> Void)? = nil) {
         guard let conn = conn ?? connection,

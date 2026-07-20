@@ -999,6 +999,36 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let dx = obj["dx"] as? Double, let dy = obj["dy"] as? Double {
                 inputInjector?.handleScroll(dx: dx, dy: dy)
             }
+        case WireInput.pencil:
+            if let phaseStr = obj["phase"] as? String,
+               let phase = PencilPhase(rawValue: phaseStr),
+               let x = obj["x"] as? Double,
+               let y = obj["y"] as? Double {
+                inputInjector?.handlePencil(
+                    phase: phase, x: x, y: y,
+                    pressure: obj["pressure"] as? Double ?? 0,
+                    azimuth: obj["azimuth"] as? Double ?? 0,
+                    altitude: obj["altitude"] as? Double ?? (.pi / 2),
+                    rotation: obj["rotation"] as? Double ?? 0)
+                if let t = obj["t"] as? Double {
+                    let delta = Date().timeIntervalSince1970 * 1000 - t
+                    if delta > -50, delta < 1000 {
+                        inputLatencies.append(max(delta, 0))
+                        if inputLatencies.count > 240 { inputLatencies.removeFirst(120) }
+                    }
+                }
+            }
+        case WireInput.proximity:
+            if let entering = obj["entering"] as? Bool {
+                inputInjector?.handleProximity(entering: entering,
+                                               eraser: obj["eraser"] as? Bool ?? false)
+            }
+        case WireInput.barrelButton:
+            if let down = obj["down"] as? Bool {
+                inputInjector?.handleBarrelButton(down: down,
+                                                  x: obj["x"] as? Double,
+                                                  y: obj["y"] as? Double)
+            }
         case "kf":
             // The phone's decoder lost sync (e.g. it attached mid-GOP and
             // periodic keyframes are off) — force an IDR on the next frame.
