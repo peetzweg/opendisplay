@@ -117,12 +117,30 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // multiple OpenDisplay monitors apart and persist their arrangement.
     private let displaySerial: UInt32
 
-    // Backpressure: outstanding sends. If the socket can't keep up we drop
-    // frames instead of queueing latency, then force a keyframe to resync.
-    // Kept tight: at 60fps each queued send is ~17ms of added latency.
+    // ── Encoder parallelism limiter (maxPendingEncodes = 1) ─────────────────
+    //
+    // VTCompressionSessionEncodeFrame returns immediately; the hardware H.264
+    // encoder runs asynchronously. If ScreenCaptureKit delivers the next frame
+    // before the previous encode callback fires, VideoToolbox will run multiple
+    // encodes in parallel inside the same session.
+    //
+    // Capping pendingEncodes at 1 enforces “latest frame wins” on the encoder:
+    // skip captures while an encode is in flight (enc drops), then feed the next
+    // fresh buffer when the callback clears the slot. The H.264 reference chain
+    // stays valid (pre-encode skip → normal P-frame n→n+2); we do NOT force
+    // keyframes on enc drops.
+    //
+    // Separate from network backpressure below (maxPendingSends): enc drops mean
+    // “encoder busy”; net drops mean “TCP send queue full”.
+    private var pendingEncodes = 0
+    private let maxPendingEncodes = 1
     private var pendingSends = 0
     private let maxPendingSends = 3
-    private var dropsThisWindow = 0
+    private let pipelineLock = NSLock()
+    private var dropsEncThisWindow = 0
+    private var dropsNetThisWindow = 0
+    private var dropsEncTotal = 0
+    private var dropsNetTotal = 0
     private var needsKeyframe = true
     private var connectionReady = false
     private var stopped = false
@@ -146,7 +164,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Liveness: both sides ping every 2s; if nothing arrives for 5s the link
     // is half-open (e.g. usbmuxd accepted but the device is gone) — reconnect.
     private var lastReceived = Date()
-    private var dropsTotal = 0
+    private var dropsTotal: Int { dropsEncTotal + dropsNetTotal }
 
     // Local cursor echo: a cursor baked into the video carries the full
     // capture→encode→stream→display latency (~30ms perceived). Instead we
@@ -454,6 +472,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self.connection?.cancel()
             self.connection = nil
             self.pendingSends = 0
+            self.pipelineLock.lock()
+            self.pendingEncodes = 0
+            self.pipelineLock.unlock()
             self.connect()
         }
     }
@@ -630,6 +651,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         connection?.cancel()
         connection = nil
         pendingSends = 0
+        pipelineLock.lock()
+        pendingEncodes = 0
+        pipelineLock.unlock()
         queue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             // Generation-guarded so a switchTransport (or another reconnect)
             // that landed in this 1s window supersedes this dial instead of
@@ -655,7 +679,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 let sorted = self.inputLatencies.sorted()
                 let inp50 = sorted.isEmpty ? 0 : sorted[sorted.count / 2].rounded()
                 let inp95 = sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))].rounded()
-                self.sendJSONFrame("{\"type\":\"ping\",\"drops\":\(self.dropsTotal),\"pending\":\(self.pendingSends),\"inp50\":\(inp50),\"inp95\":\(inp95),\"capFps\":\(capFps)}")
+                self.sendJSONFrame("{\"type\":\"ping\",\"drops\":\(self.dropsTotal),\"encDrops\":\(self.dropsEncTotal),\"netDrops\":\(self.dropsNetTotal),\"pending\":\(self.pendingSends),\"inp50\":\(inp50),\"inp95\":\(inp95),\"capFps\":\(capFps)}")
             }
             self.schedulePing()
         }
@@ -801,8 +825,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // so one file holds both ends of the story.
             if let json = try? JSONSerialization.data(withJSONObject: obj),
                let line = String(data: json, encoding: .utf8) {
-                Log.info("PHONE-STATS \(line) | mac drops=\(dropsThisWindow) pending=\(pendingSends)")
-                dropsThisWindow = 0
+                Log.info("PHONE-STATS \(line) | mac enc↓=\(dropsEncThisWindow) net↓=\(dropsNetThisWindow) pending=\(pendingSends)")
+                dropsEncThisWindow = 0
+                dropsNetThisWindow = 0
             }
         case "hello":
             if let info = try? JSONDecoder().decode(PhoneInfo.self, from: payload) {
@@ -931,27 +956,56 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastCaptureAt = Date()
         capFrames += 1
 
-        // No receiver, or the socket is backed up: skip this frame entirely.
+        // No receiver, or a pipeline stage is backed up: skip this frame.
         guard connectionReady else { return }
-        if pendingSends > maxPendingSends {
-            needsKeyframe = true   // dropped frames break the P-frame chain
-            dropsThisWindow += 1
-            dropsTotal += 1
-            return
-        }
+        if shouldDropFrame(reason: "pending_encode") { return }
+        if shouldDropFrame(reason: "pending_sends") { return }
 
         encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
     }
 
+    /// Drop when encode or send pipeline is busy.
+    /// Pre-encode drops are invisible to the decoder — the H.264 reference
+    /// chain stays intact, so the next frame can be a normal P-frame (n → n+2).
+    /// Do NOT force keyframes here; that causes IDR pulsing / blockiness.
+    private func shouldDropFrame(reason: String) -> Bool {
+        pipelineLock.lock()
+        let drop: Bool
+        switch reason {
+        case "pending_encode":
+            drop = pendingEncodes >= maxPendingEncodes
+        case "pending_sends":
+            drop = pendingSends >= maxPendingSends
+        default:
+            drop = false
+        }
+        pipelineLock.unlock()
+        guard drop else { return false }
+        switch reason {
+        case "pending_encode":
+            dropsEncThisWindow += 1
+            dropsEncTotal += 1
+        case "pending_sends":
+            dropsNetThisWindow += 1
+            dropsNetTotal += 1
+        default:
+            break
+        }
+        return true
+    }
+
     private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime) {
         guard let encoder else { return }
+        pipelineLock.lock()
+        pendingEncodes += 1
+        pipelineLock.unlock()
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         var frameProperties: CFDictionary?
         if needsKeyframe {
             frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary
             needsKeyframe = false
         }
-        VTCompressionSessionEncodeFrame(
+        let submitStatus = VTCompressionSessionEncodeFrame(
             encoder,
             imageBuffer: pixelBuffer,
             presentationTimeStamp: pts,
@@ -959,16 +1013,25 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             frameProperties: frameProperties,
             infoFlagsOut: nil
         ) { [weak self] status, _, buffer in
-            guard status == noErr, let buffer, let self else { return }
+            guard let self else { return }
+            defer {
+                self.pipelineLock.lock()
+                self.pendingEncodes = max(0, self.pendingEncodes - 1)
+                self.pipelineLock.unlock()
+            }
+            guard status == noErr, let buffer else { return }
             if let data = self.annexB(from: buffer) {
-                // Telemetry prefix before the first start code — the receiver
-                // parses it and skips to the H.264 payload. cap = capture time,
-                // snd = handoff to the socket (so cap→snd ≈ encode duration).
                 let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
                 var framed = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs)}".utf8)
                 framed.append(data)
                 self.sendFramed(framed)
             }
+        }
+        if submitStatus != noErr {
+            pipelineLock.lock()
+            pendingEncodes = max(0, pendingEncodes - 1)
+            pipelineLock.unlock()
+            Log.info("VTCompressionSessionEncodeFrame failed: \(submitStatus)")
         }
     }
 
