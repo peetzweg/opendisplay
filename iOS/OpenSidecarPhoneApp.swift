@@ -745,10 +745,10 @@ struct VideoLayerView: UIViewRepresentable {
         }
 
         view.inputEngine.normalize = { [weak view] point in view?.normalized(point) }
-        view.inputEngine.onPencil = { [weak receiver] phase, x, y, pressure, azimuth, altitude, rotation in
+        view.inputEngine.onPencil = { [weak receiver] phase, x, y, pressure, azimuth, altitude in
             receiver?.sendPencil(phase: phase, x: x, y: y,
                                  pressure: pressure, azimuth: azimuth,
-                                 altitude: altitude, rotation: rotation)
+                                 altitude: altitude)
         }
         view.inputEngine.onProximity = { [weak receiver] entering, x, y in
             receiver?.sendProximity(entering: entering, x: x, y: y)
@@ -981,10 +981,12 @@ struct VideoLayerView: UIViewRepresentable {
 
 /// Captures Apple Pencil hover and stroke on a host view.
 /// Finger touches stay on VideoView's existing `touch` wire path.
+///
+/// TODO: Capture Apple Pencil Pro barrel roll (UIKit rollAngle, iOS 17.5+) once
+/// hardware is available for testing.
 final class InputCaptureEngine: NSObject {
     var onPencil: ((_ phase: String, _ x: Double, _ y: Double,
-                    _ pressure: Double, _ azimuth: Double, _ altitude: Double,
-                    _ rotation: Double) -> Void)?
+                    _ pressure: Double, _ azimuth: Double, _ altitude: Double) -> Void)?
     var onProximity: ((_ entering: Bool, _ x: Double, _ y: Double) -> Void)?
 
     /// Map a point in the host view to normalized video coordinates.
@@ -1011,22 +1013,6 @@ final class InputCaptureEngine: NSObject {
         view.addGestureRecognizer(hover)
     }
 
-    private func barrelRotation(from rollAngle: CGFloat) -> Double {
-        Double(rollAngle)   // radians; π = neutral (matches UIKit / WebKit)
-    }
-
-    private var lastLoggedRoll: Double?
-
-    private func logRollIfNeeded(_ phase: String, _ roll: Double, pressure: Double) {
-        let delta = abs(roll - Double.pi)
-        guard delta > 0.03 || phase == "down" || phase == "up" else { return }
-        if let last = lastLoggedRoll, abs(last - roll) < 0.02, phase == "move" { return }
-        lastLoggedRoll = roll
-        let twistDeg = (roll - Double.pi) * 180.0 / Double.pi
-        Log.info(String(format: "pencil %@ rollAngle=%.3f (twist %.1f°) prs=%.2f",
-                        phase, roll, twistDeg, pressure))
-    }
-
     @objc private func hoverChanged(_ gr: UIHoverGestureRecognizer) {
         guard activePens.isEmpty, let view = hostView else { return }
         guard let n = normalize?(gr.location(in: view)) else { return }
@@ -1039,12 +1025,7 @@ final class InputCaptureEngine: NSObject {
             guard hoverInRange else { return }
             let azimuth = Double(gr.azimuthAngle(in: view))
             let altitude = Double(gr.altitudeAngle)
-            let rotation = if #available(iOS 17.5, *) {
-                barrelRotation(from: gr.rollAngle)
-            } else {
-                0.0
-            }
-            onPencil?("hover", n.x, n.y, 0, azimuth, altitude, rotation)
+            onPencil?("hover", n.x, n.y, 0, azimuth, altitude)
         case .ended, .cancelled, .failed:
             if hoverInRange {
                 hoverInRange = false
@@ -1084,11 +1065,6 @@ final class InputCaptureEngine: NSObject {
         let pressure = min(Double(touch.force), 1.0)
         let azimuth = Double(touch.azimuthAngle(in: view))
         let altitude = Double(touch.altitudeAngle)
-        let rotation = if #available(iOS 17.5, *) {
-            barrelRotation(from: touch.rollAngle)
-        } else {
-            0.0
-        }
 
         if hoverInRange { hoverInRange = false }
 
@@ -1109,23 +1085,17 @@ final class InputCaptureEngine: NSObject {
                 if let start = normalize?(stroke.start) {
                     openProximity(x: start.x, y: start.y)
                     emitPencil("down", x: start.x, y: start.y, pressure: pressure,
-                               azimuth: azimuth, altitude: altitude, rotation: rotation)
+                               azimuth: azimuth, altitude: altitude)
                 }
             }
             emitPencil("move", x: nx, y: ny, pressure: pressure,
-                       azimuth: azimuth, altitude: altitude, rotation: rotation)
+                       azimuth: azimuth, altitude: altitude)
             for c in event?.coalescedTouches(for: touch) ?? [] where c !== touch {
                 guard let cn = normalize?(c.location(in: view)) else { continue }
-                let coalescedRotation = if #available(iOS 17.5, *) {
-                    barrelRotation(from: c.rollAngle)
-                } else {
-                    rotation
-                }
                 emitPencil("move", x: cn.x, y: cn.y,
                            pressure: min(Double(c.force), 1.0),
                            azimuth: Double(c.azimuthAngle(in: view)),
-                           altitude: Double(c.altitudeAngle),
-                           rotation: coalescedRotation)
+                           altitude: Double(c.altitudeAngle))
             }
             return
         }
@@ -1138,21 +1108,19 @@ final class InputCaptureEngine: NSObject {
         if let stroke = penStrokes[id], !stroke.sentDown {
             openProximity(x: nx, y: ny)
             emitPencil("down", x: nx, y: ny, pressure: pressure,
-                       azimuth: azimuth, altitude: altitude, rotation: rotation)
+                       azimuth: azimuth, altitude: altitude)
             emitPencil("up", x: nx, y: ny, pressure: 0,
-                       azimuth: azimuth, altitude: altitude, rotation: rotation)
+                       azimuth: azimuth, altitude: altitude)
             closeProximity(x: nx, y: ny)
             return
         }
 
         emitPencil("up", x: nx, y: ny, pressure: 0,
-                   azimuth: azimuth, altitude: altitude, rotation: rotation)
+                   azimuth: azimuth, altitude: altitude)
     }
 
     private func emitPencil(_ phase: String, x: Double, y: Double,
-                            pressure: Double, azimuth: Double, altitude: Double,
-                            rotation: Double) {
-        logRollIfNeeded(phase, rotation, pressure: pressure)
-        onPencil?(phase, x, y, pressure, azimuth, altitude, rotation)
+                            pressure: Double, azimuth: Double, altitude: Double) {
+        onPencil?(phase, x, y, pressure, azimuth, altitude)
     }
 }

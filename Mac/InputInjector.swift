@@ -20,12 +20,11 @@ final class InputInjector {
     // typical small driver IDs (1, 2, …).
     private let tabletVendorID: Int64 = 0x0D15       // "ODIS"
     private let tabletProductID: Int64 = 0x0101
-    private let deviceID: Int64 = 424243
-    private let pointerID: Int64 = 0x0004               // Art Pen (Wacom tool id 0x0804)
-    private let vendorPointerType: Int64 = 0x0804    // Qt masks to 0x0804 → Rotation capability
+    private let deviceID: Int64 = 424242
+    private let pointerID: Int64 = 0x0D02              // pen tip
+    private let vendorPointerType: Int64 = 0x0802    // Grip Pen (what apps expect)
     private let capabilityMask: Int64 = 0x05C7       // pressure + tilt + rotation + buttons
     private var inRange = false
-    private var rotationLogCounter = 0
 
     init(displayID: CGDirectDisplayID) {
         self.displayID = displayID
@@ -89,15 +88,14 @@ final class InputInjector {
     func handlePencil(phase: String, x: Double, y: Double,
                       pressure: Double, azimuth: Double, altitude: Double,
                       rotation: Double) {
-        // rotation: UIKit rollAngle in radians (π = neutral barrel orientation).
+        // TODO: Wire Apple Pencil Pro barrel roll (UIKit rollAngle) once hardware
+        // is available for testing. rotation on the wire is always 0 for now.
+        _ = rotation
         let p = screenPoint(nx: x, ny: y)
         if phase == "down", !inRange {
             setProximity(entering: true, at: p)
         }
         let (tiltX, tiltY) = deriveTilt(azimuth: azimuth, altitude: altitude)
-        let tabletRot = tabletRotation(from: rotation)
-        logRotation(phase: phase, rollAngle: rotation, tabletRot: tabletRot,
-                    pressure: pressure, tiltX: tiltX, tiltY: tiltY)
 
         switch phase {
         case "down":
@@ -107,13 +105,13 @@ final class InputInjector {
             } else {
                 pencilTapMode = false
                 postTabletPoint(phase: .down, x: x, y: y, pressure: pressure,
-                                tiltX: tiltX, tiltY: tiltY, rotation: tabletRot)
+                                tiltX: tiltX, tiltY: tiltY, rotation: 0)
             }
             penDown = true
         case "move":
             if penDown {
                 postTabletPoint(phase: .drag, x: x, y: y, pressure: pressure,
-                                tiltX: tiltX, tiltY: tiltY, rotation: tabletRot)
+                                tiltX: tiltX, tiltY: tiltY, rotation: 0)
             } else {
                 postMouse(type: .mouseMoved, at: screenPoint(nx: x, ny: y))
             }
@@ -123,7 +121,7 @@ final class InputInjector {
                 pencilTapMode = false
             } else {
                 postTabletPoint(phase: .up, x: x, y: y, pressure: 0,
-                                tiltX: tiltX, tiltY: tiltY, rotation: tabletRot)
+                                tiltX: tiltX, tiltY: tiltY, rotation: 0)
             }
             penDown = false
         case "hover":
@@ -133,12 +131,12 @@ final class InputInjector {
                     pencilTapMode = false
                 } else {
                     postTabletPoint(phase: .up, x: x, y: y, pressure: 0,
-                                    tiltX: tiltX, tiltY: tiltY, rotation: tabletRot)
+                                    tiltX: tiltX, tiltY: tiltY, rotation: 0)
                 }
                 penDown = false
             }
             postTabletPoint(phase: .hover, x: x, y: y, pressure: 0,
-                            tiltX: tiltX, tiltY: tiltY, rotation: tabletRot)
+                            tiltX: tiltX, tiltY: tiltY, rotation: 0)
         default:
             return
         }
@@ -210,28 +208,9 @@ final class InputInjector {
         ev.post(tap: .cghidEventTap)
     }
 
-    /// UIKit rollAngle uses π rad as neutral; CGEvent.tabletEventRotation expects
-    /// radians with zero at rest (AppKit exposes degrees on NSEvent.rotation).
-    private func tabletRotation(from rollAngle: Double) -> Double {
-        rollAngle - Double.pi
-    }
-
-    private func logRotation(phase: String, rollAngle: Double, tabletRot: Double,
-                             pressure: Double, tiltX: Double, tiltY: Double) {
-        rotationLogCounter += 1
-        guard phase == "down" || phase == "up" || abs(tabletRot) > 0.03 else { return }
-        guard rotationLogCounter % 15 == 0 || phase == "down" || phase == "up" else { return }
-        let deg = tabletRot * 180.0 / Double.pi
-        Log.info(String(format:
-            "pencil %@ roll=%.3f tabletRot=%.3f (%.1f°) prs=%.2f tilt=(%.2f,%.2f) tool=0x%04X",
-            phase, rollAngle, tabletRot, deg, pressure, tiltX, tiltY,
-            vendorPointerType & 0x0F06))
-    }
-
     private func deriveTilt(azimuth: Double, altitude: Double) -> (Double, Double) {
-        // NSEvent.tilt is in [-1, 1]; Qt multiplies by 60 for QTabletEvent x/yTilt.
-        let scale = cos(altitude)
-        return (sin(azimuth) * scale, cos(azimuth) * scale)
+        let mag = max(0, Double.pi / 2 - altitude)
+        return (sin(azimuth) * mag, cos(azimuth) * mag)
     }
 
     private func screenPoint(nx: Double, ny: Double) -> CGPoint {
