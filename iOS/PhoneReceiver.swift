@@ -513,6 +513,27 @@ final class PhoneReceiver: ObservableObject {
         sendControl(["type": "scroll", "dx": dx, "dy": dy])
     }
 
+    /// Apple Pencil stroke/hover. azimuth and altitude are radians.
+    /// rotation is always 0 until Apple Pencil Pro barrel roll is wired up.
+    func sendPencil(phase: String, x: Double, y: Double,
+                    pressure: Double, azimuth: Double, altitude: Double) {
+        var msg: [String: Any] = [
+            "type": "pencil",
+            "phase": phase,
+            "x": x, "y": y,
+            "pressure": pressure,
+            "azimuth": azimuth,
+            "altitude": altitude,
+            "rotation": 0,   // TODO: UIKit rollAngle once Pencil Pro is available
+        ]
+        if let offset = clockOffsetMs { msg["t"] = nowMs + offset }
+        sendControl(msg)
+    }
+
+    func sendProximity(entering: Bool, x: Double, y: Double) {
+        sendControl(["type": "proximity", "entering": entering, "x": x, "y": y])
+    }
+
     private func sendControl(_ message: [String: Any], on conn: NWConnection? = nil,
                              completion: (() -> Void)? = nil) {
         guard let conn = conn ?? connection,
