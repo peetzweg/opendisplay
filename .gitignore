@@ -6,6 +6,7 @@ DerivedData/
 OpenSidecar.xcodeproj/
 Mac/Info.plist
 iOS/Info.plist
+iOS-Legacy/Info.plist
 
 # Xcode user state
 xcuserdata/
@@ -18,6 +19,7 @@ xcuserdata/
 PROJECT_BRIEF.md
 CLAUDE.md
 ICON_WORKFLOW.md
+internal-docs/
 
 # Icon source artwork (kept locally; generated assets are committed — see ICON_WORKFLOW.md)
 newicon.svg
