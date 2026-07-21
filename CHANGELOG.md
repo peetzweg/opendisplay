@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.1](https://github.com/peetzweg/opendisplay/compare/v1.12.0...v1.12.1) (2026-07-21)
+
+
+### Performance Improvements
+
+* reduce lag spikes when scrolling or drawing fast ([#162](https://github.com/peetzweg/opendisplay/issues/162)) ([0490441](https://github.com/peetzweg/opendisplay/commit/0490441cf147fe8c5f7d13e2f17333aae7544047))
+
 ## [1.12.0](https://github.com/peetzweg/opendisplay/compare/v0.11.0...v1.12.0) (2026-07-12)
 
 
