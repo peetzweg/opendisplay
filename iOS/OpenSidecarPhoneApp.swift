@@ -146,7 +146,7 @@ struct ReceiverScreen: View {
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
             Log.info("protected data available again (device unlocked)")
-            model.sceneDidActivate()
+            model.deviceDidUnlock()
         }
         // Swiping the app away in the switcher (while we're still running)
         // grants a ~5s notice — enough for a clean goodbye so the Mac ends
@@ -643,6 +643,11 @@ final class ReceiverModel: ObservableObject {
     private var backgroundToken: UIBackgroundTaskIdentifier = .invalid
 
     func sceneDidBackground() {
+        // Known limitation: lock detection rides the protected-data signal,
+        // which only fires when a passcode is set AND "Require Passcode" is
+        // Immediately (the Face ID default). Other configurations make a
+        // lock indistinguishable from an app switch, so those keep the
+        // session like a backgrounded app would.
         if !UIApplication.shared.isProtectedDataAvailable {
             // Backgrounded because the device locked, not an app switch.
             Log.info("backgrounded by device lock — sleeping now")
@@ -663,6 +668,18 @@ final class ReceiverModel: ObservableObject {
     func deviceWillLock() {
         Log.info("device locking — sleeping now")
         goToSleep()
+    }
+
+    /// Unlock arrives via the protected-data notification, which also fires
+    /// when the user unlocks into ANOTHER app while we sit in the background
+    /// — don't re-arm the listener or unpause rendering off-screen there;
+    /// the real return still comes through scenePhase.
+    func deviceDidUnlock() {
+        guard UIApplication.shared.applicationState == .active else {
+            Log.info("unlocked while backgrounded — staying dormant")
+            return
+        }
+        sceneDidActivate()
     }
 
     /// User swiped the app away (or iOS terminates us while still running):

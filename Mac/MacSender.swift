@@ -278,9 +278,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
 
         case .extend:
-            await status(awaitingWake
-                ? "\(endpointName) is asleep — reconnects when it wakes…"
-                : "Waiting for the device to connect…")
+            // awaitingWake is queue-confined — read it there before surfacing.
+            queue.async { [weak self] in
+                guard let self else { return }
+                let text = self.awaitingWake
+                    ? "\(self.endpointName) is asleep — reconnects when it wakes…"
+                    : "Waiting for the device to connect…"
+                Task { await self.status(text) }
+            }
             let info = try await waitForHello()
             try await setupExtend(info)
 
@@ -515,15 +520,27 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    // The controller's end() is idempotent, but several detectors (grace,
+    // refusals, service withdrawal) can conclude "gone" repeatedly while the
+    // stop is in flight — report once so the log tells the story once.
+    private var goneReported = false
+
+    /// Declare the device gone and end the session (must be called on `queue`).
+    private func reportGone(_ reason: String) {
+        guard !goneReported, !stopped else { return }
+        goneReported = true
+        Log.info(reason)
+        Task { @MainActor in self.onDisconnected?() }
+    }
+
     /// A dial was actively refused (must be called on `queue`). On a session
     /// that has streamed before, enough refusals in a row prove the receiver
     /// app is gone — end now instead of waiting out the grace.
     private func dialRefused() {
         guard everConnected, !stopped else { return }
         consecutiveRefusals += 1
-        if consecutiveRefusals == refusalsBeforeGivingUp {
-            Log.info("dial refused \(consecutiveRefusals)x — receiver app is gone, ending session")
-            Task { @MainActor in self.onDisconnected?() }
+        if consecutiveRefusals >= refusalsBeforeGivingUp {
+            reportGone("dial refused \(consecutiveRefusals)x — receiver app is gone, ending session")
         }
     }
 
@@ -537,8 +554,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         queue.async { [weak self] in
             guard let self, !self.stopped, self.everConnected,
                   !self.connectionReady else { return }
-            Log.info("service withdrawn and connection down — receiver app is gone, ending session")
-            Task { @MainActor in self.onDisconnected?() }
+            self.reportGone("service withdrawn and connection down — receiver app is gone, ending session")
         }
     }
 
@@ -650,9 +666,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // waiting as failure and poll by reconnecting.
                 Log.info("connection waiting: \(error) — will retry")
                 self.connectionReady = false
-                Task { await self.status(self.awaitingWake
+                // Read the queue-confined flag here (handler runs on queue),
+                // not inside the detached status Task.
+                let text = self.awaitingWake
                     ? "\(self.endpointName) is asleep — reconnects when it wakes…"
-                    : "Waiting for receiver at \(self.endpointName)…") }
+                    : "Waiting for receiver at \(self.endpointName)…"
+                Task { await self.status(text) }
                 self.scheduleReconnect()
             case .cancelled:
                 self.connectionReady = false
@@ -694,23 +713,22 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     self.becomeReady(conn)
                 }
             } catch {
-                // Distinct guidance per failure: cable missing vs app closed.
-                let hint: String
-                switch error as? Usbmux.Failure {
-                case .noDevice:
-                    hint = "Waiting for a USB device — plug in the iPhone or iPad…"
-                case .refused:
-                    hint = self.awaitingWake
-                        ? "\(self.endpointName) is asleep — reconnects when it wakes…"
-                        : "Device found — open the OpenDisplay app on it…"
-                default:
-                    Log.info("usb dial failed: \(error)")
-                    hint = "USB connection failed: \(error.localizedDescription)"
-                }
                 queue.async {
                     guard generation == self.dialGeneration, !self.stopped else { return }
-                    if case .refused = error as? Usbmux.Failure {
+                    // Distinct guidance per failure: cable missing vs app
+                    // closed. Composed on `queue`: awaitingWake lives there.
+                    let hint: String
+                    switch error as? Usbmux.Failure {
+                    case .noDevice:
+                        hint = "Waiting for a USB device — plug in the iPhone or iPad…"
+                    case .refused:
                         self.dialRefused()
+                        hint = self.awaitingWake
+                            ? "\(self.endpointName) is asleep — reconnects when it wakes…"
+                            : "Device found — open the OpenDisplay app on it…"
+                    default:
+                        Log.info("usb dial failed: \(error)")
+                        hint = "USB connection failed: \(error.localizedDescription)"
                     }
                     Task { await self.status(hint) }
                     self.scheduleReconnect()
@@ -724,8 +742,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if everConnected {
             if let since = disconnectedSince {
                 if Date().timeIntervalSince(since) > disconnectGraceSeconds {
-                    Log.info("device gone for >\(Int(disconnectGraceSeconds))s — ending session")
-                    Task { @MainActor in self.onDisconnected?() }
+                    reportGone("device gone for >\(Int(disconnectGraceSeconds))s — ending session")
                     return
                 }
             } else {
@@ -783,7 +800,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // window arrangement survives until they come back. Genuine
                 // network loss fails the redials and ends via the grace.
                 Log.info("watchdog: nothing from the phone for >5s — reconnecting")
-                Task { await self.status("\(self.endpointName) app in background — keeping the display") }
+                // Can't tell a backgrounded receiver from a brief stall here
+                // (both go silent while redials still succeed) — hedge.
+                Task { await self.status("\(self.endpointName) is silent — keeping the display (app in background or brief stall)") }
                 self.scheduleReconnect()
             }
             // The disconnect grace is otherwise only evaluated when a dial
@@ -793,8 +812,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if !self.connectionReady, self.everConnected,
                let since = self.disconnectedSince,
                Date().timeIntervalSince(since) > self.disconnectGraceSeconds {
-                Log.info("device gone for >\(Int(self.disconnectGraceSeconds))s — ending session")
-                Task { @MainActor in self.onDisconnected?() }
+                self.reportGone("device gone for >\(Int(self.disconnectGraceSeconds))s — ending session")
             }
             // A reconnect on a static screen produces no capture frames, so
             // the receiver would stay black — replay the last frame as IDR.

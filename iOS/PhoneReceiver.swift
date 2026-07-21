@@ -279,8 +279,8 @@ final class PhoneReceiver: ObservableObject {
                               completion: (() -> Void)?) {
         queue.async {
             var finished = false
-            let finish = {
-                guard !finished else { return }
+            let finish = { [weak self] in
+                guard let self, !finished else { return }
                 finished = true
                 self.connection?.cancel()
                 self.connection = nil
