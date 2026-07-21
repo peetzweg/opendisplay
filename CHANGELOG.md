@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/peetzweg/opendisplay/compare/v1.12.1...v1.13.0) (2026-07-21)
+
+
+### Features
+
+* end the session when the receiver sleeps, reconnect on wake ([#166](https://github.com/peetzweg/opendisplay/issues/166)) ([e7eb0e5](https://github.com/peetzweg/opendisplay/commit/e7eb0e57ede6bab10a31968dc66428cc266f9f9e))
+
 ## [1.12.1](https://github.com/peetzweg/opendisplay/compare/v1.12.0...v1.12.1) (2026-07-21)
 
 
