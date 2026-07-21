@@ -326,7 +326,8 @@ struct PerfOverlay: View {
                 }
                 metric("Mbit/s", String(format: "%.1f", stats.mbps))
                 metric("stalls", "\(stats.stalls)")
-                metric("drops", "\(stats.macDrops)")
+                metric("enc↓", "\(stats.macEncDrops)")
+                metric("net↓", "\(stats.macNetDrops)")
                 if stats.macPending > 0 {
                     metric("queue", "\(stats.macPending)")
                 }
