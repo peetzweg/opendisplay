@@ -255,14 +255,28 @@ final class PhoneReceiver: ObservableObject {
         }
     }
 
-    /// The screen went dark (lock or app backgrounded) — nobody can see the
-    /// stream, so tell the Mac and go silent. Sends "sleeping" (the Mac drops
-    /// its virtual display so the cursor isn't stranded on an invisible
-    /// screen), then closes the connection AND the listener: while asleep we
-    /// must not accept connections, or the Mac's wake retries would rebuild
-    /// the display before anyone can see it. ensureListening() re-arms
+    /// The device locked — nobody can see the stream, so tell the Mac and go
+    /// silent. Sends "sleeping" (the Mac drops its virtual display so the
+    /// cursor isn't stranded on an invisible screen and arms a reconnect),
+    /// then closes the connection AND the listener: while asleep we must not
+    /// accept connections, or the Mac's wake retries would rebuild the
+    /// display before anyone can see it. ensureListening() re-arms
     /// everything when the scene becomes active again.
     func enterSleep(completion: (() -> Void)? = nil) {
+        closeSession(announcing: WireMessage.sleeping,
+                     status: "Asleep — resumes on wake", completion: completion)
+    }
+
+    /// The app is being terminated (user swiped it away). Same close, but
+    /// announced as "closing": quitting the app is deliberate, so the Mac
+    /// ends the session without waiting around for a wake.
+    func shutDown(completion: (() -> Void)? = nil) {
+        closeSession(announcing: WireMessage.closing,
+                     status: "Closed", completion: completion)
+    }
+
+    private func closeSession(announcing type: String, status: String,
+                              completion: (() -> Void)?) {
         queue.async {
             var finished = false
             let finish = {
@@ -274,20 +288,20 @@ final class PhoneReceiver: ObservableObject {
                 self.listener = nil
                 self.listenerHealthy = false
                 self.setConnected(false)
-                self.setStatus("Asleep — resumes on wake")
+                self.setStatus(status)
                 completion?()
             }
             guard let conn = self.connection, conn.state == .ready else {
-                Log.info("entering sleep (no live connection)")
+                Log.info("closing session (\(type)) — no live connection")
                 finish()
                 return
             }
-            Log.info("entering sleep — notifying the Mac and closing")
-            self.sendControl(["type": WireMessage.sleeping], on: conn) {
+            Log.info("closing session — announcing \(type) to the Mac")
+            self.sendControl(["type": type], on: conn) {
                 self.queue.async { finish() }
             }
             // The send completion may never fire on a dying link — don't
-            // let that keep us accepting connections while asleep.
+            // let that keep us accepting connections after going dark.
             self.queue.asyncAfter(deadline: .now() + 1) { finish() }
         }
     }

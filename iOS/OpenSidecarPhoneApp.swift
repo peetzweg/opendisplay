@@ -148,6 +148,14 @@ struct ReceiverScreen: View {
             Log.info("protected data available again (device unlocked)")
             model.sceneDidActivate()
         }
+        // Swiping the app away in the switcher (while we're still running)
+        // grants a ~5s notice — enough for a clean goodbye so the Mac ends
+        // the session at once. A kill without notice is covered Mac-side:
+        // dead apps stop accepting redials, so the silence grace fires.
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willTerminateNotification)) { _ in
+            model.appWillTerminate()
+        }
         .onChange(of: model.receiver.connected) { _, isConnected in
             // The first valid connection retires the onboarding hint for good.
             if isConnected {
@@ -621,15 +629,17 @@ final class ReceiverModel: ObservableObject {
         receiver.start(port: 9000)
     }
 
-    // MARK: - Lock vs app switch
+    // MARK: - Lock vs app switch vs app quit
 
-    // A plain app switch keeps the session alive under a background
-    // assertion for this long — enough to answer a message and come back
-    // without a display rebuild, short enough to fit inside the ~30s of
-    // background runtime iOS actually grants. A device lock is the
-    // deliberate "screen off" and skips the linger entirely.
-    private let lingerSeconds: TimeInterval = 20
-    private var lingerTask: DispatchWorkItem?
+    // A plain app switch keeps the session (and the Mac's virtual display,
+    // and therefore the user's window arrangement) alive INDEFINITELY. The
+    // assertion buys ~30s of live pings; after iOS suspends us the kernel
+    // still accepts the Mac's redials, so the session survives untouched
+    // until we return. Only a device lock (deliberate "screen off") or the
+    // app being quit ends the session. Known hole: a lock that happens
+    // after we're already suspended is undetectable — no code runs and the
+    // kernel behaves identically — so the display stays up until the user
+    // returns or the app dies.
     private var backgroundToken: UIBackgroundTaskIdentifier = .invalid
 
     func sceneDidBackground() {
@@ -639,19 +649,12 @@ final class ReceiverModel: ObservableObject {
             goToSleep()
             return
         }
-        Log.info("app switched away — lingering \(Int(lingerSeconds))s before sleeping")
+        Log.info("app switched away — keeping the session, rendering paused")
         beginBackgroundAssertion()
         receiver.setRenderingPaused(true)
-        // Cancel + replace, never stack self-rescheduling work (#75/#76).
-        lingerTask?.cancel()
-        let task = DispatchWorkItem { [weak self] in self?.goToSleep() }
-        lingerTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + lingerSeconds, execute: task)
     }
 
     func sceneDidActivate() {
-        lingerTask?.cancel()
-        lingerTask = nil
         endBackgroundAssertion()
         receiver.setRenderingPaused(false)
         receiver.ensureListening()
@@ -662,9 +665,15 @@ final class ReceiverModel: ObservableObject {
         goToSleep()
     }
 
+    /// User swiped the app away (or iOS terminates us while still running):
+    /// ~5s of runtime remain, plenty for the "closing" goodbye that lets the
+    /// Mac end the session immediately instead of after its silence grace.
+    func appWillTerminate() {
+        Log.info("app terminating — closing session")
+        receiver.shutDown()
+    }
+
     private func goToSleep() {
-        lingerTask?.cancel()
-        lingerTask = nil
         receiver.enterSleep { [weak self] in
             DispatchQueue.main.async { self?.endBackgroundAssertion() }
         }
@@ -673,11 +682,9 @@ final class ReceiverModel: ObservableObject {
     private func beginBackgroundAssertion() {
         guard backgroundToken == .invalid else { return }
         backgroundToken = UIApplication.shared.beginBackgroundTask { [weak self] in
-            // iOS is done waiting — fire the goodbye and release the
-            // assertion before suspension takes us either way.
-            guard let self else { return }
-            self.receiver.enterSleep()
-            self.endBackgroundAssertion()
+            // Suspension takes us now; the session stays up by design (the
+            // kernel keeps accepting for us) — just release the assertion.
+            self?.endBackgroundAssertion()
         }
     }
 

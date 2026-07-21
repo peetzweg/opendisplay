@@ -526,8 +526,8 @@ final class SenderController: ObservableObject {
             self.end(session)
         }
         sender.onPeerSleeping = { [weak self, weak session] in
-            // The device's screen went dark. Unlike a plain disconnect this
-            // is a known-temporary state announced by the receiver, so ending
+            // The device locked. Unlike a plain disconnect this is a
+            // known-temporary state announced by the receiver, so ending
             // the session (which frees the cursor from the now-invisible
             // display) is paired with a replacement session that dials
             // patiently until the device wakes and accepts again.
@@ -536,6 +536,14 @@ final class SenderController: ObservableObject {
             Log.info("session \(session.id) asleep — display down, waiting for wake")
             self.end(session)
             self.connect(to: target, awaitingWake: true)
+        }
+        sender.onPeerClosed = { [weak self, weak session] in
+            // The receiver app quit — a deliberate goodbye, so no reconnect
+            // waits around. Reopening the app is a fresh start handled by
+            // the normal discovery/auto-connect paths.
+            guard let self, let session else { return }
+            Log.info("session \(session.id) closed by the receiver — ending")
+            self.end(session)
         }
         sessions.append(session)
         Task {

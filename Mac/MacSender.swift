@@ -96,10 +96,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // recording indicator all torn down) instead of dialing forever or
     // silently coming back over a different transport.
     @MainActor var onDisconnected: (() -> Void)?
-    // Fired when the receiver announces its screen went dark (lock or app
-    // backgrounded). The controller ends this session — an invisible display
-    // strands the cursor — and starts a fresh one that waits for the wake.
+    // Fired when the receiver announces its device locked. The controller
+    // ends this session — an invisible display strands the cursor — and
+    // starts a fresh one that waits for the wake.
     @MainActor var onPeerSleeping: (() -> Void)?
+    // Fired when the receiver announces the app is quitting: deliberate,
+    // so the controller ends the session without arming a reconnect.
+    @MainActor var onPeerClosed: (() -> Void)?
     // Fired on every hello — carries the receiver's install id so the
     // controller can deduplicate USB/WiFi sessions to the same device.
     @MainActor var onHello: ((PhoneInfo) -> Void)?
@@ -731,8 +734,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             guard let self, !self.stopped else { return }
             if self.connectionReady, Date().timeIntervalSince(self.lastReceived) > 5 {
+                // A suspended receiver app (user switched apps) goes silent
+                // like this while its kernel still accepts redials — the
+                // session and display are kept on purpose so the user's
+                // window arrangement survives until they come back. Genuine
+                // network loss fails the redials and ends via the grace.
                 Log.info("watchdog: nothing from the phone for >5s — reconnecting")
-                Task { await self.status("Connection stale — reconnecting…") }
+                Task { await self.status("\(self.endpointName) app in background — keeping the display") }
                 self.scheduleReconnect()
             }
             // The disconnect grace is otherwise only evaluated when a dial
@@ -936,12 +944,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             Log.info("phone requested keyframe")
             needsKeyframe = true
         case WireMessage.sleeping:
-            // The device's screen went dark and it is about to close on us.
-            // Hand the session to the controller right away: it tears the
-            // virtual display down (returning the cursor to a visible
-            // screen) and starts a wake-waiting replacement session.
+            // The device locked and is about to close on us. Hand the
+            // session to the controller right away: it tears the virtual
+            // display down (returning the cursor to a visible screen) and
+            // starts a wake-waiting replacement session.
             Log.info("receiver went to sleep — ending session, reconnect armed for wake")
             Task { @MainActor in self.onPeerSleeping?() }
+        case WireMessage.closing:
+            // The app on the device is quitting for real — end the session
+            // without the silence grace and without waiting for a wake.
+            Log.info("receiver app closed — ending session")
+            Task { @MainActor in self.onPeerClosed?() }
         default:
             Log.info("unknown control message type: \(type)")
         }
