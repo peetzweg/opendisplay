@@ -124,13 +124,13 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 .dl-head { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--faint); margin-bottom: 6px;
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.dl-head .step { color: var(--fg); border: 1px solid var(--line-strong); border-radius: 3px;
+.dl-head .step { color: var(--fg); border: 1px solid var(--line-strong);
   padding: 2px 7px; letter-spacing: 0.06em; }
 .dl-head .ver { color: var(--fg); text-transform: none; letter-spacing: 0; }
 .dl-sub { color: var(--muted); font-size: 0.86rem; margin-bottom: 18px; }
 
 .btn { display: inline-flex; align-items: center; gap: 8px; font: inherit;
-  font-weight: 600; font-size: 0.95rem; padding: 12px 22px; border-radius: 3px;
+  font-weight: 600; font-size: 0.95rem; padding: 12px 22px;
   text-decoration: none; border: 1px solid var(--line-strong); cursor: pointer; }
 .btn.primary { background: var(--fg); color: var(--bg); }
 .btn.primary:hover { background: #000; }
@@ -168,7 +168,7 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 /* Post cards: self-contained, self-hosted renditions of community posts.
    The whole card is one link to the post on X. */
 a.showcase-item.is-post { display: block; border: 1px solid var(--line);
-  border-radius: 12px; padding: 18px 20px; text-decoration: none;
+  padding: 18px 20px; text-decoration: none;
   color: var(--fg); background: var(--bg); }
 a.showcase-item.is-post:hover { border-color: var(--line-strong); }
 .post-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
@@ -183,7 +183,7 @@ a.showcase-item.is-post:hover { border-color: var(--line-strong); }
 .post-trans { font-size: 0.9rem; line-height: 1.45; margin: 12px 0 0;
   color: var(--muted); font-style: italic; }
 .post-trans + .post-trans { margin-top: 0.5em; }
-.post-photo { display: block; width: 100%; height: auto; border-radius: 8px;
+.post-photo { display: block; width: 100%; height: auto;
   margin: 14px 0 12px; border: 1px solid var(--line); }
 .post-date { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em;
   color: var(--faint); }
@@ -193,7 +193,7 @@ a.showcase-item.is-post:hover { border-color: var(--line-strong); }
 .showcase-nav button { font-family: var(--mono); font-size: 1rem; line-height: 1;
   width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;
   background: transparent; color: var(--fg); border: 1px solid var(--line-strong);
-  border-radius: 3px; cursor: pointer; }
+  cursor: pointer; }
 .showcase-nav button:hover:not(:disabled) { background: var(--fg); color: var(--bg); }
 .showcase-nav button:disabled { color: var(--faint); border-color: var(--line); cursor: default; }
 
@@ -227,17 +227,17 @@ a.showcase-item.is-post:hover { border-color: var(--line-strong); }
   padding: 22px 24px; border-bottom: 1px solid var(--line); align-items: start; }
 .compare .row p { color: var(--muted); max-width: 80ch; }
 .compare .row .name { font-weight: 600; color: var(--fg); }
-.compare .row.highlight { border: 2px solid var(--accent); border-radius: 4px;
+.compare .row.highlight { border: 2px solid var(--accent);
   background: #fafafa; padding: 22px; margin-top: 10px; }
 @media (max-width: 560px) { .compare .row { grid-template-columns: 1fr; gap: 6px; } }
 .tbl-head { margin: 48px 0 16px; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; }
 
 /* ---- code ---- */
-pre { border: 1px solid var(--line); border-radius: 3px; padding: 20px;
+pre { border: 1px solid var(--line); padding: 20px;
   overflow-x: auto; font-size: 0.84rem; line-height: 1.55; background: #fafafa;
   margin-top: 8px; }
 code { font-family: var(--mono); }
-p code { font-size: 0.88em; background: #f2f2f2; padding: 1px 5px; border-radius: 3px; }
+p code { font-size: 0.88em; background: #f2f2f2; padding: 1px 5px; }
 
 /* ---- comparison table ---- */
 /* no outer frame — keep only the inner row lines (and the boxed OpenDisplay column) */
@@ -293,9 +293,13 @@ details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
 .support-nudge { position: sticky; top: 60px; z-index: 9;
   display: flex; width: fit-content; margin: 0 auto;
   align-items: center; gap: 14px; padding: 10px 18px;
-  border: 1px solid var(--line); border-radius: 3px;
+  border: 1px solid var(--line);
   background: var(--bg); text-decoration: none; color: var(--fg); }
 .support-nudge:hover { background: #fafafa; }
+/* Pinned under the nav: drop the top border so it doesn't double up against the
+   nav's bottom rule. Border stays 1px but transparent — no layout shift, and
+   the nav's opaque border paints over that row anyway. */
+.support-nudge.is-stuck { border-top-color: transparent; }
 .kofi-banner-left { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
 .support-nudge .kofi-mark { height: 24px; width: auto; display: block; flex: none; }
 .kofi-banner-text { font-size: 0.9rem; color: var(--muted); }
@@ -304,10 +308,9 @@ details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
   transition: transform 0.15s ease; }
 .support-nudge:hover .kofi-banner-arrow { transform: translateY(3px); }
 @media (max-width: 560px) {
-  /* Full-width band: drop the side borders (and now-orphaned corner radius) so
-     only the top/bottom rules remain. */
+  /* Full-width band: drop the side borders so only the top/bottom rules remain. */
   .support-nudge { width: auto; flex-direction: column; gap: 6px; text-align: center;
-    border-left: 0; border-right: 0; border-radius: 0; }
+    border-left: 0; border-right: 0; }
 }
 
 /* ---- footer ---- */
