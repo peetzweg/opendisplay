@@ -28,4 +28,5 @@ enum WireProtocol {
 enum WireMessage {
     static let welcome = "welcome"                  // Mac -> phone: Mac's pv + min supported
     static let updateRequired = "updateRequired"    // Mac -> phone: peer is below the Mac's floor
+    static let sleeping = "sleeping"                // phone -> Mac: screen locked / app left foreground
 }

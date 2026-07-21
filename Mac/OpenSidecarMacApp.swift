@@ -442,7 +442,8 @@ final class SenderController: ObservableObject {
         return hash == 0 ? 1 : hash
     }
 
-    func connect(to target: ConnectionTarget, userInitiated: Bool = false) {
+    func connect(to target: ConnectionTarget, userInitiated: Bool = false,
+                 awaitingWake: Bool = false) {
         let id = target.sessionID
         guard session(for: id) == nil else { return }
 
@@ -490,7 +491,8 @@ final class SenderController: ObservableObject {
 
         let name = label(for: target)
         let sender = MacSender(transport: transport, name: name, mode: mode,
-                               quality: quality, displaySerial: Self.displaySerial(for: id))
+                               quality: quality, displaySerial: Self.displaySerial(for: id),
+                               awaitingWake: awaitingWake)
         let session = DeviceSession(id: id, target: target, name: name, sender: sender)
         if case .wifi(let result) = target {
             session.wifiServiceName = serviceName(of: result)
@@ -522,6 +524,18 @@ final class SenderController: ObservableObject {
             guard let self, let session else { return }
             Log.info("device disconnected — session \(session.id) stopped")
             self.end(session)
+        }
+        sender.onPeerSleeping = { [weak self, weak session] in
+            // The device's screen went dark. Unlike a plain disconnect this
+            // is a known-temporary state announced by the receiver, so ending
+            // the session (which frees the cursor from the now-invisible
+            // display) is paired with a replacement session that dials
+            // patiently until the device wakes and accepts again.
+            guard let self, let session else { return }
+            let target = session.target
+            Log.info("session \(session.id) asleep — display down, waiting for wake")
+            self.end(session)
+            self.connect(to: target, awaitingWake: true)
         }
         sessions.append(session)
         Task {

@@ -127,8 +127,42 @@ struct ReceiverScreen: View {
             showSettings = true
         }
         .onChange(of: scenePhase) { _, phase in
-            // iOS may tear the listener down while suspended — recover.
-            if phase == .active { model.receiver.ensureListening() }
+            Log.info("scenePhase -> \(String(describing: phase))")
+            switch phase {
+            case .active:
+                // iOS may tear the listener down while suspended — recover.
+                model.receiver.ensureListening()
+            case .background:
+                // Screen locked or the user switched apps — either way the
+                // stream is invisible now, and staying connected strands the
+                // Mac's cursor on a display nobody can see. Tell the Mac and
+                // go silent; it reconnects on its own when we return. The
+                // background assertion keeps iOS from suspending us before
+                // the goodbye flushes.
+                let token = UIApplication.shared.beginBackgroundTask()
+                model.receiver.enterSleep {
+                    DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(token) }
+                }
+            default:
+                break
+            }
+        }
+        // Belt and braces for the lock case: some sleep paths (e.g. the
+        // power button while the app holds the screen) report the lock via
+        // protected data before/without a scene transition. enterSleep is
+        // idempotent, so reacting to both signals is safe.
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+            Log.info("protected data will become unavailable (device locking)")
+            let token = UIApplication.shared.beginBackgroundTask()
+            model.receiver.enterSleep {
+                DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(token) }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+            Log.info("protected data available again (device unlocked)")
+            model.receiver.ensureListening()
         }
         .onChange(of: model.receiver.connected) { _, isConnected in
             // The first valid connection retires the onboarding hint for good.
