@@ -187,6 +187,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // not "app closed" — surface that instead of the usual hints. Cleared by
     // the first successful connection.
     private var awaitingWake: Bool
+
+    // Consecutive actively-refused dials on a previously connected session.
+    // Refusal is unambiguous: the device is reachable but nothing listens,
+    // so the app was quit (a suspended app's kernel still accepts, and a
+    // network blip times out instead of refusing). Three in a row (~3s)
+    // ends the session early; the full 10s grace stays reserved for the
+    // ambiguous failure kinds.
+    private var consecutiveRefusals = 0
+    private let refusalsBeforeGivingUp = 3
     private var dropsTotal: Int { dropsEncTotal + dropsNetTotal }
 
     // Local cursor echo: a cursor baked into the video carries the full
@@ -506,6 +515,33 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    /// A dial was actively refused (must be called on `queue`). On a session
+    /// that has streamed before, enough refusals in a row prove the receiver
+    /// app is gone — end now instead of waiting out the grace.
+    private func dialRefused() {
+        guard everConnected, !stopped else { return }
+        consecutiveRefusals += 1
+        if consecutiveRefusals == refusalsBeforeGivingUp {
+            Log.info("dial refused \(consecutiveRefusals)x — receiver app is gone, ending session")
+            Task { @MainActor in self.onDisconnected?() }
+        }
+    }
+
+    /// The receiver's Bonjour advertisement disappeared (the system
+    /// deregisters a dead app's service within ~1s, while a suspended app
+    /// keeps it). Only meaningful once the connection is already down —
+    /// a live connection outranks a flapping mDNS cache. Together they
+    /// prove a WiFi receiver quit, where dials just stall instead of
+    /// being refused.
+    func peerServiceWithdrawn() {
+        queue.async { [weak self] in
+            guard let self, !self.stopped, self.everConnected,
+                  !self.connectionReady else { return }
+            Log.info("service withdrawn and connection down — receiver app is gone, ending session")
+            Task { @MainActor in self.onDisconnected?() }
+        }
+    }
+
     /// Drop the current connection and dial again — fresh TCP through the
     /// tunnel, fresh accept on the phone. Bound to the UI Reconnect button.
     func forceReconnect() {
@@ -562,6 +598,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         connectionReady = true
         everConnected = true
         awaitingWake = false
+        consecutiveRefusals = 0
         disconnectedSince = nil
         needsKeyframe = true   // new peer needs SPS/PPS + IDR
         // A reconnect can recreate the phone's video view with no cursor
@@ -603,6 +640,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             case .failed(let error):
                 Log.info("connection failed: \(error)")
                 self.connectionReady = false
+                if case .posix(let code) = error, code == .ECONNREFUSED {
+                    self.dialRefused()
+                }
                 self.scheduleReconnect()
             case .waiting(let error):
                 // On loopback there is no "path change" to wake us up again
@@ -669,6 +709,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
                 queue.async {
                     guard generation == self.dialGeneration, !self.stopped else { return }
+                    if case .refused = error as? Usbmux.Failure {
+                        self.dialRefused()
+                    }
                     Task { await self.status(hint) }
                     self.scheduleReconnect()
                 }
