@@ -11,6 +11,16 @@ packages:
     # 2.x is the current major (latest 2.9.x) and the first Sparkle line to
     # support SPM. `from:` allows compatible 2.x updates.
     from: "2.6.0"
+  # X.509 identity minting for cert-pinned mutual TLS (issue #16).
+  # Compiled into BOTH targets alongside Shared/TrustStore.swift.
+  SwiftCertificates:
+    url: https://github.com/apple/swift-certificates
+    from: "1.19.1"
+  # Explicit because Shared/TrustStore.swift imports SwiftASN1 (DER.Serializer)
+  # directly; do not rely on it transitively via SwiftCertificates.
+  SwiftASN1:
+    url: https://github.com/apple/swift-asn1
+    from: "1.1.0"
 schemes:
   OpenSidecarMac:
     build:
@@ -42,6 +52,10 @@ targets:
       - Shared
     dependencies:
       - package: Sparkle
+      - package: SwiftCertificates
+        product: X509
+      - package: SwiftASN1
+        product: SwiftASN1
     info:
       path: Mac/Info.plist
       properties:
@@ -91,6 +105,11 @@ targets:
     sources:
       - iOS
       - Shared
+    dependencies:
+      - package: SwiftCertificates
+        product: X509
+      - package: SwiftASN1
+        product: SwiftASN1
     info:
       path: iOS/Info.plist
       properties:

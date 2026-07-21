@@ -46,6 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Reinstall-cleanup purge itself now happens in SenderController.init()
+        // — it must run before startBrowsing()/UsbmuxDeviceWatcher are armed,
+        // and SwiftUI constructs the App's @StateObject (and so the
+        // controller) before this delegate callback fires. Doing it here
+        // instead would be too late: the USB bootstrap path has no arming
+        // delay and could already be using a stale keychain identity.
         // Hand the updater to the control window, which is built outside the
         // SwiftUI App scene (NSHostingView), so it can offer the same button.
         MainWindow.updater = updater
@@ -122,6 +128,9 @@ final class DeviceSession: ObservableObject, Identifiable {
     @Published var status = "Starting…"
     @Published var framesSent = 0
     @Published var mbps = 0.0
+    // USB trust-bootstrap diagnostics — separate from the
+    // streaming `status` line so a pairing message never clobbers it.
+    @Published var pairingStatus: String?
     // Receiver's per-install identity (from hello) — the key for recognizing
     // the same physical device across USB and WiFi.
     var deviceID: String?
@@ -135,6 +144,10 @@ final class DeviceSession: ObservableObject, Identifiable {
     // The udid the session is (or was last) cabled through, so a usbmuxd
     // detach can be matched back to this session for failover.
     var usbUDID: String?
+    // Self-verifying USB trust bootstrap: the offer runs at most once per
+    // session. Set when the bootstrap task is launched; a fresh session
+    // (reconnect) gets a fresh flag, so every replug re-verifies.
+    var bootstrapAttempted = false
     // The Bonjour service name this session was started from or failed over
     // to. Kept because browse results routinely arrive without their TXT
     // record (no install id to match on) and the USB device is detached
@@ -176,6 +189,11 @@ final class SenderController: ObservableObject {
     @Published var sessions: [DeviceSession] = []
     @Published var discovered: [NWBrowser.Result] = []
     @Published var usbDevices: [UsbmuxDevice] = []
+    /// Per-target user guidance ("Connect via USB once…"), keyed by
+    /// ConnectionTarget.sessionID.
+    @Published var wifiGuidance: [String: String] = [:]
+    private var bootstrapInFlight = Set<String>()   // udids with a bootstrap dial running
+    private static let usbOnceGuidance = "Connect via USB once to enable Wi-Fi"
     // `-host x.x.x.x` / `-port n` bypass usbmuxd with a manual TCP endpoint
     // (debugging escape hatch, e.g. an iproxy or SSH tunnel).
     @Published var host = UserDefaults.standard.string(forKey: "host") ?? "127.0.0.1"
@@ -220,6 +238,14 @@ final class SenderController: ObservableObject {
         UserDefaults.standard.dictionary(forKey: "installIDByUDID") as? [String: String] ?? [:] {
         didSet { UserDefaults.standard.set(installIDByUDID, forKey: "installIDByUDID") }
     }
+    // WiFi service name -> installID, learned from a live session's hello. Lets a
+    // manual WiFi connect resolve the pinned peer when the browse result carries
+    // no TXT `id` (NWBrowser often omits it), so it isn't limited to cable-unplug
+    // failover (which passes knownPeerID from the live session).
+    @Published private var installIDByWifiName: [String: String] =
+        UserDefaults.standard.dictionary(forKey: "installIDByWifiName") as? [String: String] ?? [:] {
+        didSet { UserDefaults.standard.set(installIDByWifiName, forKey: "installIDByWifiName") }
+    }
     private let autoConnectEnabled = UserDefaults.standard.object(forKey: "autostart") == nil
         || UserDefaults.standard.bool(forKey: "autostart")
 
@@ -232,6 +258,20 @@ final class SenderController: ObservableObject {
     private let wifiAutoConnectDeadline = Date().addingTimeInterval(12)
 
     init() {
+        // Reinstall-cleanup purge MUST run before startBrowsing()/the USB
+        // watcher are armed — both drive autoConnect()/failover(), which read
+        // TrustStore.shared.pin/ownIdentity, and the USB bootstrap path
+        // (onHello → TrustBootstrapClient) has no arming delay, unlike the
+        // 2s-delayed WiFi auto-connect below. Placed here (not
+        // applicationDidFinishLaunching) because SwiftUI creates the App's
+        // @StateObject — and therefore this controller — before the
+        // NSApplicationDelegate's didFinishLaunching runs, so doing it there
+        // would already be too late on a reinstall's first launch. Mirrors
+        // iOS, where purgeAll() precedes model.start() in the same onAppear.
+        if !UserDefaults.standard.bool(forKey: WireCrypto.trustStoreInitializedDefaultsKey) {
+            TrustStore.shared.purgeAll()
+            UserDefaults.standard.set(true, forKey: WireCrypto.trustStoreInitializedDefaultsKey)
+        }
         startBrowsing()
         usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
             guard let self else { return }
@@ -271,6 +311,93 @@ final class SenderController: ObservableObject {
     private func txtID(of result: NWBrowser.Result) -> String? {
         if case .bonjour(let txt) = result.metadata { return txt["id"] }
         return nil
+    }
+
+    // MARK: - WiFi transport routing (THE single .tcp builder)
+
+    /// THE ONLY legal source of a WiFi SenderTransport. Both connect()
+    /// and failover() route through here — no other call site may construct
+    /// .tcp for a Bonjour result.
+    private func wifiTransport(for result: NWBrowser.Result,
+                               knownPeerID: String? = nil) -> SenderTransport? {
+        let peerID = txtID(of: result) ?? knownPeerID   // TXT often missing on browse results
+        if let peerID, let pin = TrustStore.shared.pin(peerID: peerID) {
+            // Pinned ⇒ TLS-only, always (downgrade resistance).
+            guard let identity = TrustStore.shared.ownIdentity() else {
+                Log.info("wifiTransport: pinned peer \(peerID) — ownIdentity() nil, refusing WiFi")
+                return nil   // hard refuse; NEVER plaintext for a pinned peer
+            }
+            // The "_opensidecar._tcp" advertisement is published by the
+            // phone's TLS listener, so this browsed (Local-Network-
+            // authorized) endpoint resolves straight to the mTLS port.
+            return .tcp(result.endpoint, tls: TLSSessionConfig(identity: identity,
+                                                               pinnedPhoneSPKI: pin,
+                                                               peerID: peerID))
+        }
+        // Plaintext WiFi is gone: any unpinned peer is refused — pairing
+        // happens over the USB bootstrap, which a pre-TLS (pv < minWiFiPeer)
+        // peer can't complete, making old peers USB-only by construction.
+        // Callers show "Connect via USB once to enable Wi-Fi".
+        return nil
+    }
+
+    /// Pinned peer id behind a device row, if any (deviceID ?? txtID ?? installIDByUDID), gated on hasPin.
+    func pinnedPeerID(for entry: DeviceEntry) -> String? {
+        var candidates: [String] = []
+        if let s = session(for: entry) { if let d = s.deviceID { candidates.append(d) } }
+        if let target = entry.wifiTarget, case .wifi(let result) = target, let id = txtID(of: result) {
+            candidates.append(id)
+        }
+        if let target = entry.usbTarget, case .usb(let udid?) = target, let id = installIDByUDID[udid] {
+            candidates.append(id)
+        }
+        return candidates.first { TrustStore.shared.hasPin(peerID: $0) }
+    }
+
+    /// "Forget Pairing" context-menu action. Forgetting also drops any live
+    /// session for that peer immediately — the pin is only checked at TLS
+    /// handshake, so an established session would otherwise keep streaming
+    /// until it happened to reconnect.
+    ///
+    /// Teardown uses `end(_:)`, not `disconnect(_:)`: this is a forget, not a
+    /// user "disconnect this device" action, so a still-attached cable must
+    /// stay eligible for USB auto-connect — otherwise the peer forgot us (or
+    /// we forgot it) but the cable sits there doing nothing until the user
+    /// manually taps the device row. A stale WiFi service is nudged into the
+    /// USB-first bootstrap via wifiGuidance, matching onPairingRejected.
+    func forgetPairing(peerID: String) {
+        let doomed = sessions.filter { s in
+            if s.deviceID == peerID { return true }
+            if case .wifi(let result) = s.target, txtID(of: result) == peerID { return true }
+            return false
+        }
+        // Symmetric revoke (WireMessage.unpair): tell the live peer to drop
+        // its pin for us BEFORE the sockets die. toID scopes the revoke to
+        // the forgotten device; disconnect happens in the send completion so
+        // the frame is flushed first. The iPad also drops the connection on
+        // receipt, so teardown is cooperative.
+        let macID = TrustStore.shared.installID()
+        if macID == nil {
+            // installID() should never be nil once TrustStore is initialized —
+            // this leaves the peer with a pin for us that we can no longer
+            // revoke (we drop our own pin below regardless, so re-pairing
+            // still works, but trust is asymmetric until the peer's own
+            // stale-pin self-heal kicks in). Loud because it signals a
+            // TrustStore/keychain problem worth investigating.
+            Log.info("ERROR: forgetPairing(\(peerID)) — installID() is nil, cannot send unpair; peer will keep a stale pin for us")
+        }
+        TrustStore.shared.forget(peerID: peerID)
+        for s in doomed {
+            wifiGuidance["wifi:\(s.wifiServiceName ?? s.name)"] = Self.usbOnceGuidance
+            if let macID {
+                s.sender.sendUnpair(fromID: macID, toID: peerID) { [weak self] in
+                    self?.end(s)
+                }
+            } else {
+                end(s)
+            }
+        }
+        objectWillChange.send()
     }
 
     /// Same hardware? Strong match: the service's install id equals the id
@@ -339,6 +466,17 @@ final class SenderController: ObservableObject {
             if wifiRemembered.contains(target.sessionID),
                activeSession(coveringWiFi: result) == nil,
                !cabled(result) {
+                // Only pinned peers are ever auto-dialed over WiFi. Resolve the
+                // peer the SAME way connect(to:) does: the TXT id is often
+                // absent from a browse result, so fall back to the WiFi-name →
+                // installID map (wifiTransport ORs txtID with knownPeerID) —
+                // otherwise an already-paired device never auto-reconnects over
+                // WiFi and is wrongly told to "connect via USB once".
+                let knownID = serviceName(of: result).flatMap { installIDByWifiName[$0] }
+                guard wifiTransport(for: result, knownPeerID: knownID) != nil else {
+                    wifiGuidance[target.sessionID] = Self.usbOnceGuidance
+                    continue
+                }
                 connect(to: target)
             }
         }
@@ -373,10 +511,14 @@ final class SenderController: ObservableObject {
         for session in sessions where session.onUSB {
             guard let udid = session.usbUDID, detachedUDIDs.contains(udid),
                   let result = wifiService(for: session) else { continue }
+            guard let t = wifiTransport(for: result, knownPeerID: session.deviceID) else {
+                session.status = Self.usbOnceGuidance   // pending-confirmation unplug: no pin yet ⇒ refuse WiFi
+                continue
+            }
             Log.info("cable detached for \(session.id) — failing over to WiFi")
             session.onUSB = false
             session.wifiServiceName = serviceName(of: result)
-            session.sender.switchTransport(to: .tcp(result.endpoint))
+            session.sender.switchTransport(to: t)
         }
     }
 
@@ -480,12 +622,20 @@ final class SenderController: ObservableObject {
             if UserDefaults.standard.object(forKey: "host") != nil, udid == nil {
                 // Manual override: dial a plain TCP endpoint instead of usbmuxd.
                 transport = .tcp(.hostPort(host: NWEndpoint.Host(host),
-                                           port: NWEndpoint.Port(rawValue: portNum)!))
+                                           port: NWEndpoint.Port(rawValue: portNum)!), tls: nil)
             } else {
                 transport = .usb(udid: udid, port: portNum)
             }
         case .wifi(let result):
-            transport = .tcp(result.endpoint)
+            // Resolve the pinned peer even when the browse result has no TXT `id`,
+            // by falling back to the name->installID map learned from prior sessions.
+            let knownID = serviceName(of: result).flatMap { installIDByWifiName[$0] }
+            guard let t = wifiTransport(for: result, knownPeerID: knownID) else {
+                wifiGuidance[target.sessionID] = Self.usbOnceGuidance
+                return   // no session created; the device row shows the guidance caption
+            }
+            wifiGuidance[target.sessionID] = nil
+            transport = t
         }
 
         let name = label(for: target)
@@ -506,6 +656,48 @@ final class SenderController: ObservableObject {
             if case .usb(let udid?) = session.target, let installID = info.id {
                 self.installIDByUDID[udid] = installID
             }
+            if let name = session.wifiServiceName, let installID = info.id {
+                self.installIDByWifiName[name] = installID   // remember for future manual WiFi connects
+            }
+            // Pre-TLS receiver: streams fine over the cable, but can never
+            // pair for WiFi until it's updated — say so, instead of letting
+            // the "Connect via USB once to enable Wi-Fi" guidance loop.
+            if session.onUSB, info.protocolVersion < WireProtocol.minWiFiPeer {
+                session.pairingStatus = "Update the \(info.kind) app to enable Wi-Fi — USB works without updating."
+            }
+            // USB trust bootstrap: self-verifying — runs once per
+            // USB session REGARDLESS of our own pin state; the phone is the
+            // single source of truth (auto-accepts silently on an exact pin
+            // match, prompts otherwise). This heals asymmetric trust (phone
+            // forgot us while we still hold a pin). session.onUSB/usbUDID
+            // (not session.target) is used so a WiFi-identity session migrated
+            // onto the cable is covered too; the -host backdoor has
+            // usbUDID == nil and is excluded.
+            if session.onUSB, let bootUDID = session.usbUDID,
+               let phoneID = info.id, info.protocolVersion >= WireProtocol.minWiFiPeer,
+               !session.bootstrapAttempted,
+               !self.bootstrapInFlight.contains(bootUDID) {
+                session.bootstrapAttempted = true
+                self.bootstrapInFlight.insert(bootUDID)
+                let displayName = self.usbDevices.first(where: { $0.udid == bootUDID })?.name ?? session.name
+                Task { [weak self, weak session] in
+                    await TrustBootstrapClient.run(udid: bootUDID, expectedPhoneID: phoneID,
+                                                   phoneDisplayName: displayName) { text in
+                        Task { @MainActor in
+                            session?.pairingStatus = text
+                            // text == nil signals a successful pin: the peer is
+                            // now trusted, so drop any stale "connect via USB
+                            // once" caption on its WiFi row. (No WiFi connect()
+                            // — which is what normally clears it — runs while the
+                            // device is still cabled.)
+                            if text == nil, let session {
+                                self?.wifiGuidance["wifi:\(session.wifiServiceName ?? session.name)"] = nil
+                            }
+                        }
+                    }
+                    await MainActor.run { self?.bootstrapInFlight.remove(bootUDID) }
+                }
+            }
             self.dedupeSessions()
             // The learned identity may reveal that this WiFi session's device
             // is cabled — take the upgrade opportunity right away.
@@ -522,6 +714,29 @@ final class SenderController: ObservableObject {
             guard let self, let session else { return }
             Log.info("device disconnected — session \(session.id) stopped")
             self.end(session)
+        }
+        sender.onUnpaired = { [weak self, weak session] fromID, toID in
+            guard let self, let session else { return }
+            guard toID == TrustStore.shared.installID() else {
+                Log.info("unpair ignored — addressed to \(toID), not us")
+                return
+            }
+            guard fromID == session.deviceID else {
+                Log.info("unpair ignored — fromID \(fromID) does not match session peer")
+                return
+            }
+            Log.info("peer \(fromID) revoked pairing — forgetting pin and disconnecting")
+            TrustStore.shared.forget(peerID: fromID)   // no-op if not pinned
+            self.wifiGuidance["wifi:\(session.wifiServiceName ?? session.name)"] = Self.usbOnceGuidance
+            self.end(session)   // not disconnect(): keep USB auto-connect eligible for the re-pair
+            self.objectWillChange.send()
+        }
+        sender.onPairingRejected = { [weak self, weak session] peerID in
+            guard let self, let session else { return }
+            Log.info("stale pin for \(peerID) — forgetting so the USB bootstrap can re-pair")
+            TrustStore.shared.forget(peerID: peerID)
+            self.wifiGuidance["wifi:\(session.wifiServiceName ?? session.name)"] = Self.usbOnceGuidance
+            self.end(session)   // not disconnect(): keep USB auto-connect eligible for the re-pair
         }
         sessions.append(session)
         Task {
@@ -748,6 +963,11 @@ struct ContentView: View {
                             // often before lockdown resolved the real name.
                             SessionRow(title: entry.name, session: session,
                                        controller: controller)
+                                .contextMenu {
+                                    if let id = controller.pinnedPeerID(for: entry) {
+                                        Button("Forget Pairing") { controller.forgetPairing(peerID: id) }
+                                    }
+                                }
                         } else {
                             HStack(alignment: .firstTextBaseline) {
                                 Circle()
@@ -758,6 +978,11 @@ struct ContentView: View {
                                     Text(entry.transportLabel)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    if let guidance = controller.wifiGuidance[entry.wifiTarget?.sessionID ?? entry.id] {
+                                        Text(guidance)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                                 Spacer()
                                 if let target = entry.preferredTarget {
@@ -765,6 +990,11 @@ struct ContentView: View {
                                         controller.connect(to: target, userInitiated: true)
                                     }
                                     .controlSize(.small)
+                                }
+                            }
+                            .contextMenu {
+                                if let id = controller.pinnedPeerID(for: entry) {
+                                    Button("Forget Pairing") { controller.forgetPairing(peerID: id) }
                                 }
                             }
                         }
@@ -959,6 +1189,12 @@ struct SessionRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                if let pairingStatus = session.pairingStatus {
+                    Text(pairingStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
             Spacer()
             if session.mbps > 0 {
