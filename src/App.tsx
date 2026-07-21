@@ -17,6 +17,19 @@ const HERO_WORDS = [
 export default function App() {
   const [macVer, setMacVer] = useState<string | null>(null)
   const [starCount, setStarCount] = useState<string | null>(null)
+  // Step 1 should be whichever platform you're reading this on. Default is
+  // Mac-first (what SSR/prerender emits, and what desktop/Windows/Linux see);
+  // on an iPhone/iPad we flip so the receiver you install here comes first.
+  const [iosFirst, setIosFirst] = useState(false)
+
+  useEffect(() => {
+    const ua = navigator.userAgent
+    const isIosDevice =
+      /iPhone|iPad|iPod/.test(ua) ||
+      // iPadOS 13+ reports as "Macintosh"; a touch-capable one is an iPad.
+      (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
+    if (isIosDevice) setIosFirst(true)
+  }, [])
   // Show the brand icon in the navbar only once the big hero logo has
   // scrolled up behind the sticky nav — it "hands off" from hero to navbar.
   const heroLogoRef = useRef<HTMLImageElement>(null)
@@ -191,62 +204,71 @@ export default function App() {
             OpenDisplay is <strong>two apps that work together</strong> — install both to get going.
           </p>
           <div className="downloads">
-            <div>
-              <div className="dl-head">
-                <span className="step">Step 1</span> On your Mac{" "}
-                <span className="ver">{macVer}</span>
-              </div>
-              <p className="dl-sub">The sender — captures a virtual display and streams it.</p>
-              <a
-                className="btn primary"
-                href="https://github.com/peetzweg/opendisplay/releases/latest/download/OpenDisplay.dmg"
-              >
-                Download for Mac
-              </a>
-              <p className="note">
-                Signed &amp; notarized — opens normally on macOS&nbsp;14+. Prefer to compile it yourself?{" "}
-                <a href="https://github.com/peetzweg/opendisplay#quick-start">Build from source ↗</a>
-              </p>
-              <p className="note">
-                Looking for an older version?{" "}
-                <a href="https://github.com/peetzweg/opendisplay/releases">Browse all releases ↗</a>
-              </p>
-            </div>
-            <div>
-              <div className="dl-head">
-                <span className="step">Step 2</span> On your iPhone &amp; iPad
-              </div>
-              <p className="dl-sub">The receiver — displays the stream and sends touch back.</p>
-              {/* TODO: On desktop only, show a QR code next to the App Store
-                  badge that encodes the App Store link, so visitors on a
-                  desktop PC can scan it with their iPhone or iPad to install
-                  the receiver. Hide it on touch/mobile viewports. */}
-              <div className="ios-row">
-                <a
-                  className="badge-wrap"
-                  href="https://apps.apple.com/app/id6780264891"
-                >
-                  <img
-                    className="appstore-badge"
-                    src="app-store-badge.svg"
-                    alt="Download on the App Store"
-                    width="120"
-                    height="40"
-                  />
-                </a>
-              </div>
-              <p className="sub">
-                Want early builds? <a id="testflight" href="https://testflight.apple.com/join/3NYaY11c">
-                  Join the TestFlight beta
-                </a>
-                ,<br />
-                or{" "}
-                <a href="https://github.com/peetzweg/opendisplay#quick-start">
-                  compile it from source ↗
-                </a>
-                .
-              </p>
-            </div>
+            {/* Step 1 is whichever platform you're reading this on — on an
+                iPhone/iPad the receiver comes first (see iosFirst). */}
+            {(() => {
+              const macStep = (
+                <div key="mac">
+                  <div className="dl-head">
+                    <span className="step">Step {iosFirst ? 2 : 1}</span> On your Mac{" "}
+                    <span className="ver">{macVer}</span>
+                  </div>
+                  <p className="dl-sub">The sender — captures a virtual display and streams it.</p>
+                  <a
+                    className="btn primary"
+                    href="https://github.com/peetzweg/opendisplay/releases/latest/download/OpenDisplay.dmg"
+                  >
+                    Download for Mac
+                  </a>
+                  <p className="note">
+                    Signed &amp; notarized — opens normally on macOS&nbsp;14+. Prefer to compile it yourself?{" "}
+                    <a href="https://github.com/peetzweg/opendisplay#quick-start">Build from source ↗</a>
+                  </p>
+                  <p className="note">
+                    Looking for an older version?{" "}
+                    <a href="https://github.com/peetzweg/opendisplay/releases">Browse all releases ↗</a>
+                  </p>
+                </div>
+              )
+              const iosStep = (
+                <div key="ios">
+                  <div className="dl-head">
+                    <span className="step">Step {iosFirst ? 1 : 2}</span> On your iPhone &amp; iPad
+                  </div>
+                  <p className="dl-sub">The receiver — displays the stream and sends touch back.</p>
+                  {/* TODO: On desktop only, show a QR code next to the App Store
+                      badge that encodes the App Store link, so visitors on a
+                      desktop PC can scan it with their iPhone or iPad to install
+                      the receiver. Hide it on touch/mobile viewports. */}
+                  <div className="ios-row">
+                    <a
+                      className="badge-wrap"
+                      href="https://apps.apple.com/app/id6780264891"
+                    >
+                      <img
+                        className="appstore-badge"
+                        src="app-store-badge.svg"
+                        alt="Download on the App Store"
+                        width="120"
+                        height="40"
+                      />
+                    </a>
+                  </div>
+                  <p className="sub">
+                    Want early builds? <a id="testflight" href="https://testflight.apple.com/join/3NYaY11c">
+                      Join the TestFlight beta
+                    </a>
+                    ,<br />
+                    or{" "}
+                    <a href="https://github.com/peetzweg/opendisplay#quick-start">
+                      compile it from source ↗
+                    </a>
+                    .
+                  </p>
+                </div>
+              )
+              return iosFirst ? [iosStep, macStep] : [macStep, iosStep]
+            })()}
           </div>
         </div>
       </section>
