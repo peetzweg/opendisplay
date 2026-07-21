@@ -129,40 +129,24 @@ struct ReceiverScreen: View {
         .onChange(of: scenePhase) { _, phase in
             Log.info("scenePhase -> \(String(describing: phase))")
             switch phase {
-            case .active:
-                // iOS may tear the listener down while suspended — recover.
-                model.receiver.ensureListening()
-            case .background:
-                // Screen locked or the user switched apps — either way the
-                // stream is invisible now, and staying connected strands the
-                // Mac's cursor on a display nobody can see. Tell the Mac and
-                // go silent; it reconnects on its own when we return. The
-                // background assertion keeps iOS from suspending us before
-                // the goodbye flushes.
-                let token = UIApplication.shared.beginBackgroundTask()
-                model.receiver.enterSleep {
-                    DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(token) }
-                }
-            default:
-                break
+            case .active: model.sceneDidActivate()
+            case .background: model.sceneDidBackground()
+            default: break
             }
         }
-        // Belt and braces for the lock case: some sleep paths (e.g. the
-        // power button while the app holds the screen) report the lock via
-        // protected data before/without a scene transition. enterSleep is
-        // idempotent, so reacting to both signals is safe.
+        // The deliberate "screen off" signal: locking the device makes
+        // protected data unavailable (a plain app switch doesn't). This is
+        // what separates "put the iPhone to sleep — end the session now"
+        // from "peeked at a message — keep the session alive".
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
             Log.info("protected data will become unavailable (device locking)")
-            let token = UIApplication.shared.beginBackgroundTask()
-            model.receiver.enterSleep {
-                DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(token) }
-            }
+            model.deviceWillLock()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
             Log.info("protected data available again (device unlocked)")
-            model.receiver.ensureListening()
+            model.sceneDidActivate()
         }
         .onChange(of: model.receiver.connected) { _, isConnected in
             // The first valid connection retires the onboarding hint for good.
@@ -635,6 +619,72 @@ final class ReceiverModel: ObservableObject {
         guard !started else { return }
         started = true
         receiver.start(port: 9000)
+    }
+
+    // MARK: - Lock vs app switch
+
+    // A plain app switch keeps the session alive under a background
+    // assertion for this long — enough to answer a message and come back
+    // without a display rebuild, short enough to fit inside the ~30s of
+    // background runtime iOS actually grants. A device lock is the
+    // deliberate "screen off" and skips the linger entirely.
+    private let lingerSeconds: TimeInterval = 20
+    private var lingerTask: DispatchWorkItem?
+    private var backgroundToken: UIBackgroundTaskIdentifier = .invalid
+
+    func sceneDidBackground() {
+        if !UIApplication.shared.isProtectedDataAvailable {
+            // Backgrounded because the device locked, not an app switch.
+            Log.info("backgrounded by device lock — sleeping now")
+            goToSleep()
+            return
+        }
+        Log.info("app switched away — lingering \(Int(lingerSeconds))s before sleeping")
+        beginBackgroundAssertion()
+        receiver.setRenderingPaused(true)
+        // Cancel + replace, never stack self-rescheduling work (#75/#76).
+        lingerTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.goToSleep() }
+        lingerTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + lingerSeconds, execute: task)
+    }
+
+    func sceneDidActivate() {
+        lingerTask?.cancel()
+        lingerTask = nil
+        endBackgroundAssertion()
+        receiver.setRenderingPaused(false)
+        receiver.ensureListening()
+    }
+
+    func deviceWillLock() {
+        Log.info("device locking — sleeping now")
+        goToSleep()
+    }
+
+    private func goToSleep() {
+        lingerTask?.cancel()
+        lingerTask = nil
+        receiver.enterSleep { [weak self] in
+            DispatchQueue.main.async { self?.endBackgroundAssertion() }
+        }
+    }
+
+    private func beginBackgroundAssertion() {
+        guard backgroundToken == .invalid else { return }
+        backgroundToken = UIApplication.shared.beginBackgroundTask { [weak self] in
+            // iOS is done waiting — fire the goodbye and release the
+            // assertion before suspension takes us either way.
+            guard let self else { return }
+            self.receiver.enterSleep()
+            self.endBackgroundAssertion()
+        }
+    }
+
+    private func endBackgroundAssertion() {
+        guard backgroundToken != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundToken)
+        backgroundToken = .invalid
     }
 }
 

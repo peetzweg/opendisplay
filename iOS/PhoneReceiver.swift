@@ -233,6 +233,28 @@ final class PhoneReceiver: ObservableObject {
         }
     }
 
+    // Set while the app lingers in the background with the session alive
+    // (brief app switch): decoding is pointless and hardware decode sessions
+    // fail off-screen, so frames are dropped before the sample stage.
+    private var renderingPaused = false
+
+    /// Pause/resume the video sink around a background linger. Resuming
+    /// flushes the layer and asks the Mac for a keyframe so the picture
+    /// re-syncs immediately (the Mac replays a static screen as IDR too).
+    func setRenderingPaused(_ paused: Bool) {
+        queue.async {
+            guard paused != self.renderingPaused else { return }
+            self.renderingPaused = paused
+            Log.info(paused ? "rendering paused (backgrounded)" : "rendering resumed")
+            if !paused {
+                self.displayLayer.flush()
+                if self.connection?.state == .ready {
+                    self.sendControl(["type": "kf"])
+                }
+            }
+        }
+    }
+
     /// The screen went dark (lock or app backgrounded) — nobody can see the
     /// stream, so tell the Mac and go silent. Sends "sleeping" (the Mac drops
     /// its virtual display so the cursor isn't stranded on an invisible
@@ -636,6 +658,10 @@ final class PhoneReceiver: ObservableObject {
 
     private func enqueueFrame(_ nalus: [Data], captureMs: Double? = nil, sendMs: Double? = nil) {
         guard let formatDesc else { return }
+        // Backgrounded linger: hardware decode is off-limits there, so drop
+        // frames at the door instead of feeding a failing display layer at
+        // frame rate. setRenderingPaused(false) re-syncs with a keyframe.
+        if renderingPaused { return }
 
         // Build one AVCC buffer: each NALU prefixed with 4-byte big-endian length.
         var avcc = Data(capacity: nalus.reduce(0) { $0 + $1.count + 4 })
