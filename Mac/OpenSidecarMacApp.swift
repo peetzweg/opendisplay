@@ -254,6 +254,7 @@ final class SenderController: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.discovered = Array(results)
+                self.endSessionsWhoseServiceVanished()
                 self.autoConnect()
             }
         }
@@ -380,6 +381,26 @@ final class SenderController: ObservableObject {
         }
     }
 
+    /// A quit receiver app loses its Bonjour advertisement within ~1s, far
+    /// faster than WiFi dial timeouts can notice (dials to a withdrawn
+    /// service stall rather than getting refused). Report the withdrawal to
+    /// each live WiFi session's sender; it only acts if its connection is
+    /// already down too, which together proves the app is gone. Debounced
+    /// 3s: an mDNS record can drop briefly during a WiFi roam — only a
+    /// withdrawal that persists counts. One-shot, guarded re-check, so
+    /// overlapping browse events at worst repeat an idempotent call.
+    private func endSessionsWhoseServiceVanished() {
+        for session in sessions where !session.onUSB {
+            guard wifiService(for: session) == nil else { continue }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self, weak session] in
+                guard let self, let session,
+                      self.sessions.contains(where: { $0 === session }),
+                      self.wifiService(for: session) == nil else { return }
+                session.sender.peerServiceWithdrawn()
+            }
+        }
+    }
+
     /// The discovered WiFi service belonging to this session's device.
     private func wifiService(for session: DeviceSession) -> NWBrowser.Result? {
         discovered.first { result in
@@ -442,7 +463,8 @@ final class SenderController: ObservableObject {
         return hash == 0 ? 1 : hash
     }
 
-    func connect(to target: ConnectionTarget, userInitiated: Bool = false) {
+    func connect(to target: ConnectionTarget, userInitiated: Bool = false,
+                 awaitingWake: Bool = false) {
         let id = target.sessionID
         guard session(for: id) == nil else { return }
 
@@ -490,7 +512,8 @@ final class SenderController: ObservableObject {
 
         let name = label(for: target)
         let sender = MacSender(transport: transport, name: name, mode: mode,
-                               quality: quality, displaySerial: Self.displaySerial(for: id))
+                               quality: quality, displaySerial: Self.displaySerial(for: id),
+                               awaitingWake: awaitingWake)
         let session = DeviceSession(id: id, target: target, name: name, sender: sender)
         if case .wifi(let result) = target {
             session.wifiServiceName = serviceName(of: result)
@@ -521,6 +544,26 @@ final class SenderController: ObservableObject {
             // transport fallback — reconnecting is the user's call.
             guard let self, let session else { return }
             Log.info("device disconnected — session \(session.id) stopped")
+            self.end(session)
+        }
+        sender.onPeerSleeping = { [weak self, weak session] in
+            // The device locked. Unlike a plain disconnect this is a
+            // known-temporary state announced by the receiver, so ending
+            // the session (which frees the cursor from the now-invisible
+            // display) is paired with a replacement session that dials
+            // patiently until the device wakes and accepts again.
+            guard let self, let session else { return }
+            let target = session.target
+            Log.info("session \(session.id) asleep — display down, waiting for wake")
+            self.end(session)
+            self.connect(to: target, awaitingWake: true)
+        }
+        sender.onPeerClosed = { [weak self, weak session] in
+            // The receiver app quit — a deliberate goodbye, so no reconnect
+            // waits around. Reopening the app is a fresh start handled by
+            // the normal discovery/auto-connect paths.
+            guard let self, let session else { return }
+            Log.info("session \(session.id) closed by the receiver — ending")
             self.end(session)
         }
         sessions.append(session)

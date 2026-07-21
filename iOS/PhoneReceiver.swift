@@ -223,12 +223,86 @@ final class PhoneReceiver: ObservableObject {
     }
 
     /// Recreate the listener if it isn't healthy — called when the app
-    /// returns to the foreground (iOS may have torn it down while suspended).
+    /// returns to the foreground (iOS may have torn it down while suspended,
+    /// or enterSleep deliberately took it down on lock).
     func ensureListening() {
         queue.async {
             guard !self.listenerHealthy else { return }
             Log.info("listener not healthy — restarting")
             self.restartListener()
+        }
+    }
+
+    // Set while the app lingers in the background with the session alive
+    // (brief app switch): decoding is pointless and hardware decode sessions
+    // fail off-screen, so frames are dropped before the sample stage.
+    private var renderingPaused = false
+
+    /// Pause/resume the video sink around a background linger. Resuming
+    /// flushes the layer and asks the Mac for a keyframe so the picture
+    /// re-syncs immediately (the Mac replays a static screen as IDR too).
+    func setRenderingPaused(_ paused: Bool) {
+        queue.async {
+            guard paused != self.renderingPaused else { return }
+            self.renderingPaused = paused
+            Log.info(paused ? "rendering paused (backgrounded)" : "rendering resumed")
+            if !paused {
+                self.displayLayer.flush()
+                if self.connection?.state == .ready {
+                    self.sendControl(["type": "kf"])
+                }
+            }
+        }
+    }
+
+    /// The device locked — nobody can see the stream, so tell the Mac and go
+    /// silent. Sends "sleeping" (the Mac drops its virtual display so the
+    /// cursor isn't stranded on an invisible screen and arms a reconnect),
+    /// then closes the connection AND the listener: while asleep we must not
+    /// accept connections, or the Mac's wake retries would rebuild the
+    /// display before anyone can see it. ensureListening() re-arms
+    /// everything when the scene becomes active again.
+    func enterSleep(completion: (() -> Void)? = nil) {
+        closeSession(announcing: WireMessage.sleeping,
+                     status: "Asleep — resumes on wake", completion: completion)
+    }
+
+    /// The app is being terminated (user swiped it away). Same close, but
+    /// announced as "closing": quitting the app is deliberate, so the Mac
+    /// ends the session without waiting around for a wake.
+    func shutDown(completion: (() -> Void)? = nil) {
+        closeSession(announcing: WireMessage.closing,
+                     status: "Closed", completion: completion)
+    }
+
+    private func closeSession(announcing type: String, status: String,
+                              completion: (() -> Void)?) {
+        queue.async {
+            var finished = false
+            let finish = { [weak self] in
+                guard let self, !finished else { return }
+                finished = true
+                self.connection?.cancel()
+                self.connection = nil
+                self.listener?.cancel()
+                self.listener = nil
+                self.listenerHealthy = false
+                self.setConnected(false)
+                self.setStatus(status)
+                completion?()
+            }
+            guard let conn = self.connection, conn.state == .ready else {
+                Log.info("closing session (\(type)) — no live connection")
+                finish()
+                return
+            }
+            Log.info("closing session — announcing \(type) to the Mac")
+            self.sendControl(["type": type], on: conn) {
+                self.queue.async { finish() }
+            }
+            // The send completion may never fire on a dying link — don't
+            // let that keep us accepting connections after going dark.
+            self.queue.asyncAfter(deadline: .now() + 1) { finish() }
         }
     }
 
@@ -439,14 +513,19 @@ final class PhoneReceiver: ObservableObject {
         sendControl(["type": "scroll", "dx": dx, "dy": dy])
     }
 
-    private func sendControl(_ message: [String: Any], on conn: NWConnection? = nil) {
+    private func sendControl(_ message: [String: Any], on conn: NWConnection? = nil,
+                             completion: (() -> Void)? = nil) {
         guard let conn = conn ?? connection,
-              let payload = try? JSONSerialization.data(withJSONObject: message) else { return }
+              let payload = try? JSONSerialization.data(withJSONObject: message) else {
+            completion?()
+            return
+        }
         var header = UInt32(payload.count).bigEndian
         var frame = Data(bytes: &header, count: 4)
         frame.append(payload)
         conn.send(content: frame, completion: .contentProcessed { error in
             if let error { Log.info("control send error: \(error)") }
+            completion?()
         })
     }
 
@@ -593,6 +672,10 @@ final class PhoneReceiver: ObservableObject {
 
     private func enqueueFrame(_ nalus: [Data], captureMs: Double? = nil, sendMs: Double? = nil) {
         guard let formatDesc else { return }
+        // Backgrounded linger: hardware decode is off-limits there, so drop
+        // frames at the door instead of feeding a failing display layer at
+        // frame rate. setRenderingPaused(false) re-syncs with a keyframe.
+        if renderingPaused { return }
 
         // Build one AVCC buffer: each NALU prefixed with 4-byte big-endian length.
         var avcc = Data(capacity: nalus.reduce(0) { $0 + $1.count + 4 })

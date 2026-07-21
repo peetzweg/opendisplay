@@ -127,8 +127,34 @@ struct ReceiverScreen: View {
             showSettings = true
         }
         .onChange(of: scenePhase) { _, phase in
-            // iOS may tear the listener down while suspended — recover.
-            if phase == .active { model.receiver.ensureListening() }
+            Log.info("scenePhase -> \(String(describing: phase))")
+            switch phase {
+            case .active: model.sceneDidActivate()
+            case .background: model.sceneDidBackground()
+            default: break
+            }
+        }
+        // The deliberate "screen off" signal: locking the device makes
+        // protected data unavailable (a plain app switch doesn't). This is
+        // what separates "put the iPhone to sleep — end the session now"
+        // from "peeked at a message — keep the session alive".
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+            Log.info("protected data will become unavailable (device locking)")
+            model.deviceWillLock()
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+            Log.info("protected data available again (device unlocked)")
+            model.deviceDidUnlock()
+        }
+        // Swiping the app away in the switcher (while we're still running)
+        // grants a ~5s notice — enough for a clean goodbye so the Mac ends
+        // the session at once. A kill without notice is covered Mac-side:
+        // dead apps stop accepting redials, so the silence grace fires.
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willTerminateNotification)) { _ in
+            model.appWillTerminate()
         }
         .onChange(of: model.receiver.connected) { _, isConnected in
             // The first valid connection retires the onboarding hint for good.
@@ -601,6 +627,88 @@ final class ReceiverModel: ObservableObject {
         guard !started else { return }
         started = true
         receiver.start(port: 9000)
+    }
+
+    // MARK: - Lock vs app switch vs app quit
+
+    // A plain app switch keeps the session (and the Mac's virtual display,
+    // and therefore the user's window arrangement) alive INDEFINITELY. The
+    // assertion buys ~30s of live pings; after iOS suspends us the kernel
+    // still accepts the Mac's redials, so the session survives untouched
+    // until we return. Only a device lock (deliberate "screen off") or the
+    // app being quit ends the session. Known hole: a lock that happens
+    // after we're already suspended is undetectable — no code runs and the
+    // kernel behaves identically — so the display stays up until the user
+    // returns or the app dies.
+    private var backgroundToken: UIBackgroundTaskIdentifier = .invalid
+
+    func sceneDidBackground() {
+        // Known limitation: lock detection rides the protected-data signal,
+        // which only fires when a passcode is set AND "Require Passcode" is
+        // Immediately (the Face ID default). Other configurations make a
+        // lock indistinguishable from an app switch, so those keep the
+        // session like a backgrounded app would.
+        if !UIApplication.shared.isProtectedDataAvailable {
+            // Backgrounded because the device locked, not an app switch.
+            Log.info("backgrounded by device lock — sleeping now")
+            goToSleep()
+            return
+        }
+        Log.info("app switched away — keeping the session, rendering paused")
+        beginBackgroundAssertion()
+        receiver.setRenderingPaused(true)
+    }
+
+    func sceneDidActivate() {
+        endBackgroundAssertion()
+        receiver.setRenderingPaused(false)
+        receiver.ensureListening()
+    }
+
+    func deviceWillLock() {
+        Log.info("device locking — sleeping now")
+        goToSleep()
+    }
+
+    /// Unlock arrives via the protected-data notification, which also fires
+    /// when the user unlocks into ANOTHER app while we sit in the background
+    /// — don't re-arm the listener or unpause rendering off-screen there;
+    /// the real return still comes through scenePhase.
+    func deviceDidUnlock() {
+        guard UIApplication.shared.applicationState == .active else {
+            Log.info("unlocked while backgrounded — staying dormant")
+            return
+        }
+        sceneDidActivate()
+    }
+
+    /// User swiped the app away (or iOS terminates us while still running):
+    /// ~5s of runtime remain, plenty for the "closing" goodbye that lets the
+    /// Mac end the session immediately instead of after its silence grace.
+    func appWillTerminate() {
+        Log.info("app terminating — closing session")
+        receiver.shutDown()
+    }
+
+    private func goToSleep() {
+        receiver.enterSleep { [weak self] in
+            DispatchQueue.main.async { self?.endBackgroundAssertion() }
+        }
+    }
+
+    private func beginBackgroundAssertion() {
+        guard backgroundToken == .invalid else { return }
+        backgroundToken = UIApplication.shared.beginBackgroundTask { [weak self] in
+            // Suspension takes us now; the session stays up by design (the
+            // kernel keeps accepting for us) — just release the assertion.
+            self?.endBackgroundAssertion()
+        }
+    }
+
+    private func endBackgroundAssertion() {
+        guard backgroundToken != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundToken)
+        backgroundToken = .invalid
     }
 }
 
