@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreGraphics
 
 /// Wraps the private CGVirtualDisplay API: makes macOS believe a real monitor
@@ -81,6 +82,41 @@ final class VirtualDisplay {
                 try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
             }
         }
+    }
+
+    /// `applySettings` can succeed before WindowServer attaches the display.
+    /// Poll until the id appears in the online list / NSScreen, or time out.
+    /// Returns whether the display looked attached (capture may still work
+    /// via CGDisplayStream even when this returns false on some systems).
+    @discardableResult
+    func waitUntilReady(timeoutSeconds: Double = 5.0) async -> Bool {
+        let id = display.displayID
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var attempt = 0
+        while Date() < deadline {
+            var count: UInt32 = 0
+            CGGetOnlineDisplayList(0, nil, &count)
+            var ids = [CGDirectDisplayID](repeating: 0, count: Int(max(count, 1)))
+            CGGetOnlineDisplayList(count, &ids, &count)
+            let list = Array(ids.prefix(Int(count)))
+            let ns = NSScreen.screens.compactMap {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            }
+            if list.contains(id) || CGDisplayIsActive(id) != 0 || ns.contains(id) {
+                Log.info("virtual display ready: id=\(id) attempt=\(attempt) cg=\(list) ns=\(ns)")
+                return true
+            }
+            if attempt == 0 || attempt % 10 == 9 {
+                Log.info("virtual display waiting: id=\(id) attempt=\(attempt) cg=\(list) ns=\(ns) online=\(CGDisplayIsOnline(id))")
+            }
+            attempt += 1
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        Log.info("virtual display not listed as online within timeout: id=\(id) — continuing anyway")
+        // One re-apply can help when WindowServer dropped the first attach.
+        _ = display.apply(settings)
+        try? await Task.sleep(for: .milliseconds(300))
+        return CGDisplayIsActive(id) != 0 || CGDisplayIsOnline(id) != 0
     }
 
     /// Returns true when the display is (now) in its HiDPI mode. Silent when

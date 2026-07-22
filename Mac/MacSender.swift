@@ -108,6 +108,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     @MainActor var onHello: ((PhoneInfo) -> Void)?
 
     private var stream: SCStream?
+    /// Fallback when SCShareableContent never lists the CGVirtualDisplay (#142).
+    private var displayStream: CGDisplayStream?
     private var encoder: VTCompressionSession?
     private var connection: NWConnection?
     private var virtualDisplay: VirtualDisplay?
@@ -373,13 +375,25 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         virtualDisplay = vd
         inputInjector = InputInjector(displayID: vd.displayID)
+        _ = await vd.waitUntilReady()
 
-        let display = try await findSCDisplay(id: vd.displayID)
         // Quality scaling: capture/encode below native when requested — the
         // display itself stays native so window layout is unaffected.
         let captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
         let captureH = (Int(Double(pointsHigh * 2) * quality.scale)) & ~1
-        try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
+        // Prefer ScreenCaptureKit. On some Mac mini + external-display-only
+        // setups the virtual display never appears in SCShareableContent
+        // (MacSender Code=3 / issue #142) even though CGVirtualDisplay
+        // returned an id — fall back to CGDisplayStream using that id.
+        do {
+            let display = try await findSCDisplay(id: vd.displayID)
+            try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
+        } catch {
+            Log.info("SCK capture path failed (\(error.localizedDescription)) — CGDisplayStream fallback")
+            await status("Using alternate capture path…")
+            try await startCaptureCGDisplayStream(displayID: vd.displayID,
+                                                  pixelsWide: captureW, pixelsHigh: captureH)
+        }
 
         // Debug aid (`defaults write sh.peet.opensidecar.mac testPattern -bool true`):
         // an animated window on the virtual display generates a constant frame
@@ -403,6 +417,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             Log.info("reconfiguring for \(target.pixelsWide)x\(target.pixelsHigh)")
             if let stream { try? await stream.stopCapture() }
             stream = nil
+            if let displayStream { _ = displayStream.stop() }
+            displayStream = nil
             if let encoder { VTCompressionSessionInvalidate(encoder) }
             encoder = nil
             virtualDisplay = nil   // removes the old display
@@ -424,16 +440,104 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     /// The virtual display takes a moment to show up in shareable content.
+    /// Uses the explicit SCShareableContent API, logs diagnostics on failure,
+    /// and matches by size as a secondary key when CG/SCK ids diverge.
     private func findSCDisplay(id: CGDirectDisplayID) async throws -> SCDisplay {
-        for _ in 0..<20 {
-            let content = try await SCShareableContent.current
+        var lastIDs: [CGDirectDisplayID] = []
+        // ~5s — same overall budget as before; then setupExtend falls back.
+        for attempt in 0..<20 {
+            let content: SCShareableContent
+            do {
+                content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            } catch {
+                content = try await SCShareableContent.current
+            }
+            lastIDs = content.displays.map(\.displayID)
             if let display = content.displays.first(where: { $0.displayID == id }) {
                 return display
             }
+            let bounds = CGDisplayBounds(id)
+            if bounds.width > 0,
+               let bySize = content.displays.first(where: {
+                   abs(Double($0.width) - bounds.width) < 2
+                       && abs(Double($0.height) - bounds.height) < 2
+               }) {
+                Log.info("findSCDisplay: matched by size id=\(bySize.displayID) (want \(id))")
+                return bySize
+            }
+            if attempt == 0 || attempt == 19 {
+                let ns = NSScreen.screens.compactMap {
+                    ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+                }
+                Log.info("findSCDisplay attempt \(attempt): sck=\(lastIDs) ns=\(ns) want=\(id) online=\(CGDisplayIsOnline(id))")
+            }
             try await Task.sleep(for: .milliseconds(250))
         }
+        Log.info("findSCDisplay failed want=\(id) lastSCK=\(lastIDs) (connection/hello OK — local capture enumeration failed)")
         throw NSError(domain: "MacSender", code: 3,
                       userInfo: [NSLocalizedDescriptionKey: "virtual display never appeared in SCShareableContent"])
+    }
+
+    /// Fallback capture when ScreenCaptureKit cannot enumerate the virtual display.
+    /// Targets the CGDirectDisplayID from CGVirtualDisplay directly.
+    /// CGDisplayStream is deprecated in favor of SCK — keep this path as a last resort only (#142).
+    private func startCaptureCGDisplayStream(displayID: CGDirectDisplayID,
+                                             pixelsWide: Int, pixelsHigh: Int) async throws {
+        setupEncoder(width: pixelsWide, height: pixelsHigh)
+
+        let handler: CGDisplayStreamFrameAvailableHandler = { [weak self] status, displayTime, surface, _ in
+            guard let self else { return }
+            guard status == .frameComplete, let surface else { return }
+
+            var unmanaged: Unmanaged<CVPixelBuffer>?
+            let err = CVPixelBufferCreateWithIOSurface(
+                kCFAllocatorDefault, surface, nil, &unmanaged
+            )
+            guard err == kCVReturnSuccess, let pixelBuffer = unmanaged?.takeUnretainedValue() else { return }
+
+            self.lastPixelBuffer = pixelBuffer
+            self.lastCaptureAt = Date()
+            self.capFrames += 1
+
+            guard self.connectionReady else { return }
+            if self.pendingSends > self.maxPendingSends {
+                self.needsKeyframe = true
+                self.dropsThisWindow += 1
+                self.dropsTotal += 1
+                return
+            }
+            let pts = CMTime(value: CMTimeValue(displayTime), timescale: 1_000_000_000)
+            self.encode(pixelBuffer, pts: pts)
+        }
+
+        let props = [CGDisplayStream.showCursor: !localCursor] as CFDictionary
+        guard let ds = CGDisplayStream(
+            dispatchQueueDisplay: displayID,
+            outputWidth: pixelsWide,
+            outputHeight: pixelsHigh,
+            pixelFormat: Int32(kCVPixelFormatType_32BGRA),
+            properties: props,
+            queue: queue,
+            handler: handler
+        ) else {
+            throw NSError(domain: "MacSender", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "CGDisplayStreamCreate failed"])
+        }
+
+        let startErr = ds.start()
+        guard startErr == .success else {
+            throw NSError(domain: "MacSender", code: 5,
+                          userInfo: [NSLocalizedDescriptionKey: "CGDisplayStreamStart failed: \(startErr.rawValue)"])
+        }
+
+        displayStream = ds
+        captureDisplayID = displayID
+        lastCursorPNGHash = 0
+        lastCursorSent = (-1, -1, false)
+        startCursorEcho()
+        Log.info("capture started (CGDisplayStream fallback): \(pixelsWide)x\(pixelsHigh) display \(displayID) mode \(mode.rawValue)")
+        let kind = lastHello?.kind ?? "device"
+        await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
     }
 
     private func startCapture(display: SCDisplay, pixelsWide: Int, pixelsHigh: Int) async throws {
@@ -479,6 +583,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         cursorImageTimer = nil
         stream?.stopCapture { _ in }
         stream = nil
+        if let displayStream { _ = displayStream.stop() }
+        displayStream = nil
         connection?.cancel()
         connection = nil
         if let encoder { VTCompressionSessionInvalidate(encoder) }
