@@ -361,7 +361,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                onOriginChange: { origin in
                                    DisplayArrangement.save(origin: origin, size: sizeInPoints,
                                                            device: arrangementKey)
-                               })
+                               },
+                               deviceKey: arrangementKey)
             }
             if vd != nil { break }
             Log.info("virtual display creation failed (attempt \(attempt + 1)) — retrying")
