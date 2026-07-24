@@ -315,10 +315,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // = native pixels / 2 (rounded down to even for the encoder).
         let pointsWide = (info.pixelsWide / 2) & ~1
         let pointsHigh = (info.pixelsHigh / 2) & ~1
-        // Rough physical size so macOS picks a sane default UI scale.
-        let mm = info.pixelsWide >= info.pixelsHigh
-            ? CGSize(width: 147, height: 68)
-            : CGSize(width: 68, height: 147)
+        // Physical size from a per-kind PPI estimate (iPads ≈264, iPhones
+        // ≈460) so macOS picks a sane default UI scale. The old 147×68mm
+        // constant described a phone even for iPads — a wildly wrong size
+        // feeds the display-class heuristic bad data (#111), and TV-classed
+        // displays default to "Mirror Entire Screen" (#100). Orientation is
+        // inherent: pixelsWide/High arrive swapped on rotation.
+        let ppi = info.kind == "iPad" ? 264.0 : 460.0
+        let mm = CGSize(width: Double(info.pixelsWide) / ppi * 25.4,
+                        height: Double(info.pixelsHigh) / ppi * 25.4)
 
         // USB sessions can start before lockdown resolves the device name —
         // fall back to the kind from the hello rather than the generic label.
@@ -423,17 +428,42 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    /// The virtual display takes a moment to show up in shareable content.
+    /// The virtual display takes a moment to show up in shareable content —
+    /// and on machines that misclassify it as a TV (#100), macOS restores the
+    /// saved "Mirror Entire Screen" arrangement asynchronously, seconds after
+    /// creation. A mirror-set secondary is not an active display and is
+    /// omitted from SCShareableContent entirely, so the display *vanishes*
+    /// until the un-mirror guard (`VirtualDisplay.ensureNotMirrored`, ≤2s
+    /// cadence) detaches it, plus ~2s more to re-register with SCK. That
+    /// round trip regularly overran the old 5s window (also reported
+    /// independently in PR #106) — allow 15s, and log the CG-level state
+    /// while waiting so a failure pinpoints why SCK isn't listing it.
     private func findSCDisplay(id: CGDirectDisplayID) async throws -> SCDisplay {
-        for _ in 0..<20 {
+        for attempt in 0..<60 {
             let content = try await SCShareableContent.current
             if let display = content.displays.first(where: { $0.displayID == id }) {
                 return display
             }
+            if attempt % 4 == 3 {
+                Log.info("display \(id) not in SCShareableContent yet: \(Self.displayState(id))")
+            }
             try await Task.sleep(for: .milliseconds(250))
         }
         throw NSError(domain: "MacSender", code: 3,
-                      userInfo: [NSLocalizedDescriptionKey: "virtual display never appeared in SCShareableContent"])
+                      userInfo: [NSLocalizedDescriptionKey:
+                          "virtual display never appeared in SCShareableContent (\(Self.displayState(id)))"])
+    }
+
+    /// One-line CG-level view of a display for diagnosing why SCK omits it
+    /// (mirror-set members that aren't the set's primary are inactive and
+    /// hidden from SCShareableContent — the #100 failure mode).
+    private static func displayState(_ id: CGDirectDisplayID) -> String {
+        let mirrors = CGDisplayMirrorsDisplay(id)
+        return "inMirrorSet=\(CGDisplayIsInMirrorSet(id) != 0)"
+            + (mirrors == kCGNullDirectDisplay ? "" : " mirroring=\(mirrors)")
+            + " active=\(CGDisplayIsActive(id) != 0)"
+            + " online=\(CGDisplayIsOnline(id) != 0)"
+            + " main=\(CGDisplayIsMain(id) != 0)"
     }
 
     private func startCapture(display: SCDisplay, pixelsWide: Int, pixelsHigh: Int) async throws {

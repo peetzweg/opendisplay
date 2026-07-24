@@ -40,7 +40,13 @@ final class VirtualDisplay {
         descriptor.maxPixelsWide = UInt32(pointsWide * 2)
         descriptor.maxPixelsHigh = UInt32(pointsHigh * 2)
         descriptor.sizeInMillimeters = sizeInMillimeters
-        descriptor.productID = 0x4F53   // "OS"
+        // "OD" — bumped from 0x4F53 "OS" (pre-rebrand) deliberately: macOS keys
+        // saved display state on vendor/product/serial, and machines hit by the
+        // TV misclassification (#100) have a poisoned saved arrangement (the
+        // display pinned into a mirror set) stored against the old identity.
+        // A new product ID starts every install from a clean slate, at the
+        // one-time cost of macOS forgetting the display's saved position.
+        descriptor.productID = 0x4F44
         descriptor.vendorID = 0x5043    // "PC"
         descriptor.serialNum = serialNum
         descriptor.terminationHandler = { _, _ in
@@ -51,9 +57,23 @@ final class VirtualDisplay {
 
         settings = CGVirtualDisplaySettings()
         settings.hiDPI = 1
-        settings.modes = [
+        // Advertise a few standard monitor timings alongside the device-native
+        // mode. A display whose EDID offers exactly one non-standard resolution
+        // is a suspected trigger for macOS classifying it as a TV — whose
+        // arrangement default is "Mirror Entire Screen" (#100/#111); DeskPad,
+        // built on the same private API and never TV-classified, ships such a
+        // ladder. The HiDPI enforcement loop below pins the native mode
+        // regardless, so the extras are EDID advertisement, not behavior.
+        var modes = [
             CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
         ]
+        for (w, h) in [(1024, 768), (800, 600), (640, 480)] {
+            let (mw, mh) = pointsWide >= pointsHigh ? (w, h) : (h, w)
+            if mw < pointsWide && mh < pointsHigh {
+                modes.append(CGVirtualDisplayMode(width: UInt(mw), height: UInt(mh), refreshRate: 60))
+            }
+        }
+        settings.modes = modes
         guard display.apply(settings) else {
             Log.info("CGVirtualDisplay applySettings FAILED")
             return nil
@@ -164,10 +184,14 @@ final class VirtualDisplay {
         CGConfigureDisplayMirrorOfDisplay(config, id, kCGNullDirectDisplay)
         // ...and any display currently mirroring the VD (covers the reporter's
         // arrangement: the device set as Main, with the built-in mirroring it).
+        // Online list, NOT active list: a display that mirrors another is not
+        // drawable, so it never appears among the actives — scanning those can
+        // never find the display we're looking for (measured: a built-in
+        // mirroring the VD reports active=false).
         var n: UInt32 = 0
-        CGGetActiveDisplayList(0, nil, &n)
+        CGGetOnlineDisplayList(0, nil, &n)
         var list = [CGDirectDisplayID](repeating: 0, count: Int(n))
-        CGGetActiveDisplayList(n, &list, &n)
+        CGGetOnlineDisplayList(n, &list, &n)
         for other in list where other != id && CGDisplayMirrorsDisplay(other) == id {
             CGConfigureDisplayMirrorOfDisplay(config, other, kCGNullDirectDisplay)
         }
