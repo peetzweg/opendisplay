@@ -91,6 +91,10 @@ targets:
     sources:
       - iOS
       - Shared
+    dependencies:
+      # iPad->Mac (issue #122): the broadcast upload extension that captures
+      # this device's screen system-wide and streams it to a Mac.
+      - target: OpenSidecarBroadcast
     info:
       path: iOS/Info.plist
       properties:
@@ -100,8 +104,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         UIRequiresFullScreen: true
-        NSLocalNetworkUsageDescription: OpenDisplay advertises itself on the local network so your Mac can connect over WiFi.
-        NSBonjourServices: ["_opensidecar._tcp"]
+        NSLocalNetworkUsageDescription: OpenDisplay advertises itself on the local network so your Mac can connect over WiFi, and looks for Macs that can receive this device's screen.
+        NSBonjourServices: ["_opensidecar._tcp", "_opensidecar-rev._tcp"]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -112,3 +116,31 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.ios
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: iOS/OpenSidecariOS.entitlements
+  # iPad->Mac (issue #122): ReplayKit broadcast upload extension — the only
+  # public API that captures the whole iPadOS screen. Talks to the app via
+  # the shared app group (see ReverseWire in Shared/Protocol.swift).
+  OpenSidecarBroadcast:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Broadcast
+      - Shared
+    info:
+      path: Broadcast/Info.plist
+      properties:
+        CFBundleDisplayName: OpenDisplay
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSLocalNetworkUsageDescription: OpenDisplay streams this device's screen to a Mac on the local network.
+        NSBonjourServices: ["_opensidecar-rev._tcp"]
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.ios.broadcast
+        CODE_SIGN_ENTITLEMENTS: Broadcast/OpenSidecarBroadcast.entitlements
+        SKIP_INSTALL: YES
