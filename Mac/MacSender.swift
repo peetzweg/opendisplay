@@ -85,6 +85,25 @@ enum SenderTransport {
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
 }
 
+/// `CGDisplayStream.stop()` completes asynchronously. Keep the stream alive
+/// independently of `MacSender` until the terminal `.stopped` callback.
+private final class DisplayStreamLifetime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stream: CGDisplayStream?
+
+    func hold(_ stream: CGDisplayStream) {
+        lock.lock()
+        self.stream = stream
+        lock.unlock()
+    }
+
+    func release() {
+        lock.lock()
+        stream = nil
+        lock.unlock()
+    }
+}
+
 @available(macOS 14.0, *)
 final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
@@ -108,10 +127,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     @MainActor var onHello: ((PhoneInfo) -> Void)?
 
     private var stream: SCStream?
+    /// Fallback when SCShareableContent never lists the CGVirtualDisplay (#142).
+    private var displayStream: CGDisplayStream?
+    private var displayStreamID: UUID?
+    private let displayStreamLock = NSLock()
     private var encoder: VTCompressionSession?
     private var connection: NWConnection?
     private var virtualDisplay: VirtualDisplay?
     private let queue = DispatchQueue(label: "sender.video")
+    private let queueSpecificKey = DispatchSpecificKey<Void>()
     private let startCode: [UInt8] = [0, 0, 0, 1]
 
     // The dial target. Written on `queue` only (after init): the controller
@@ -239,6 +263,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         self.displaySerial = displaySerial
         self.awaitingWake = awaitingWake
         super.init()
+        queue.setSpecific(key: queueSpecificKey, value: ())
     }
 
     // MARK: - Lifecycle
@@ -374,12 +399,33 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         virtualDisplay = vd
         inputInjector = InputInjector(displayID: vd.displayID)
 
-        let display = try await findSCDisplay(id: vd.displayID)
         // Quality scaling: capture/encode below native when requested — the
         // display itself stays native so window layout is unaffected.
         let captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
         let captureH = (Int(Double(pointsHigh * 2) * quality.scale)) & ~1
-        try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
+        // Prefer ScreenCaptureKit. On affected external-display-only Macs the
+        // virtual display can remain absent from SCShareableContent even after
+        // CGVirtualDisplay returned an id; capture that id directly as fallback.
+        let display: SCDisplay?
+        do {
+            display = try await findSCDisplay(id: vd.displayID)
+        } catch {
+            let nsError = error as NSError
+            guard nsError.domain == "MacSender", nsError.code == 3 else { throw error }
+            Log.info("SCK capture path failed (\(error.localizedDescription)) — CGDisplayStream fallback")
+            display = nil
+        }
+        guard !stopped, !Task.isCancelled else { throw CancellationError() }
+        if let display {
+            try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
+        } else {
+            await status("Using alternate capture path…")
+            try await startCaptureCGDisplayStream(
+                displayID: vd.displayID,
+                pixelsWide: captureW,
+                pixelsHigh: captureH
+            )
+        }
 
         // Debug aid (`defaults write sh.peet.opensidecar.mac testPattern -bool true`):
         // an animated window on the virtual display generates a constant frame
@@ -403,6 +449,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             Log.info("reconfiguring for \(target.pixelsWide)x\(target.pixelsHigh)")
             if let stream { try? await stream.stopCapture() }
             stream = nil
+            stopDisplayStream()
+            lastPixelBuffer = nil
+            lastCaptureAt = .distantPast
             if let encoder { VTCompressionSessionInvalidate(encoder) }
             encoder = nil
             virtualDisplay = nil   // removes the old display
@@ -424,16 +473,202 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     /// The virtual display takes a moment to show up in shareable content.
+    /// Log the enumerated displays so Code=3 is distinguishable from a network
+    /// failure.
     private func findSCDisplay(id: CGDirectDisplayID) async throws -> SCDisplay {
-        for _ in 0..<20 {
-            let content = try await SCShareableContent.current
+        var lastIDs: [CGDirectDisplayID] = []
+        for attempt in 0..<20 {
+            guard !stopped, !Task.isCancelled else { throw CancellationError() }
+            let content: SCShareableContent
+            do {
+                content = try await SCShareableContent.excludingDesktopWindows(
+                    false,
+                    onScreenWindowsOnly: false
+                )
+            } catch {
+                content = try await SCShareableContent.current
+            }
+            lastIDs = content.displays.map(\.displayID)
             if let display = content.displays.first(where: { $0.displayID == id }) {
                 return display
             }
+            if attempt == 0 || attempt == 19 {
+                Log.info(
+                    "findSCDisplay attempt \(attempt): sck=\(lastIDs) "
+                        + "want=\(id) online=\(CGDisplayIsOnline(id))"
+                )
+            }
             try await Task.sleep(for: .milliseconds(250))
         }
+        Log.info(
+            "findSCDisplay failed want=\(id) lastSCK=\(lastIDs) "
+                + "(connection/hello OK — local capture enumeration failed)"
+        )
         throw NSError(domain: "MacSender", code: 3,
                       userInfo: [NSLocalizedDescriptionKey: "virtual display never appeared in SCShareableContent"])
+    }
+
+    /// Last-resort capture for a CGVirtualDisplay hidden from ScreenCaptureKit.
+    /// CGDisplayStream is deprecated, so normal machines stay on SCK.
+    private func startCaptureCGDisplayStream(
+        displayID: CGDirectDisplayID,
+        pixelsWide: Int,
+        pixelsHigh: Int
+    ) async throws {
+        let id = UUID()
+        let lifetime = DisplayStreamLifetime()
+        let handler: CGDisplayStreamFrameAvailableHandler = {
+            [weak self] status, displayTime, surface, _ in
+            if status == .stopped {
+                lifetime.release()
+                self?.displayStreamDidStop(id: id)
+                return
+            }
+            guard let self, self.isActiveDisplayStream(id: id) else { return }
+            guard status == .frameComplete, let surface else { return }
+
+            var unmanaged: Unmanaged<CVPixelBuffer>?
+            let result = CVPixelBufferCreateWithIOSurface(
+                kCFAllocatorDefault,
+                surface,
+                nil,
+                &unmanaged
+            )
+            guard result == kCVReturnSuccess, let unmanaged else { return }
+            let pixelBuffer = unmanaged.takeRetainedValue()
+            self.processCapturedFrame(
+                pixelBuffer,
+                pts: CMClockMakeHostTimeFromSystemUnits(displayTime)
+            )
+        }
+
+        let properties = [CGDisplayStream.showCursor: !localCursor] as CFDictionary
+        guard let displayStream = CGDisplayStream(
+            dispatchQueueDisplay: displayID,
+            outputWidth: pixelsWide,
+            outputHeight: pixelsHigh,
+            pixelFormat: Int32(kCVPixelFormatType_32BGRA),
+            properties: properties,
+            queue: queue,
+            handler: handler
+        ) else {
+            throw NSError(
+                domain: "MacSender",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "CGDisplayStreamCreate failed"]
+            )
+        }
+
+        var startResult: CGError?
+        syncOnVideoQueue {
+            guard !stopped else { return }
+            setupEncoder(width: pixelsWide, height: pixelsHigh)
+            registerDisplayStream(displayStream, id: id)
+            lifetime.hold(displayStream)
+            startResult = displayStream.start()
+            if startResult != .success {
+                discardUnstartedDisplayStream(id: id)
+                lifetime.release()
+                if let encoder { VTCompressionSessionInvalidate(encoder) }
+                encoder = nil
+            } else {
+                captureDisplayID = displayID
+                lastCursorPNGHash = 0
+                lastCursorSent = (-1, -1, false)
+                startCursorEcho()
+            }
+        }
+        guard let result = startResult else { throw CancellationError() }
+        guard result == .success else {
+            throw NSError(
+                domain: "MacSender",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "CGDisplayStreamStart failed: \(result.rawValue)"]
+            )
+        }
+        guard !stopped, isActiveDisplayStream(id: id) else { throw CancellationError() }
+        Log.info(
+            "capture started (CGDisplayStream fallback): \(pixelsWide)x\(pixelsHigh) "
+                + "display \(displayID) mode \(mode.rawValue) localCursor=\(localCursor)"
+        )
+        let kind = lastHello?.kind ?? "device"
+        await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
+    }
+
+    private var captureActive: Bool {
+        if stream != nil { return true }
+        displayStreamLock.lock()
+        let active = displayStream != nil
+        displayStreamLock.unlock()
+        return active
+    }
+
+    private func syncOnVideoQueue(_ work: () -> Void) {
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+            work()
+        } else {
+            queue.sync(execute: work)
+        }
+    }
+
+    private func registerDisplayStream(_ stream: CGDisplayStream, id: UUID) {
+        displayStreamLock.lock()
+        displayStream = stream
+        displayStreamID = id
+        displayStreamLock.unlock()
+    }
+
+    private func isActiveDisplayStream(id: UUID) -> Bool {
+        displayStreamLock.lock()
+        let active = displayStreamID == id
+        displayStreamLock.unlock()
+        return active
+    }
+
+    private func discardUnstartedDisplayStream(id: UUID) {
+        displayStreamLock.lock()
+        if displayStreamID == id {
+            displayStream = nil
+            displayStreamID = nil
+        }
+        displayStreamLock.unlock()
+    }
+
+    /// Clear the active id before stopping so queued frames from the retiring
+    /// stream cannot reach an invalidated or replacement encoder.
+    private func stopDisplayStream() {
+        syncOnVideoQueue {
+            displayStreamLock.lock()
+            guard let stream = displayStream else {
+                displayStreamLock.unlock()
+                return
+            }
+            displayStream = nil
+            displayStreamID = nil
+            displayStreamLock.unlock()
+
+            let result = stream.stop()
+            if result != .success {
+                Log.info("CGDisplayStreamStop failed: \(result.rawValue)")
+            }
+        }
+    }
+
+    private func displayStreamDidStop(id: UUID) {
+        displayStreamLock.lock()
+        let wasActive = displayStreamID == id
+        if wasActive {
+            displayStream = nil
+            displayStreamID = nil
+        }
+        displayStreamLock.unlock()
+
+        // Explicit stop/reconfigure cleared the active id before calling stop,
+        // so only a system-initiated stop reaches recovery.
+        guard wasActive, !stopped, mode == .extend else { return }
+        Log.info("CGDisplayStream fallback stopped unexpectedly")
+        Task { await status("Capture stopped — rebuilding…") }
+        scheduleCaptureRecovery()
     }
 
     private func startCapture(display: SCDisplay, pixelsWide: Int, pixelsHigh: Int) async throws {
@@ -479,6 +714,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         cursorImageTimer = nil
         stream?.stopCapture { _ in }
         stream = nil
+        stopDisplayStream()
+        lastPixelBuffer = nil
+        lastCaptureAt = .distantPast
         connection?.cancel()
         connection = nil
         if let encoder { VTCompressionSessionInvalidate(encoder) }
@@ -582,13 +820,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Retry until capture is back (a rebuild during display sleep can fail).
     private func scheduleCaptureRecovery() {
         queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            guard let self, !self.stopped, self.stream == nil,
+            guard let self, !self.stopped, !self.captureActive,
                   let hello = self.lastHello else { return }
             Log.info("capture died — rebuilding pipeline")
             Task {
                 await self.reconfigure(hello)
                 self.queue.async {
-                    if self.stream == nil { self.scheduleCaptureRecovery() }
+                    if !self.captureActive { self.scheduleCaptureRecovery() }
                 }
             }
         }
@@ -968,7 +1206,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 if let continuation = helloContinuation {
                     helloContinuation = nil
                     continuation.resume(returning: info)
-                } else if mode == .extend, stream != nil, let previous,
+                } else if mode == .extend, captureActive, let previous,
                           previous.pixelsWide != info.pixelsWide
                           || previous.pixelsHigh != info.pixelsHigh {
                     // Phone rotated — rebuild after a short debounce so a
@@ -1085,6 +1323,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
         else { return }
 
+        processCapturedFrame(
+            pixelBuffer,
+            pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        )
+    }
+
+    /// Shared ingress for ScreenCaptureKit and the CGDisplayStream fallback.
+    private func processCapturedFrame(_ pixelBuffer: CVPixelBuffer, pts: CMTime) {
+        guard !stopped else { return }
         lastPixelBuffer = pixelBuffer
         lastCaptureAt = Date()
         capFrames += 1
@@ -1094,7 +1341,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if shouldDropFrame(reason: "pending_encode") { return }  // encoder busy
         if shouldDropFrame(reason: "pending_sends") { return }   // TCP send queue full
 
-        encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        encode(pixelBuffer, pts: pts)
     }
 
     /// Drop when encode or send pipeline is busy.
