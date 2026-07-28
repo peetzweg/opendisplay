@@ -100,6 +100,11 @@ opens with a plain double-click on macOS 14+ — no Gatekeeper warning. Open the
 
 ### iPhone app
 
+Needs **iOS / iPadOS 16 or newer** — including the 16.7.x line, which is where
+Apple left the iPad 5 (2017), the iPad Pro 1st gen, the iPhone 8 and the
+iPhone X. If your iPad can't be updated past 16.7, it can still be a second
+display ([#72](https://github.com/peetzweg/opendisplay/issues/72)).
+
 - **TestFlight** (recommended): join the public beta at
   [testflight.apple.com/join/3NYaY11c](https://testflight.apple.com/join/3NYaY11c).
 - **Build from source**: open the project in Xcode, select your free Apple ID

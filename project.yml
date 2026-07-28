@@ -87,7 +87,12 @@ targets:
   OpenSidecariOS:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
+    # iOS 16 revives the iPad 5 (2017) and iPad Pro 1st gen — the large
+    # population stuck on 16.7.x that Apple never offered 17 to (issue #72).
+    # Nothing in the streaming path needs 17: Network.framework is iOS 12,
+    # VideoToolbox/AVSampleBufferDisplayLayer older still. The floor was set
+    # purely by SwiftUI's two-parameter `onChange`, now backported.
+    deploymentTarget: "16.0"
     sources:
       - iOS
       - Shared

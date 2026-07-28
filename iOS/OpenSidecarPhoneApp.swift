@@ -91,7 +91,7 @@ struct ReceiverScreen: View {
                 }
             }
             .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
-            .onChange(of: geo.size) { _, size in
+            .onChange(of: geo.size) { size in
                 model.receiver.setOrientation(portrait: size.height > size.width)
             }
             .sheet(isPresented: $showOnboarding) {
@@ -126,7 +126,7 @@ struct ReceiverScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
             showSettings = true
         }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase) { phase in
             Log.info("scenePhase -> \(String(describing: phase))")
             switch phase {
             case .active: model.sceneDidActivate()
@@ -156,7 +156,7 @@ struct ReceiverScreen: View {
             for: UIApplication.willTerminateNotification)) { _ in
             model.appWillTerminate()
         }
-        .onChange(of: model.receiver.connected) { _, isConnected in
+        .onChange(of: model.receiver.connected) { isConnected in
             // The first valid connection retires the onboarding hint for good.
             if isConnected {
                 hasConnectedBefore = true
@@ -596,7 +596,7 @@ private struct DeviceNameField: View {
             .textInputAutocapitalization(.words)
             .autocorrectionDisabled()
             .focused($focused)
-            .onChange(of: deviceName) { _, name in onChange(name) }
+            .onChange(of: deviceName) { name in onChange(name) }
     }
 }
 
