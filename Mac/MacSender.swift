@@ -350,13 +350,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let displayName = endpointName.hasPrefix("iPhone / iPad")
             ? "OpenDisplay — \(info.kind)"
             : "OpenDisplay — \(endpointName)"
-        // Orientation-specific serial: macOS persists the chosen mode per
-        // serial, and a portrait mode restored onto a landscape display
-        // pillarboxes the desktop INTO the framebuffer (streamed as-is).
-        // Distinct serials per orientation keep the two configs apart.
-        let serial = info.pixelsWide >= info.pixelsHigh
+        // Orientation-specific base serial: portrait and landscape must not
+        // restore each other's modes. A persisted identity generation is added
+        // below when Tahoe restores this exact identity as an inactive ghost.
+        let baseSerial = info.pixelsWide >= info.pixelsHigh
             ? displaySerial
             : displaySerial ^ 0x8000_0000
+        var serial = VirtualDisplayIdentity.currentSerial(for: baseSerial)
         // Arrangement memory (#116): keyed on the device's install id so the
         // display returns to its spot across transports and orientations —
         // the serial-keyed memory macOS keeps starts from scratch whenever
@@ -364,33 +364,54 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // session serial, which is at least orientation-stable.
         let arrangementKey = info.id ?? String(format: "serial-%08x", displaySerial)
         let sizeInPoints = CGSize(width: pointsWide, height: pointsHigh)
-        // Creating a display whose serial is still registered fails — e.g. a
-        // just-quit instance's display lingers in WindowServer for a moment
-        // after the process dies. Retry through that window instead of
-        // parking the session on "Failed" until a manual reconnect.
+        // applySettings returning true only means WindowServer accepted the
+        // configuration transaction. Tahoe can still restore a persistent
+        // vendor/product/serial record as offline and inactive. Require the
+        // exact id to become a real NSScreen; otherwise rotate the serial
+        // generation and rebuild instead of capturing an orphan framebuffer.
         var vd: VirtualDisplay?
-        for attempt in 0..<8 {
-            if attempt > 0 { try await Task.sleep(for: .seconds(2)) }
-            // A Disconnect during the retry window tore the session down. Bail
-            // before creating/assigning the display: the serial the old display
-            // held is likely free now, so a late attempt would *succeed* and
-            // resurrect the very zombie this retry exists to avoid. (Mirrors the
-            // `if stopped` checks in the permission-poll loops above.)
-            if stopped { return }
-            vd = await MainActor.run {
-                VirtualDisplay(name: displayName,
-                               pointsWide: pointsWide, pointsHigh: pointsHigh,
-                               sizeInMillimeters: mm, serialNum: serial,
-                               restoreOrigin: DisplayArrangement.origin(for: sizeInPoints,
-                                                                        device: arrangementKey),
-                               onOriginChange: { origin in
-                                   DisplayArrangement.save(origin: origin, size: sizeInPoints,
-                                                           device: arrangementKey)
-                               })
+        for identityAttempt in 0..<4 {
+            if identityAttempt > 0 { try await Task.sleep(for: .milliseconds(500)) }
+            let identitySerial = serial
+            var candidate: VirtualDisplay?
+            // Creating a display whose serial is still registered can fail
+            // while a just-quit process lingers in WindowServer. Preserve the
+            // existing 8 × 2s retry window before treating this identity as a
+            // real configuration failure.
+            for creationAttempt in 0..<8 {
+                if creationAttempt > 0 { try await Task.sleep(for: .seconds(2)) }
+                // A Disconnect during the retry window tore the session down.
+                // Bail before a late attempt resurrects the old display.
+                if stopped { return }
+                candidate = await MainActor.run {
+                    VirtualDisplay(name: displayName,
+                                   pointsWide: pointsWide, pointsHigh: pointsHigh,
+                                   sizeInMillimeters: mm, serialNum: identitySerial,
+                                   restoreOrigin: DisplayArrangement.origin(for: sizeInPoints,
+                                                                            device: arrangementKey),
+                                   onOriginChange: { origin in
+                                       DisplayArrangement.save(origin: origin, size: sizeInPoints,
+                                                               device: arrangementKey)
+                                   })
+                }
+                if candidate != nil { break }
+                Log.info(
+                    "virtual display creation failed (attempt \(creationAttempt + 1)) — retrying"
+                )
+                await status("Preparing virtual display…")
             }
-            if vd != nil { break }
-            Log.info("virtual display creation failed (attempt \(attempt + 1)) — retrying")
-            await status("Preparing virtual display…")
+            guard let candidate else { break }
+            if await waitUntilDisplayReady(candidate.displayID) {
+                vd = candidate
+                break
+            }
+
+            Log.info(
+                "virtual display \(candidate.displayID) serial=\(identitySerial) stayed offline/inactive "
+                    + "— rotating identity"
+            )
+            serial = VirtualDisplayIdentity.advanceSerial(for: baseSerial)
+            await status("Recovering virtual display identity…")
         }
         guard let vd else {
             throw NSError(domain: "MacSender", code: 2,
@@ -412,6 +433,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         } catch {
             let nsError = error as NSError
             guard nsError.domain == "MacSender", nsError.code == 3 else { throw error }
+            let visible = await displayHasNSScreen(vd.displayID)
+            guard displayIsOnlineAndActive(vd.displayID), visible else {
+                Log.info(
+                    "refusing CGDisplayStream fallback for offline display \(vd.displayID)"
+                )
+                throw NSError(
+                    domain: "MacSender",
+                    code: 6,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "virtual display went offline before capture"
+                    ]
+                )
+            }
             Log.info("SCK capture path failed (\(error.localizedDescription)) — CGDisplayStream fallback")
             display = nil
         }
@@ -434,6 +469,59 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let id = vd.displayID
             Task { @MainActor in TestPattern.show(on: id) }
         }
+    }
+
+    private func displayIsOnlineAndActive(_ displayID: CGDirectDisplayID) -> Bool {
+        CGDisplayIsOnline(displayID) != 0 && CGDisplayIsActive(displayID) != 0
+    }
+
+    private func displayHasNSScreen(_ displayID: CGDirectDisplayID) async -> Bool {
+        await MainActor.run {
+            NSScreen.screens.contains { screen in
+                (screen.deviceDescription[
+                    NSDeviceDescriptionKey("NSScreenNumber")
+                ] as? NSNumber)?.uint32Value == displayID
+            }
+        }
+    }
+
+    /// `CGVirtualDisplay.applySettings` can succeed while the returned id stays
+    /// outside WindowServer's real desktop. Require a stable online + active +
+    /// NSScreen observation before any capture path may use it.
+    private func waitUntilDisplayReady(
+        _ displayID: CGDirectDisplayID,
+        timeout: TimeInterval = 3
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        var readySince: Date?
+        var online = false
+        var active = false
+        var visible = false
+
+        while Date() < deadline {
+            guard !stopped, !Task.isCancelled else { return false }
+            online = CGDisplayIsOnline(displayID) != 0
+            active = CGDisplayIsActive(displayID) != 0
+            visible = await displayHasNSScreen(displayID)
+
+            if online, active, visible {
+                if let readySince, Date().timeIntervalSince(readySince) >= 0.4 {
+                    Log.info("virtual display ready: id=\(displayID) online=1 active=1 nsscreen=1")
+                    return true
+                }
+                readySince = readySince ?? Date()
+            } else {
+                readySince = nil
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+
+        Log.info(
+            "virtual display not ready: id=\(displayID) "
+                + "online=\(online ? 1 : 0) active=\(active ? 1 : 0) "
+                + "nsscreen=\(visible ? 1 : 0)"
+        )
+        return false
     }
 
     /// Tear down and rebuild when the phone announces new dimensions. Loops
@@ -515,6 +603,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         pixelsWide: Int,
         pixelsHigh: Int
     ) async throws {
+        let visible = await displayHasNSScreen(displayID)
+        guard displayIsOnlineAndActive(displayID), visible else {
+            throw NSError(
+                domain: "MacSender",
+                code: 6,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "CGDisplayStream refused an offline virtual display"
+                ]
+            )
+        }
+
         let id = UUID()
         let lifetime = DisplayStreamLifetime()
         let handler: CGDisplayStreamFrameAvailableHandler = {
@@ -525,6 +625,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 return
             }
             guard let self, self.isActiveDisplayStream(id: id) else { return }
+            if status == .frameBlank
+                || CGDisplayIsOnline(displayID) == 0
+                || CGDisplayIsActive(displayID) == 0 {
+                self.displayStreamBecameUnavailable(
+                    id: id,
+                    displayID: displayID,
+                    status: status
+                )
+                return
+            }
             guard status == .frameComplete, let surface else { return }
 
             var unmanaged: Unmanaged<CVPixelBuffer>?
@@ -668,6 +778,41 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard wasActive, !stopped, mode == .extend else { return }
         Log.info("CGDisplayStream fallback stopped unexpectedly")
         Task { await status("Capture stopped — rebuilding…") }
+        scheduleCaptureRecovery()
+    }
+
+    /// A deprecated display stream can keep producing callbacks for an
+    /// inactive framebuffer. Treat WindowServer offline state and frameBlank
+    /// as capture failure instead of streaming a dark image indefinitely.
+    private func displayStreamBecameUnavailable(
+        id: UUID,
+        displayID: CGDirectDisplayID,
+        status: CGDisplayStreamFrameStatus
+    ) {
+        guard isActiveDisplayStream(id: id), !stopped, mode == .extend else { return }
+        captureDisplayBecameUnavailable(
+            displayID,
+            reason: "CGDisplayStream status=\(status.rawValue)"
+        )
+    }
+
+    private func captureDisplayBecameUnavailable(
+        _ displayID: CGDirectDisplayID,
+        reason: String
+    ) {
+        guard !stopped, mode == .extend, captureDisplayID == displayID else { return }
+        Log.info(
+            "capture display \(displayID) unavailable (\(reason) "
+                + "online=\(CGDisplayIsOnline(displayID)) "
+                + "active=\(CGDisplayIsActive(displayID))) — rebuilding"
+        )
+        let failedStream = stream
+        stream = nil
+        failedStream?.stopCapture { error in
+            if let error { Log.info("SCStream stop during recovery failed: \(error)") }
+        }
+        stopDisplayStream()
+        Task { await self.status("Display went dark — rebuilding…") }
         scheduleCaptureRecovery()
     }
 
@@ -1052,6 +1197,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                Date().timeIntervalSince(since) > self.disconnectGraceSeconds {
                 self.reportGone("device gone for >\(Int(self.disconnectGraceSeconds))s — ending session")
             }
+            // SCK does not always report a stop when WindowServer removes its
+            // source display. Poll the exact capture id so an offline display
+            // cannot leave a live-looking stream stuck on its final dark frame.
+            if self.mode == .extend, self.captureActive,
+               self.captureDisplayID != 0,
+               !self.displayIsOnlineAndActive(self.captureDisplayID) {
+                self.captureDisplayBecameUnavailable(
+                    self.captureDisplayID,
+                    reason: "display liveness check"
+                )
+            }
             // A reconnect on a static screen produces no capture frames, so
             // the receiver would stay black — replay the last frame as IDR.
             if self.connectionReady, self.needsKeyframe,
@@ -1318,7 +1474,22 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream,
                 didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
-        guard type == .screen,
+        guard type == .screen else { return }
+        if mode == .extend,
+           self.stream === stream,
+           let attachments = CMSampleBufferGetSampleAttachmentsArray(
+               sampleBuffer,
+               createIfNecessary: false
+           ) as? [[SCStreamFrameInfo: Any]],
+           let rawStatus = attachments.first?[.status] as? Int,
+           rawStatus == SCFrameStatus.blank.rawValue {
+            captureDisplayBecameUnavailable(
+                captureDisplayID,
+                reason: "ScreenCaptureKit blank frame"
+            )
+            return
+        }
+        guard
               CMSampleBufferIsValid(sampleBuffer),
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
         else { return }

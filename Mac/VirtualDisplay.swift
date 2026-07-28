@@ -1,6 +1,37 @@
 import Foundation
 import CoreGraphics
 
+/// WindowServer persists virtual-display state by vendor/product/serial. On
+/// Tahoe that record can come back as an inactive ghost after a reboot even
+/// though applySettings succeeds. Keep the stable per-device serial as the
+/// base, but advance a persistent generation whenever that exact identity
+/// fails to attach.
+enum VirtualDisplayIdentity {
+    static func currentSerial(for base: UInt32) -> UInt32 {
+        serial(base: base, generation: generation(for: base))
+    }
+
+    @discardableResult
+    static func advanceSerial(for base: UInt32) -> UInt32 {
+        let next = generation(for: base) &+ 1
+        UserDefaults.standard.set(Int(next), forKey: key(for: base))
+        return serial(base: base, generation: next)
+    }
+
+    private static func generation(for base: UInt32) -> UInt32 {
+        UInt32(truncatingIfNeeded: UserDefaults.standard.integer(forKey: key(for: base)))
+    }
+
+    private static func serial(base: UInt32, generation: UInt32) -> UInt32 {
+        let candidate = base &+ generation
+        return candidate == 0 ? 1 : candidate
+    }
+
+    private static func key(for base: UInt32) -> String {
+        "displayIdentityGeneration.\(String(format: "%08x", base))"
+    }
+}
+
 /// Wraps the private CGVirtualDisplay API: makes macOS believe a real monitor
 /// is attached. Sized in points at HiDPI (@2x), so a phone with native pixels
 /// W×H gets a virtual display of (W/2)×(H/2) points backed by a W×H framebuffer.
