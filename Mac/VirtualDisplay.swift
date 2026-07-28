@@ -40,7 +40,9 @@ final class VirtualDisplay {
         descriptor.maxPixelsWide = UInt32(pointsWide * 2)
         descriptor.maxPixelsHigh = UInt32(pointsHigh * 2)
         descriptor.sizeInMillimeters = sizeInMillimeters
-        descriptor.productID = 0x4F53   // "OS"
+        // Bump the identity from "OS" to "OT": Tahoe can retain the old
+        // product identity as disabled and create it permanently offline.
+        descriptor.productID = 0x4F54   // "OT"
         descriptor.vendorID = 0x5043    // "PC"
         descriptor.serialNum = serialNum
         descriptor.terminationHandler = { _, _ in
