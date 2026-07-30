@@ -36,6 +36,70 @@ private enum SenderError: LocalizedError {
     }
 }
 
+/// Keeps a stopped CGDisplayStream alive until CoreGraphics delivers its
+/// terminal `.stopped` callback, as required by CGDisplayStreamStop.
+private final class DisplayStreamLifetime {
+    var stream: CGDisplayStream?
+    var lastSurface: IOSurfaceRef?
+    private let stateLock = NSLock()
+    private var stopping = false
+    private var loggedStopFailure = false
+
+    func withAcceptedFrame(surface: IOSurfaceRef, _ body: () -> Void) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !stopping else { return }
+        IOSurfaceIncrementUseCount(surface)
+        releaseLastSurfaceLocked()
+        lastSurface = surface
+        body()
+    }
+
+    func requestStop(on queue: DispatchQueue) {
+        stateLock.lock()
+        guard !stopping else {
+            stateLock.unlock()
+            return
+        }
+        stopping = true
+        stateLock.unlock()
+
+        attemptStop(on: queue)
+    }
+
+    private func attemptStop(on queue: DispatchQueue) {
+        stateLock.lock()
+        let stream = self.stream
+        stateLock.unlock()
+        guard let stream else { return }
+        let stopError = stream.stop()
+        guard stopError != .success else { return }
+
+        stateLock.lock()
+        if !loggedStopFailure {
+            Log.info("CGDisplayStreamStop failed: \(stopError.rawValue) — retrying")
+            loggedStopFailure = true
+        }
+        stateLock.unlock()
+        queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.attemptStop(on: queue)
+        }
+    }
+
+    func finish() {
+        stateLock.lock()
+        releaseLastSurfaceLocked()
+        stream = nil
+        stateLock.unlock()
+    }
+
+    private func releaseLastSurfaceLocked() {
+        guard let lastSurface else { return }
+        IOSurfaceDecrementUseCount(lastSurface)
+        self.lastSurface = nil
+    }
+}
+
 /// Capture-resolution / bitrate trade-off. The virtual display always runs at
 /// native size — only the captured/encoded stream is scaled, so lower presets
 /// cut encode, transmit, and decode time at the cost of sharpness.
@@ -122,7 +186,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream?
     /// Fallback when SCShareableContent never lists the CGVirtualDisplay (#142).
     private var displayStream: CGDisplayStream?
-    private var lastDisplayStreamSurface: IOSurfaceRef?
+    private var displayStreamLifetime: DisplayStreamLifetime?
     private var encoder: VTCompressionSession?
     private var connection: NWConnection?
     private var virtualDisplay: VirtualDisplay?
@@ -490,7 +554,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                              pixelsWide: Int, pixelsHigh: Int) async throws {
         setupEncoder(width: pixelsWide, height: pixelsHigh)
 
-        let handler: CGDisplayStreamFrameAvailableHandler = { [weak self] status, displayTime, surface, _ in
+        let lifetime = DisplayStreamLifetime()
+        let handler: CGDisplayStreamFrameAvailableHandler = { [weak self, lifetime] status, displayTime, surface, _ in
+            if status == .stopped {
+                lifetime.finish()
+                if let self, self.displayStreamLifetime === lifetime {
+                    self.displayStream = nil
+                    self.displayStreamLifetime = nil
+                }
+                return
+            }
             guard let self else { return }
             guard status == .frameComplete, let surface else { return }
 
@@ -500,12 +573,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             )
             guard err == kCVReturnSuccess, let pixelBuffer = unmanaged?.takeRetainedValue() else { return }
 
-            IOSurfaceIncrementUseCount(surface)
-            self.releaseLastDisplayStreamSurface()
-            self.lastDisplayStreamSurface = surface
-
-            let pts = CMTime(value: CMTimeValue(displayTime), timescale: 1_000_000_000)
-            self.processCapturedFrame(pixelBuffer, pts: pts, displaySurface: surface)
+            let pts = CMClockMakeHostTimeFromSystemUnits(displayTime)
+            lifetime.withAcceptedFrame(surface: surface) {
+                self.processCapturedFrame(pixelBuffer, pts: pts, displaySurface: surface)
+            }
         }
 
         let props = [CGDisplayStream.showCursor: !localCursor] as CFDictionary
@@ -522,13 +593,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                           userInfo: [NSLocalizedDescriptionKey: "CGDisplayStreamCreate failed"])
         }
 
+        // CGDisplayStream retains the handler, which retains this lifetime
+        // holder. The holder intentionally retains the stream until the
+        // terminal `.stopped` callback breaks the cycle.
+        lifetime.stream = ds
         let startErr = ds.start()
         guard startErr == .success else {
+            lifetime.stream = nil
             throw NSError(domain: "MacSender", code: 5,
                           userInfo: [NSLocalizedDescriptionKey: "CGDisplayStreamStart failed: \(startErr.rawValue)"])
         }
 
         displayStream = ds
+        displayStreamLifetime = lifetime
         await finishCaptureStart(
             displayID: displayID,
             pixelsWide: pixelsWide,
@@ -584,16 +661,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
     }
 
-    private func releaseLastDisplayStreamSurface() {
-        guard let surface = lastDisplayStreamSurface else { return }
-        IOSurfaceDecrementUseCount(surface)
-        lastDisplayStreamSurface = nil
-    }
-
     private func stopDisplayStream() {
-        if let displayStream { _ = displayStream.stop() }
+        let lifetime = displayStreamLifetime
         self.displayStream = nil
-        releaseLastDisplayStreamSurface()
+        self.displayStreamLifetime = nil
+        lifetime?.requestStop(on: queue)
     }
 
     func stop() {
