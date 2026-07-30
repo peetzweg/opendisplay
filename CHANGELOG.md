@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/peetzweg/opendisplay/compare/v1.13.0...v1.14.0) (2026-07-30)
+
+
+### Features
+
+* **ios:** lower deployment target to iOS 16 ([#178](https://github.com/peetzweg/opendisplay/issues/178)) ([518b62d](https://github.com/peetzweg/opendisplay/commit/518b62d656a154f128f3e8bc677a9ad39004b7e5))
+
 ## [1.13.0](https://github.com/peetzweg/opendisplay/compare/v1.12.1...v1.13.0) (2026-07-21)
 
 
