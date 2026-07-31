@@ -452,7 +452,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         virtualDisplay = vd
         inputInjector = InputInjector(displayID: vd.displayID)
-        _ = await vd.waitUntilReady(timeoutSeconds: 1.0)
+        let virtualDisplayReady = await vd.waitUntilReady(timeoutSeconds: 1.0)
 
         // Quality scaling: capture/encode below native when requested — the
         // display itself stays native so window layout is unaffected.
@@ -462,15 +462,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // setups the virtual display never appears in SCShareableContent
         // (MacSender Code=3 / issue #142) even though CGVirtualDisplay
         // returned an id — fall back to CGDisplayStream using that id.
+        if !virtualDisplayReady {
+            try await startFallbackCapture(displayID: vd.displayID,
+                                           pixelsWide: captureW, pixelsHigh: captureH,
+                                           reason: "virtual display missed readiness window")
+            return
+        }
         let display: SCDisplay
         do {
             display = try await findSCDisplay(id: vd.displayID)
         } catch SenderError.virtualDisplayNotShareable {
             let error = SenderError.virtualDisplayNotShareable
-            Log.info("SCK capture path failed (\(error.localizedDescription)) — CGDisplayStream fallback")
-            await status("Using alternate capture path…")
-            try await startCaptureCGDisplayStream(displayID: vd.displayID,
-                                                  pixelsWide: captureW, pixelsHigh: captureH)
+            try await startFallbackCapture(displayID: vd.displayID,
+                                           pixelsWide: captureW, pixelsHigh: captureH,
+                                           reason: "SCK capture path failed (\(error.localizedDescription))")
             return
         }
         try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
@@ -482,6 +487,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let id = vd.displayID
             Task { @MainActor in TestPattern.show(on: id) }
         }
+    }
+
+    private func startFallbackCapture(displayID: CGDirectDisplayID,
+                                      pixelsWide: Int,
+                                      pixelsHigh: Int,
+                                      reason: String) async throws {
+        Log.info("\(reason) — CGDisplayStream fallback")
+        await status("Using alternate capture path…")
+        try await startCaptureCGDisplayStream(displayID: displayID,
+                                              pixelsWide: pixelsWide, pixelsHigh: pixelsHigh)
     }
 
     /// Tear down and rebuild when the phone announces new dimensions. Loops
