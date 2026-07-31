@@ -86,8 +86,7 @@ final class VirtualDisplay {
 
     /// `applySettings` can succeed before WindowServer attaches the display.
     /// Poll until the id appears in the online list / NSScreen, or time out.
-    /// Returns whether the display became ready within the polling window.
-    /// A late attach still returns false so the caller uses CGDisplayStream.
+    /// Returns whether the display became ready, including after one re-apply.
     @discardableResult
     func waitUntilReady(timeoutSeconds: Double = 5.0) async -> Bool {
         let id = display.displayID
@@ -111,10 +110,7 @@ final class VirtualDisplay {
         try? await Task.sleep(for: .milliseconds(300))
         let finalVisibility = captureVisibility(for: id)
         Log.info("virtual display readiness after re-apply: id=\(id) ready=\(finalVisibility.ready) cg=\(finalVisibility.cg) ns=\(finalVisibility.ns)")
-        // A display that missed the full readiness window is not a stable SCK
-        // target even if the re-apply makes it appear momentarily. Let the
-        // caller use CGDisplayStream for this session.
-        return false
+        return finalVisibility.ready
     }
 
     private func captureVisibility(for id: CGDirectDisplayID)
