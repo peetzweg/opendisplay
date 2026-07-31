@@ -54,6 +54,11 @@ final class PhoneReceiver: ObservableObject {
     // Compatibility signal from the connected Mac (issue #132). Nil = no signal.
     // Merged into the update gate by ReceiverScreen.
     @Published var peerSignal: PeerUpdateSignal?
+    /// Mac protocol version from the most recent `welcome` message.
+    @Published private(set) var macProtocolVersion = WireProtocol.assumedWhenAbsent
+
+    /// True when the connected Mac understands pencil/proximity wire messages.
+    var macSupportsPencilWire: Bool { macProtocolVersion >= WireProtocol.pencilWireVersion }
 
     private var listener: NWListener?
     private var listenerHealthy = false
@@ -438,6 +443,9 @@ final class PhoneReceiver: ObservableObject {
             // older than we support, it's the Mac that needs updating — and an
             // old Mac can't diagnose that itself, so we surface it here.
             let macPV = obj["pv"] as? Int ?? WireProtocol.assumedWhenAbsent
+            DispatchQueue.main.async {
+                self.macProtocolVersion = macPV
+            }
             if macPV < WireProtocol.minSupportedPeer {
                 let msg = "The OpenDisplay app on your Mac is too old for this \(deviceKind) app. Update OpenDisplay on your Mac to reconnect."
                 DispatchQueue.main.async { self.peerSignal = .updateMac(message: msg) }
@@ -940,7 +948,12 @@ final class PhoneReceiver: ObservableObject {
     }
 
     private func setConnected(_ value: Bool) {
-        DispatchQueue.main.async { self.connected = value }
+        DispatchQueue.main.async {
+            self.connected = value
+            if !value {
+                self.macProtocolVersion = WireProtocol.assumedWhenAbsent
+            }
+        }
         if !value { setStatus("Listening on :9000") }
         else {
             setStatus("Connected")

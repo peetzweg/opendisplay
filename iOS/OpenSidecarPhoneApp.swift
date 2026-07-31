@@ -91,7 +91,7 @@ struct ReceiverScreen: View {
                 }
             }
             .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
-            .onChange(of: geo.size) { _, size in
+            .onChange(of: geo.size) { size in
                 model.receiver.setOrientation(portrait: size.height > size.width)
             }
             .sheet(isPresented: $showOnboarding) {
@@ -126,7 +126,7 @@ struct ReceiverScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
             showSettings = true
         }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase) { phase in
             Log.info("scenePhase -> \(String(describing: phase))")
             switch phase {
             case .active: model.sceneDidActivate()
@@ -156,7 +156,7 @@ struct ReceiverScreen: View {
             for: UIApplication.willTerminateNotification)) { _ in
             model.appWillTerminate()
         }
-        .onChange(of: model.receiver.connected) { _, isConnected in
+        .onChange(of: model.receiver.connected) { isConnected in
             // The first valid connection retires the onboarding hint for good.
             if isConnected {
                 hasConnectedBefore = true
@@ -596,7 +596,7 @@ private struct DeviceNameField: View {
             .textInputAutocapitalization(.words)
             .autocorrectionDisabled()
             .focused($focused)
-            .onChange(of: deviceName) { _, name in onChange(name) }
+            .onChange(of: deviceName) { name in onChange(name) }
     }
 }
 
@@ -880,18 +880,13 @@ struct VideoLayerView: UIViewRepresentable {
 
         private func isFinger(_ touch: UITouch) -> Bool {
             switch touch.type {
-            case .direct: return true
-            default:
-                if #available(iOS 17.0, *), touch.type == .indirectPointer { return true }
-                return false
+            case .direct, .indirectPointer: return true
+            default: return false
             }
         }
 
         private func isPencil(_ touch: UITouch) -> Bool {
-            switch touch.type {
-            case .pencil, .stylus: return true
-            default: return false
-            }
+            touch.type == .pencil
         }
 
         private var twoFingerActive = false
@@ -951,13 +946,40 @@ struct VideoLayerView: UIViewRepresentable {
             receiver?.sendTouch(phase: phase, x: norm.x, y: norm.y)
         }
 
+        private func sendPencilAsTouch(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?) {
+            guard let touch = touches.first,
+                  let norm = normalized(touch.location(in: self)) else { return }
+            lastNorm = norm
+            if phase == "moved", let event {
+                for t in event.coalescedTouches(for: touch) ?? [touch] {
+                    if let n = normalized(t.location(in: self)) {
+                        lastNorm = n
+                        receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
+                    }
+                }
+                if let predicted = event.predictedTouches(for: touch)?.last,
+                   let n = normalized(predicted.location(in: self)) {
+                    receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
+                }
+                return
+            }
+            receiver?.sendTouch(phase: phase, x: norm.x, y: norm.y)
+        }
+
         private func routeTouches(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?, ended: Bool) {
             let pencil = touches.filter { isPencil($0) }
             let finger = touches.filter { isFinger($0) }
+            let usePencilWire = receiver?.macSupportsPencilWire ?? false
+
             if !pencil.isEmpty {
-                inputEngine.handle(pencil, event: event, ended: ended)
+                if usePencilWire {
+                    inputEngine.handle(pencil, event: event, ended: ended)
+                } else {
+                    sendPencilAsTouch(phase, pencil, event)
+                }
             }
-            if !finger.isEmpty {
+            // Palm rejection: ignore resting fingers while the pen is down.
+            if !finger.isEmpty && !inputEngine.hasActivePen {
                 send(phase, finger, event)
             }
         }
@@ -989,19 +1011,15 @@ final class InputCaptureEngine: NSObject {
                     _ pressure: Double, _ azimuth: Double, _ altitude: Double) -> Void)?
     var onProximity: ((_ entering: Bool, _ x: Double, _ y: Double) -> Void)?
 
+    /// True while at least one pen contact is on the glass (palm rejection).
+    var hasActivePen: Bool { !activePens.isEmpty }
+
     /// Map a point in the host view to normalized video coordinates.
     var normalize: ((CGPoint) -> (x: Double, y: Double)?)?
 
     private weak var hostView: UIView?
     private var activePens: Set<UInt64> = []
     private var proximityActive = false
-    private var penStrokes: [UInt64: PenStroke] = [:]
-    private let tapMoveThreshold: CGFloat = 8
-
-    private struct PenStroke {
-        var start: CGPoint
-        var sentDown: Bool
-    }
 
     func install(on view: UIView) {
         hostView = view
@@ -1033,7 +1051,7 @@ final class InputCaptureEngine: NSObject {
 
     func handle(_ touches: Set<UITouch>, event: UIEvent?, ended: Bool) {
         guard hostView != nil else { return }
-        for touch in touches where touch.type == .pencil || touch.type == .stylus {
+        for touch in touches where touch.type == .pencil {
             emitPen(touch, event: event, ended: ended)
         }
     }
@@ -1063,24 +1081,13 @@ final class InputCaptureEngine: NSObject {
 
         if !ended && !activePens.contains(id) {
             activePens.insert(id)
-            penStrokes[id] = PenStroke(start: loc, sentDown: false)
+            openProximity(x: nx, y: ny)
+            emitPencil("down", x: nx, y: ny, pressure: pressure,
+                       azimuth: azimuth, altitude: altitude)
             return
         }
 
         if !ended {
-            guard var stroke = penStrokes[id] else { return }
-            let dx = loc.x - stroke.start.x
-            let dy = loc.y - stroke.start.y
-            if !stroke.sentDown {
-                guard sqrt(dx * dx + dy * dy) > tapMoveThreshold else { return }
-                stroke.sentDown = true
-                penStrokes[id] = stroke
-                if let start = normalize?(stroke.start) {
-                    openProximity(x: start.x, y: start.y)
-                    emitPencil("down", x: start.x, y: start.y, pressure: pressure,
-                               azimuth: azimuth, altitude: altitude)
-                }
-            }
             emitPencil("move", x: nx, y: ny, pressure: pressure,
                        azimuth: azimuth, altitude: altitude)
             for c in event?.coalescedTouches(for: touch) ?? [] where c !== touch {
@@ -1093,23 +1100,10 @@ final class InputCaptureEngine: NSObject {
             return
         }
 
-        defer {
-            activePens.remove(id)
-            penStrokes.removeValue(forKey: id)
-        }
-
-        if let stroke = penStrokes[id], !stroke.sentDown {
-            openProximity(x: nx, y: ny)
-            emitPencil("down", x: nx, y: ny, pressure: pressure,
-                       azimuth: azimuth, altitude: altitude)
-            emitPencil("up", x: nx, y: ny, pressure: 0,
-                       azimuth: azimuth, altitude: altitude)
-            closeProximity(x: nx, y: ny)
-            return
-        }
-
+        defer { activePens.remove(id) }
         emitPencil("up", x: nx, y: ny, pressure: 0,
                    azimuth: azimuth, altitude: altitude)
+        closeProximity(x: nx, y: ny)
     }
 
     private func emitPencil(_ phase: String, x: Double, y: Double,

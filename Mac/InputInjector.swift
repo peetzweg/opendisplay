@@ -9,8 +9,6 @@ final class InputInjector {
     private let displayID: CGDirectDisplayID
     private var isDown = false
     private var penDown = false
-    /// True when the current pen contact is a zero-pressure tap (mouse, not tablet).
-    private var pencilTapMode = false
     // A real event source (vs nil) plus clickState=1 below: menu tracking
     // treats sourceless/zero-click synthetic clicks as malformed — menus
     // open but their tracking session breaks, leaving zombie menu windows
@@ -99,40 +97,27 @@ final class InputInjector {
 
         switch phase {
         case "down":
-            if pressure < 0.01 {
-                pencilTapMode = true
-                postMouse(type: .leftMouseDown, at: screenPoint(nx: x, ny: y))
-            } else {
-                pencilTapMode = false
-                postTabletPoint(phase: .down, x: x, y: y, pressure: pressure,
-                                tiltX: tiltX, tiltY: tiltY, rotation: 0)
-            }
+            postTabletPoint(phase: .down, x: x, y: y, pressure: pressure,
+                            tiltX: tiltX, tiltY: tiltY, rotation: 0)
             penDown = true
         case "move":
             if penDown {
                 postTabletPoint(phase: .drag, x: x, y: y, pressure: pressure,
                                 tiltX: tiltX, tiltY: tiltY, rotation: 0)
             } else {
-                postMouse(type: .mouseMoved, at: screenPoint(nx: x, ny: y))
-            }
-        case "up":
-            if pencilTapMode {
-                postMouse(type: .leftMouseUp, at: screenPoint(nx: x, ny: y))
-                pencilTapMode = false
-            } else {
-                postTabletPoint(phase: .up, x: x, y: y, pressure: 0,
+                postTabletPoint(phase: .hover, x: x, y: y, pressure: 0,
                                 tiltX: tiltX, tiltY: tiltY, rotation: 0)
             }
-            penDown = false
+        case "up":
+            if penDown {
+                postTabletPoint(phase: .up, x: x, y: y, pressure: 0,
+                                tiltX: tiltX, tiltY: tiltY, rotation: 0)
+                penDown = false
+            }
         case "hover":
             if penDown {
-                if pencilTapMode {
-                    postMouse(type: .leftMouseUp, at: p)
-                    pencilTapMode = false
-                } else {
-                    postTabletPoint(phase: .up, x: x, y: y, pressure: 0,
-                                    tiltX: tiltX, tiltY: tiltY, rotation: 0)
-                }
+                postTabletPoint(phase: .up, x: x, y: y, pressure: 0,
+                                tiltX: tiltX, tiltY: tiltY, rotation: 0)
                 penDown = false
             }
             postTabletPoint(phase: .hover, x: x, y: y, pressure: 0,
@@ -196,14 +181,6 @@ final class InputInjector {
         if phase == .down || phase == .up {
             ev.setIntegerValueField(.mouseEventClickState, value: 1)
         }
-        ev.flags = .maskNonCoalesced
-        ev.post(tap: .cghidEventTap)
-    }
-
-    private func postMouse(type: CGEventType, at p: CGPoint) {
-        guard let ev = CGEvent(mouseEventSource: source, mouseType: type,
-                               mouseCursorPosition: p, mouseButton: .left) else { return }
-        ev.setIntegerValueField(.mouseEventClickState, value: 1)
         ev.flags = .maskNonCoalesced
         ev.post(tap: .cghidEventTap)
     }
