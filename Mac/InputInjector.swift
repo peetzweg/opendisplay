@@ -1,5 +1,23 @@
 import CoreGraphics
 import AppKit
+import Darwin
+
+/// System double-click thresholds. Interval is public API; distance is read from
+/// AppKit's `NSDoubleClickDistance()` (same value the Window Server uses).
+private enum SystemClickMetrics {
+    static var interval: TimeInterval { NSEvent.doubleClickInterval }
+
+    static var distance: CGFloat {
+        doubleClickDistanceFn?() ?? 4
+    }
+
+    private typealias DoubleClickDistanceFn = @convention(c) () -> CGFloat
+    private static let doubleClickDistanceFn: DoubleClickDistanceFn? = {
+        guard let handle = dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", RTLD_LAZY),
+              let sym = dlsym(handle, "NSDoubleClickDistance") else { return nil }
+        return unsafeBitCast(sym, to: DoubleClickDistanceFn.self)
+    }()
+}
 
 /// Turns normalized touch coordinates from the phone into mouse events on a
 /// target display. Touch semantics: finger down = left button down, finger
@@ -9,8 +27,8 @@ final class InputInjector {
     private let displayID: CGDirectDisplayID
     private var isDown = false
     private var penDown = false
-    // A real event source (vs nil) plus clickState=1 below: menu tracking
-    // treats sourceless/zero-click synthetic clicks as malformed — menus
+    // A real event source (vs nil) plus non-zero clickState on down/up: menu
+    // tracking treats sourceless/zero-click synthetic clicks as malformed — menus
     // open but their tracking session breaks, leaving zombie menu windows
     // composited on the display (visible in the stream, unclickable).
     private let source = CGEventSource(stateID: .hidSystemState)
@@ -23,6 +41,22 @@ final class InputInjector {
     private let vendorPointerType: Int64 = 0x0802    // Grip Pen (what apps expect)
     private let capabilityMask: Int64 = 0x05C7       // pressure + tilt + rotation + buttons
     private var inRange = false
+
+    // Pencil-only synthetic click counting — tablet events don't get click
+    // state from the Window Server, so we mirror macOS double-click prefs here.
+    private struct PenClickSession {
+        let downLocation: CGPoint
+        let clickState: Int
+    }
+
+    private struct PenCompletedClick {
+        let upTime: CFAbsoluteTime
+        let downLocation: CGPoint
+        let clickState: Int
+    }
+
+    private var penClickSession: PenClickSession?
+    private var penLastClick: PenCompletedClick?
 
     init(displayID: CGDirectDisplayID) {
         self.displayID = displayID
@@ -178,11 +212,54 @@ final class InputInjector {
         ev.setDoubleValueField(.tabletEventTiltX, value: tiltX)
         ev.setDoubleValueField(.tabletEventTiltY, value: tiltY)
         ev.setDoubleValueField(.tabletEventRotation, value: rotation)
-        if phase == .down || phase == .up {
-            ev.setIntegerValueField(.mouseEventClickState, value: 1)
+        switch phase {
+        case .down:
+            ev.setIntegerValueField(.mouseEventClickState, value: Int64(beginPenClickSession(at: p)))
+        case .up:
+            ev.setIntegerValueField(.mouseEventClickState, value: Int64(finishPenClickSession(at: p)))
+        case .drag, .hover:
+            break
         }
         ev.flags = .maskNonCoalesced
         ev.post(tap: .cghidEventTap)
+    }
+
+    private func penClickStateForMouseDown(at point: CGPoint) -> Int {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard let last = penLastClick,
+              now - last.upTime <= SystemClickMetrics.interval else {
+            return 1
+        }
+        let dx = point.x - last.downLocation.x
+        let dy = point.y - last.downLocation.y
+        guard hypot(dx, dy) <= SystemClickMetrics.distance else { return 1 }
+        return last.clickState + 1
+    }
+
+    private func beginPenClickSession(at point: CGPoint) -> Int {
+        let state = penClickStateForMouseDown(at: point)
+        penClickSession = PenClickSession(downLocation: point, clickState: state)
+        return state
+    }
+
+    /// Returns click state for the matching pen mouse-up. Extends the multi-click
+    /// chain only when down→up displacement is within the system threshold.
+    private func finishPenClickSession(at upLocation: CGPoint) -> Int {
+        guard let session = penClickSession else { return 1 }
+        penClickSession = nil
+
+        let dx = upLocation.x - session.downLocation.x
+        let dy = upLocation.y - session.downLocation.y
+        if hypot(dx, dy) <= SystemClickMetrics.distance {
+            penLastClick = PenCompletedClick(
+                upTime: CFAbsoluteTimeGetCurrent(),
+                downLocation: session.downLocation,
+                clickState: session.clickState
+            )
+        } else {
+            penLastClick = nil
+        }
+        return session.clickState
     }
 
     private func deriveTilt(azimuth: Double, altitude: Double) -> (Double, Double) {
