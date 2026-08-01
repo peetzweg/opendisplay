@@ -36,23 +36,36 @@ final class InputInjector {
         )
 
         let type: CGEventType
+        // Click count on the release. A cancel means "a second finger joined,
+        // this was a scroll, not a tap" — but there is no CGEvent for undoing a
+        // press, and a plain up over the press point is indistinguishable from a
+        // click, so every two-finger scroll opened whatever was under finger one.
+        // Releasing with clickCount 0 keeps the button state honest while telling
+        // AppKit and WebKit not to synthesize a click. Only the cancel path gets
+        // 0: a zero-click *down* is what breaks menu tracking (see above).
+        var clickState = 1
         switch phase {
         case "began":
             type = .leftMouseDown
             isDown = true
         case "moved":
             type = isDown ? .leftMouseDragged : .mouseMoved
-        case "ended", "cancelled":
+        case "ended":
             guard isDown else { return }   // spurious up without a down
             type = .leftMouseUp
             isDown = false
+        case "cancelled":
+            guard isDown else { return }
+            type = .leftMouseUp
+            isDown = false
+            clickState = 0
         default:
             return
         }
 
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                   mouseCursorPosition: point, mouseButton: .left) else { return }
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
         event.post(tap: .cghidEventTap)
     }
 
