@@ -916,6 +916,16 @@ struct VideoLayerView: UIViewRepresentable {
             case .began:
                 twoFingerActive = true
                 lastPan = .zero
+                // macOS delivers scroll to whatever sits under the cursor, and
+                // the cursor no longer follows the fingers now that a press is
+                // withheld until it commits. Put it on the gesture once, up
+                // front, so the scroll lands on the window being touched. Once
+                // only: a real trackpad does not drag the cursor while
+                // scrolling, and moving it mid-gesture would change the target.
+                if let n = normalized(recognizer.location(in: self)) {
+                    lastNorm = n
+                    receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
+                }
             case .changed:
                 let t = recognizer.translation(in: self)
                 let scale = min(bounds.width / video.width, bounds.height / video.height)
@@ -928,20 +938,96 @@ struct VideoLayerView: UIViewRepresentable {
             }
         }
 
+        // A press is only a click once we know a second finger is not coming.
+        // Sending `began` on contact posted a mouse-down we then had to take
+        // back, and taking it back only works when UIKit happens to deliver
+        // `cancelled`; when the pan recognizer misses and we get a plain
+        // `ended` instead, that down/up pair *is* a click, which is why every
+        // other two-finger scroll opened whatever sat under the first finger.
+        // So hold the down until the gesture commits to being one.
+        private var pendingDown: (x: Double, y: Double)?
+        private var downSent = false
+        private var holdTimer: DispatchWorkItem?
+
+        /// Movement (in points) that turns a held press into a drag.
+        private let dragSlop: CGFloat = 10
+        /// A press this long with no second finger is a deliberate hold, so
+        /// commit it: press-and-hold menus and drag handles need the button.
+        private let holdDelay: TimeInterval = 0.12
+        private var pendingDownPoint: CGPoint = .zero
+
+        /// Emit the withheld `began`, at the point the finger first landed so a
+        /// drag starts where the user touched rather than where slop was crossed.
+        private func commitPendingDown() {
+            guard let p = pendingDown, !downSent else { return }
+            downSent = true
+            holdTimer?.cancel()
+            holdTimer = nil
+            receiver?.sendTouch(phase: "began", x: p.x, y: p.y)
+        }
+
+        /// Drop the press without a trace. Nothing reached the Mac, so there is
+        /// no button to release and no click to suppress.
+        private func discardPendingDown() {
+            pendingDown = nil
+            downSent = false
+            holdTimer?.cancel()
+            holdTimer = nil
+        }
+
         private func send(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?) {
             let fingers = touches.filter { isFinger($0) }
             guard !fingers.isEmpty else { return }
             // Ignore single-finger events while a two-finger gesture runs,
             // and end the click if a second finger joins mid-press.
             if twoFingerActive || (event?.allTouches?.filter { isFinger($0) }.count ?? 1) > 1 {
-                if phase != "began" {
+                if downSent {
                     receiver?.sendTouch(phase: "cancelled", x: lastNorm.x, y: lastNorm.y)
                 }
+                discardPendingDown()
                 return
             }
             guard let touch = fingers.first,
                   let norm = normalized(touch.location(in: self)) else { return }
             lastNorm = norm
+
+            switch phase {
+            case "began":
+                let location = touch.location(in: self)
+                pendingDown = norm
+                pendingDownPoint = location
+                downSent = false
+                let work = DispatchWorkItem { [weak self] in self?.commitPendingDown() }
+                holdTimer = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: work)
+                return
+            case "ended":
+                // A tap: nothing was posted yet, so post the whole click now.
+                if pendingDown != nil, !downSent { commitPendingDown() }
+                // No down means the press was already discarded (a second
+                // finger took it), so there is nothing to release.
+                if downSent { receiver?.sendTouch(phase: "ended", x: norm.x, y: norm.y) }
+                discardPendingDown()
+                return
+            case "cancelled":
+                if downSent {
+                    receiver?.sendTouch(phase: "cancelled", x: norm.x, y: norm.y)
+                }
+                discardPendingDown()
+                return
+            case "moved":
+                if pendingDown != nil, !downSent {
+                    let moved = hypot(touch.location(in: self).x - pendingDownPoint.x,
+                                      touch.location(in: self).y - pendingDownPoint.y)
+                    // Below slop the finger is still deciding: track the cursor
+                    // (the Mac turns a move without a down into mouseMoved) but
+                    // keep the button up so a second finger can still cancel.
+                    if moved > dragSlop { commitPendingDown() }
+                }
+            default:
+                break
+            }
+
             if phase == "moved", let event {
                 // Forward every coalesced sample so the Mac gets the full-rate
                 // drag, then UIKit's predicted touch so the cursor leads toward
