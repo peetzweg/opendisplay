@@ -534,8 +534,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     /// The virtual display takes a moment to show up in shareable content.
-    /// Uses the explicit SCShareableContent API, logs diagnostics on failure,
-    /// and matches by size as a secondary key when CG/SCK ids diverge.
+    /// Uses the explicit SCShareableContent API and logs diagnostics on failure.
     private func findSCDisplay(id: CGDirectDisplayID) async throws -> SCDisplay {
         var lastIDs: [CGDirectDisplayID] = []
         // ~5s — same overall budget as before; then setupExtend falls back.
