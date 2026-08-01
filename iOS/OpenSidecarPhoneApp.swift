@@ -712,6 +712,23 @@ final class ReceiverModel: ObservableObject {
     }
 }
 
+// MARK: - Touch sampling
+
+extension UIEvent {
+    /// Every position UIKit recorded for `touch` in this update, oldest first.
+    ///
+    /// The panel samples faster than UIKit delivers, so a single `touchesMoved`
+    /// stands for several real positions. This batch is that whole history and
+    /// its *last* entry is `touch` itself, so forward the list as it comes:
+    /// sending `touch` alongside it puts the newest sample ahead of its own
+    /// history and emits it twice, which reads as backtracking on fast strokes.
+    /// Falls back to the touch alone when UIKit coalesced nothing.
+    func samples(for touch: UITouch) -> [UITouch] {
+        let batch = coalescedTouches(for: touch) ?? []
+        return batch.isEmpty ? [touch] : batch
+    }
+}
+
 // MARK: - Video layer host view
 
 /// UIView whose backing layer is the AVSampleBufferDisplayLayer.
@@ -926,12 +943,11 @@ struct VideoLayerView: UIViewRepresentable {
                   let norm = normalized(touch.location(in: self)) else { return }
             lastNorm = norm
             if phase == "moved", let event {
-                // The panel samples touches at 120Hz but UIKit delivers at
-                // display refresh — forward every coalesced sample so the Mac
-                // gets the full-rate drag, then UIKit's predicted touch so the
-                // cursor leads toward where the finger will be (~1 frame of
-                // perceived latency back; corrected by the next real sample).
-                for t in event.coalescedTouches(for: touch) ?? [touch] {
+                // Forward every coalesced sample so the Mac gets the full-rate
+                // drag, then UIKit's predicted touch so the cursor leads toward
+                // where the finger will be (~1 frame of perceived latency back;
+                // corrected by the next real sample).
+                for t in event.samples(for: touch) {
                     if let n = normalized(t.location(in: self)) {
                         lastNorm = n
                         receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
@@ -951,7 +967,7 @@ struct VideoLayerView: UIViewRepresentable {
                   let norm = normalized(touch.location(in: self)) else { return }
             lastNorm = norm
             if phase == "moved", let event {
-                for t in event.coalescedTouches(for: touch) ?? [touch] {
+                for t in event.samples(for: touch) {
                     if let n = normalized(t.location(in: self)) {
                         lastNorm = n
                         receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
@@ -1088,9 +1104,7 @@ final class InputCaptureEngine: NSObject {
         }
 
         if !ended {
-            emitPencil("move", x: nx, y: ny, pressure: pressure,
-                       azimuth: azimuth, altitude: altitude)
-            for c in event?.coalescedTouches(for: touch) ?? [] where c !== touch {
+            for c in event?.samples(for: touch) ?? [touch] {
                 guard let cn = normalize?(c.location(in: view)) else { continue }
                 emitPencil("move", x: cn.x, y: cn.y,
                            pressure: min(Double(c.force), 1.0),
