@@ -1,0 +1,40 @@
+name: Tests
+
+# Nothing checked pull requests before this, so a branch that did not compile
+# (or a test target that could not build) only surfaced on someone's laptop.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A superseded run tells us nothing, so drop in-flight runs for the same ref.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # Deliberately without DEVELOPMENT_TEAM: nothing built here is
+      # distributed, so an unsigned build is enough, and needing no secrets
+      # means this check also runs on pull requests from forks.
+      - name: Generate project
+        run: xcodegen generate
+
+      # Builds the Mac app as well as the test bundle, since the scheme covers
+      # both — so this is a compile check for the app on top of the tests.
+      - name: Run macOS tests
+        run: |
+          xcodebuild test \
+            -project OpenSidecar.xcodeproj \
+            -scheme OpenSidecarMac \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""

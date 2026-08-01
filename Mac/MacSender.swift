@@ -214,6 +214,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Input latency: touches arrive stamped in our clock (the phone applies
     // its sync offset); delta to now = network + deframe + dispatch.
     private var inputLatencies: [Double] = []
+    // These policies bound noisy paths while retaining an explicit record when
+    // details were suppressed. Unknown types and unparseable messages live on
+    // `queue` with the rest of the control-connection state; encoder failures
+    // are guarded by `pipelineLock` with the other pipeline counters.
+    private var unknownTypeLogPolicy = UnknownControlTypeLogPolicy()
+    // Encode failures repeat every frame once the session goes bad; throttle
+    // the log to one line a second and carry the count.
+    private var encodeFailureLogPolicy = ThrottledLogPolicy<OSStatus>()
+    // A framing desync feeds this garbage at the peer's message rate until the
+    // watchdog redials, so it needs the same treatment. Detail is the byte
+    // count of the last message that would not parse.
+    private var unparseableControlLogPolicy = ThrottledLogPolicy<Int>()
     // Capture cadence: SCK only emits on content change, so the phone can't
     // tell "Mac rendered 45fps" from "frames got lost" — count deliveries here.
     private var capFrames = 0
@@ -930,7 +942,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastReceived = Date()
         guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let type = obj["type"] as? String else {
-            Log.info("unparseable control message (\(payload.count) bytes)")
+            handleUnparseableControlLogAction(
+                unparseableControlLogPolicy.record(
+                    payload.count,
+                    at: ProcessInfo.processInfo.systemUptime
+                )
+            )
             return
         }
         switch type {
@@ -1041,7 +1058,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             Log.info("receiver app closed — ending session")
             Task { @MainActor in self.onPeerClosed?() }
         default:
-            Log.info("unknown control message type: \(type)")
+            // Unknown types are a normal consequence of the additive wire
+            // protocol: a newer peer can send messages this build predates.
+            // Log each type once per session, never per message. A peer can
+            // drive this at input rates (a pencil stroke is ~240 messages/sec),
+            // so the policy also caps distinct types and reports that cap once.
+            switch unknownTypeLogPolicy.record(type) {
+            case .logType(let type):
+                Log.info("unknown control message type: \(type) — ignoring (logged once)")
+            case .logSuppression(let limit):
+                Log.info("additional unknown control message types suppressed after \(limit) distinct types")
+            case .none:
+                break
+            }
         }
     }
 
@@ -1187,9 +1216,65 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if submitStatus != noErr {
             pipelineLock.lock()
             pendingEncodes = max(0, pendingEncodes - 1)
+            // A dead encoder session keeps failing, and this runs per frame, so
+            // an unthrottled line here is ~60/sec for as long as the problem
+            // lasts. Report at most once a second and carry the count: the
+            // status code is the diagnosis, the rate is just a number.
+            let logAction = encodeFailureLogPolicy.record(
+                submitStatus,
+                at: ProcessInfo.processInfo.systemUptime
+            )
             pipelineLock.unlock()
-            Log.info("VTCompressionSessionEncodeFrame failed: \(submitStatus)")
+            handleEncodeFailureLogAction(logAction)
         }
+    }
+
+    private func handleEncodeFailureLogAction(_ action: ThrottledLogPolicy<OSStatus>.Action) {
+        switch action {
+        case .report(let report):
+            reportEncodeFailures(report)
+        case .schedule(let delay):
+            queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.flushEncodeFailureLog()
+            }
+        case .none:
+            break
+        }
+    }
+
+    private func flushEncodeFailureLog() {
+        pipelineLock.lock()
+        let report = encodeFailureLogPolicy.flush(at: ProcessInfo.processInfo.systemUptime)
+        pipelineLock.unlock()
+        if let report { reportEncodeFailures(report) }
+    }
+
+    private func reportEncodeFailures(_ report: ThrottledLogPolicy<OSStatus>.Report) {
+        Log.info("VTCompressionSessionEncodeFrame failed: \(report.detail) (\(report.count) since last report)")
+    }
+
+    // Runs on `queue`, where the policy and the control connection both live.
+    private func handleUnparseableControlLogAction(_ action: ThrottledLogPolicy<Int>.Action) {
+        switch action {
+        case .report(let report):
+            reportUnparseableControl(report)
+        case .schedule(let delay):
+            queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.flushUnparseableControlLog()
+            }
+        case .none:
+            break
+        }
+    }
+
+    private func flushUnparseableControlLog() {
+        if let report = unparseableControlLogPolicy.flush(at: ProcessInfo.processInfo.systemUptime) {
+            reportUnparseableControl(report)
+        }
+    }
+
+    private func reportUnparseableControl(_ report: ThrottledLogPolicy<Int>.Report) {
+        Log.info("unparseable control message (\(report.detail) bytes, \(report.count) since last report)")
     }
 
     // MARK: - H.264 -> Annex B

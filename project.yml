@@ -16,6 +16,9 @@ schemes:
     build:
       targets:
         OpenSidecarMac: all
+    test:
+      targets:
+        - OpenSidecarMacTests
   OpenSidecariOS:
     build:
       targets:
@@ -84,6 +87,24 @@ targets:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac.debug
           BUNDLE_DISPLAY_NAME: OpenDisplay Dev
+  OpenSidecarMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - MacTests
+      - Mac/Log.swift
+      - Mac/LogPolicies.swift
+    settings:
+      base:
+        # A hostless test bundle: the sources under test are compiled straight
+        # into it, so there is no app to inject into and nothing to load from.
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
+        # Without this the bundle has no Info.plist and code signing refuses to
+        # run, which fails the build before a single test executes.
+        GENERATE_INFOPLIST_FILE: "YES"
+        SWIFT_OBJC_BRIDGING_HEADER: Mac/OpenSidecarMac-Bridging-Header.h
   OpenSidecariOS:
     type: application
     platform: iOS

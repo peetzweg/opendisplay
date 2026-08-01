@@ -900,6 +900,12 @@ struct ContentView: View {
                     .font(.callout)
                     .lineLimit(1)
                 Spacer()
+                // Support affordance: bug reports are much easier to act on
+                // with the log attached, and users shouldn't have to be told a
+                // filesystem path to find it.
+                Button("Logs") { Log.revealInFinder() }
+                    .controlSize(.small)
+                    .help("Reveal the OpenDisplay log files in Finder")
                 if let updater {
                     CheckForUpdatesView(updater: updater)
                 }

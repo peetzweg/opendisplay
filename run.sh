@@ -12,4 +12,4 @@ if [[ ! -d $APP ]]; then
 fi
 
 open "$APP"
-echo "OpenDisplay running — logs at /tmp/opensidecar-mac.log."
+echo "OpenDisplay running — logs at ~/Library/Logs/OpenDisplay/opendisplay.log."
