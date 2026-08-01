@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreGraphics
 
 /// Wraps the private CGVirtualDisplay API: makes macOS believe a real monitor
@@ -81,6 +82,48 @@ final class VirtualDisplay {
                 try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
             }
         }
+    }
+
+    /// `applySettings` can succeed before WindowServer attaches the display.
+    /// Poll until the id appears in the online list / NSScreen, or time out.
+    /// Returns whether the display became ready, including after one re-apply.
+    @discardableResult
+    func waitUntilReady(timeoutSeconds: Double = 5.0) async -> Bool {
+        let id = display.displayID
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var attempt = 0
+        while Date() < deadline {
+            let visibility = captureVisibility(for: id)
+            if visibility.ready {
+                Log.info("virtual display ready: id=\(id) attempt=\(attempt) cg=\(visibility.cg) ns=\(visibility.ns)")
+                return true
+            }
+            if attempt == 0 || attempt % 10 == 9 {
+                Log.info("virtual display waiting: id=\(id) attempt=\(attempt) cg=\(visibility.cg) ns=\(visibility.ns) online=\(CGDisplayIsOnline(id))")
+            }
+            attempt += 1
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        Log.info("virtual display not listed as online within timeout: id=\(id) — continuing anyway")
+        // One re-apply can help when WindowServer dropped the first attach.
+        _ = display.apply(settings)
+        try? await Task.sleep(for: .milliseconds(300))
+        let finalVisibility = captureVisibility(for: id)
+        Log.info("virtual display readiness after re-apply: id=\(id) ready=\(finalVisibility.ready) cg=\(finalVisibility.cg) ns=\(finalVisibility.ns)")
+        return finalVisibility.ready
+    }
+
+    private func captureVisibility(for id: CGDirectDisplayID)
+        -> (ready: Bool, cg: [CGDirectDisplayID], ns: [CGDirectDisplayID]) {
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(max(count, 1)))
+        CGGetOnlineDisplayList(count, &ids, &count)
+        let cg = Array(ids.prefix(Int(count)))
+        let ns = NSScreen.screens.compactMap {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+        }
+        return (cg.contains(id) || ns.contains(id), cg, ns)
     }
 
     /// Returns true when the display is (now) in its HiDPI mode. Silent when
