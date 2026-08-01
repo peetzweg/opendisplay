@@ -262,8 +262,12 @@ final class InputInjector {
         return session.clickState
     }
 
+    /// UIKit altitude is radians from the surface (pi/2 = upright); CGEvent tilt
+    /// is a unit vector in -1...1, so normalize rather than pass radians through
+    /// (unnormalized, a flat pen reads 1.57 and apps that scale tilt by 90 report
+    /// impossible angles).
     private func deriveTilt(azimuth: Double, altitude: Double) -> (Double, Double) {
-        let mag = max(0, Double.pi / 2 - altitude)
+        let mag = min(max(0, Double.pi / 2 - altitude) / (Double.pi / 2), 1)
         return (sin(azimuth) * mag, cos(azimuth) * mag)
     }
 
