@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.15.0](https://github.com/peetzweg/opendisplay/compare/v1.14.0...v1.15.0) (2026-08-02)
+
+
+### Features
+
+* **ios:** Apple Pencil input with pressure, tilt and proximity ([#163](https://github.com/peetzweg/opendisplay/issues/163)) ([1c857a4](https://github.com/peetzweg/opendisplay/commit/1c857a4ebd26080aedeba3086b7bee02a0a5a6c1))
+
+
+### Bug Fixes
+
+* **input:** stop two-finger scroll from firing a click ([#188](https://github.com/peetzweg/opendisplay/issues/188)) ([04590ed](https://github.com/peetzweg/opendisplay/commit/04590ed1871f533108d8a81f498df188c69f249c))
+* **mac:** bound the log, throttle hot log paths, make it easy to send ([#180](https://github.com/peetzweg/opendisplay/issues/180)) ([19481a6](https://github.com/peetzweg/opendisplay/commit/19481a66aa7015eaf3830737bfb3cf43f105250d))
+
 ## [1.14.0](https://github.com/peetzweg/opendisplay/compare/v1.13.0...v1.14.0) (2026-07-30)
 
 
