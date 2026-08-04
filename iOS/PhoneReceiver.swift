@@ -327,6 +327,7 @@ final class PhoneReceiver: ObservableObject {
             tcp.noDelay = true
             let params = NWParameters(tls: nil, tcp: tcp)
             params.allowLocalEndpointReuse = true
+            params.includePeerToPeer = true
             params.serviceClass = .interactiveVideo
             listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
         } catch {

@@ -23,8 +23,17 @@ schemes:
     build:
       targets:
         OpenSidecariOS: all
+  OpenSidecarMacReceiver:
+    build:
+      targets:
+        OpenSidecarMacReceiver: all
 # DEVELOPMENT_TEAM comes from the environment (see generate.sh / .env) so no
-# personal team ID lives in the repo. Unset = unsigned, fine for CI.
+# personal team ID lives in the repo. Unset = ad-hoc signing: fine for CI and
+# the outgoing-only apps, but the Mac RECEIVER accepts incoming connections
+# on :9000 — build that one with DEVELOPMENT_TEAM set if the receiving Mac
+# runs the application firewall, which can't persist an allow choice for an
+# ad-hoc identity (it re-prompts every rebuild; denied = Bonjour-visible but
+# unconnectable).
 settings:
   base:
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
@@ -105,6 +114,39 @@ targets:
         # run, which fails the build before a single test executes.
         GENERATE_INFOPLIST_FILE: "YES"
         SWIFT_OBJC_BRIDGING_HEADER: Mac/OpenSidecarMac-Bridging-Header.h
+
+  # A Mac as the RECEIVING side: run this on a spare iMac/MacBook to use it as
+  # a second monitor for another Mac running OpenSidecarMac. Speaks the same
+  # wire protocol as the iOS app, so the sender needs no changes. Not
+  # distributed (yet) — build it yourself, see README.
+  OpenSidecarMacReceiver:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - MacReceiver
+      - Shared
+      # Reuse the sender's icon so the receiver is recognizably OpenDisplay.
+      - path: Mac/Assets.xcassets
+    info:
+      path: MacReceiver/Info.plist
+      properties:
+        NSPrincipalClass: NSApplication
+        CFBundleDisplayName: OpenDisplay Receiver
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSLocalNetworkUsageDescription: OpenDisplay Receiver advertises itself on the local network so the sending Mac can connect.
+        NSBonjourServices: ["_opensidecar._tcp"]
+        LSApplicationCategoryType: public.app-category.utilities
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac.receiver
+        PRODUCT_NAME: OpenDisplay Receiver
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac.receiver.debug
+
   OpenSidecariOS:
     type: application
     platform: iOS

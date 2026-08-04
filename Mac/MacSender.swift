@@ -73,15 +73,44 @@ struct PhoneInfo: Decodable {
                           // across USB and WiFi
     let pv: Int?          // receiver protocol version (issue #132); absent on
                           // every pre-handshake install → treat as protocol 1
+    let hevc: Bool?       // receiver decodes HEVC (Mac receivers); absent on
+                          // iOS receivers → stay on H.264
+    let prores4444: Bool? // paired Mac receiver accepts framed ProRes 4444
+    let prores4444XQ: Bool? // paired Mac receiver accepts ProRes 4444 XQ
+    let receiverVersion: String?
+    let receiverBuild: String?
+    let renderPath: String?
+    let colorSpace: WireColorSpace? // stream working gamut; absent = sRGB
+    // Exact active display profile from a Mac receiver. A gamut enum alone
+    // loses the factory calibration/TRCs that distinguish an iMac profile
+    // from generic Display P3.
+    let iccProfile: String?
+    // Some receivers deliberately use the system video presentation layer
+    // for its native ColorSync path. Those receivers ask ScreenCaptureKit to
+    // bake the cursor into the video so no independent overlay can force the
+    // display compositor to switch planes (observed as black flashes/trails).
+    let cursorInVideo: Bool?
+    // Optional low-latency side channel advertised by Mac receivers. Cursor
+    // position datagrams bypass the ordered multi-megabyte video stream.
+    let cursorHost: String?
+    let cursorPort: Int?
 
     var kind: String { device ?? "device" }
     var protocolVersion: Int { pv ?? WireProtocol.assumedWhenAbsent }
+    var iccProfileData: Data? {
+        guard let iccProfile, iccProfile.count <= 1_500_000 else { return nil }
+        return Data(base64Encoded: iccProfile)
+    }
 }
 
 /// How the sender reaches the receiver. Reconnects re-dial from scratch, so
 /// a USB device that was replugged (new usbmuxd DeviceID) is found again.
 enum SenderTransport {
-    case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
+    // Bonjour bridge endpoints resolve afresh for every NWConnection, so a
+    // receiver's link-local IP may change without invalidating the session.
+    // Binding the endpoint to its discovered interface also prevents a
+    // bridge-selected service from silently resolving over en0/WiFi.
+    case tcp(NWEndpoint, requiredInterface: NWInterface?)
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
 }
 
@@ -106,10 +135,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Fired on every hello — carries the receiver's install id so the
     // controller can deduplicate USB/WiFi sessions to the same device.
     @MainActor var onHello: ((PhoneInfo) -> Void)?
+    // Called when a TCP connection is ready, reporting the detected local
+    // interface type ("bridge" for Thunderbolt, "wifi" otherwise).
+    @MainActor var onTransportDetected: ((String) -> Void)?
 
     private var stream: SCStream?
     private var encoder: VTCompressionSession?
     private var connection: NWConnection?
+    private var cursorConnection: NWConnection?
+    private var cursorConnectionReady = false
+    private var cursorEndpointKey = ""
+    private var cursorSequence: UInt64 = 0
     private var virtualDisplay: VirtualDisplay?
     private let queue = DispatchQueue(label: "sender.video")
     private let startCode: [UInt8] = [0, 0, 0, 1]
@@ -120,6 +156,22 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private let endpointName: String
     private let mode: CaptureMode
     private let quality: StreamQuality
+    private var shouldUseHEVC: Bool {
+        (lastHello?.hevc ?? false)
+            && !UserDefaults.standard.bool(forKey: "forceH264")
+    }
+    private var shouldUseProRes4444: Bool {
+        (lastHello?.prores4444 ?? false)
+            && !UserDefaults.standard.bool(forKey: "disableProRes4444")
+    }
+    private var shouldUseProRes4444XQ: Bool {
+        shouldUseProRes4444 && (lastHello?.prores4444XQ ?? false)
+            && !UserDefaults.standard.bool(forKey: "disableProRes4444XQ")
+    }
+    private var workingColorSpace: WireColorSpace {
+        lastHello?.colorSpace ?? .sRGB
+    }
+    private var workingICCProfile: Data? { lastHello?.iccProfileData }
     // Stable per-device serial for the virtual display, so macOS can tell
     // multiple OpenDisplay monitors apart and persist their arrangement.
     private let displaySerial: UInt32
@@ -137,7 +189,66 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // stays valid (pre-encode skip → normal P-frame n→n+2); we do NOT force
     // keyframes on enc drops.
     private var pendingEncodes = 0
-    private let maxPendingEncodes = 1
+    // 1 for phone-class panels (latest-frame-wins, minimum latency). At 4K
+    // a single encode takes ~20ms — longer than a 60fps interval — so one
+    // slot halves the frame rate; two slots pipeline the hardware encoder
+    // back to full throughput for ~17ms extra latency. Set by setupEncoder.
+    private var maxPendingEncodes = 1
+    // Low-latency native streams can use a fixed low HEVC QP. The 4.5K path
+    // instead constrains the normal hardware rate controller with a maximum
+    // QP because per-frame BaseFrameQP is ignored outside low-latency mode.
+    // Set during setupEncoder and read on `queue`.
+    private var fixedDesktopQP: Int?
+
+    // ── Static-screen refresh ────────────────────────────────────────────
+    //
+    // When motion stops, the receiver keeps showing the LAST frame — encoded
+    // mid-motion on a starved bit budget, so flat fills around the moved
+    // content freeze with visible quantization splotches ("colored noise on
+    // solid backgrounds"). Re-encoding the same frame does not heal them:
+    // HEVC codes unchanged flat blocks as skip, so the ghost noise survives
+    // every subsequent P-frame. Measured on the 4480x2520 Main10 pipeline:
+    // 4x4-block chroma deviation of ~37/1024 after a window drag, unchanged
+    // by refinement P-frames, and only ~27 after a forced main-session IDR
+    // (the rate controller still owes debt from the motion burst).
+    //
+    // Fix: once the screen has been still for a moment, re-encode the frozen
+    // frame ONCE as a true high-quality IDR through a separate low-latency
+    // HEVC session. kVTEncodeFrameOptionKey_BaseFrameQP is honored only
+    // under low-latency rate control (the main session's fixed-QP request is
+    // silently ignored outside it), and a low-QP IDR reconstructs flat fills
+    // exactly (measured zero luma error). The refresh IDR is ~1.4MB — a
+    // one-off burst the idle link absorbs. The main session never saw this
+    // frame, so its next real frame must resync the reference chain with a
+    // forced keyframe (cheap; it happens while content is moving again).
+    // All state lives on `queue`.
+    private var refreshEncoder: VTCompressionSession?
+    private var refreshEncoderFailed = false
+    private var staticRefreshDone = false      // one refresh per still period
+    private var refreshInFlight = false
+    private var resyncMainOnNextFrame = false  // next main-session frame = IDR
+    private var lastRefreshAt = Date.distantPast
+    private var refreshMotionBurstFrames = 0
+    private var lastRefreshMotionFrameAt = Date.distantPast
+    private var encoderIsHEVC = false
+    private var encoderIsProRes4444 = false
+    private var encoderIsProRes4444XQ = false
+    private var encoderWidth = 0
+    private var encoderHeight = 0
+    private var encoderInputPixelFormat: OSType = 0
+    // Still-screen detection threshold + a floor between refreshes so
+    // periodic tiny redraws (a blinking terminal cursor) can't turn into a
+    // refresh/resync loop.
+    private let staticRefreshDelay: TimeInterval = 0.5
+    private let staticRefreshMinInterval: TimeInterval = 2.0
+    private var staticRefreshEnabled: Bool {
+        UserDefaults.standard.object(forKey: "staticRefresh") == nil
+            || UserDefaults.standard.bool(forKey: "staticRefresh")
+    }
+    private var staticRefreshQP: Int {
+        let override = UserDefaults.standard.integer(forKey: "refreshQP")
+        return (1...51).contains(override) ? override : 8
+    }
 
     // ── Outstanding send backpressure (maxPendingSends = 3) ──────────────────
     //
@@ -203,13 +314,42 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // hide it from capture and stream its position on the control channel —
     // the phone draws it locally on the ~2ms path the touches use.
     // Escape hatch: `defaults write sh.peet.opensidecar.mac localCursor -bool false`.
-    private let localCursor = UserDefaults.standard.object(forKey: "localCursor") == nil
+    private let localCursorPreference = UserDefaults.standard.object(forKey: "localCursor") == nil
         || UserDefaults.standard.bool(forKey: "localCursor")
+    private var localCursor: Bool {
+        localCursorPreference && !(lastHello?.cursorInVideo ?? false)
+    }
     private var cursorTimer: DispatchSourceTimer?
     private var cursorImageTimer: DispatchSourceTimer?
     private var lastCursorSent: (x: Double, y: Double, visible: Bool) = (-1, -1, false)
     private var lastCursorPNGHash = 0
     private var captureDisplayID: CGDirectDisplayID = 0
+    // Static quality refreshes are large IDRs on the same ordered TCP stream
+    // as cursor messages. Do not start one while either pointer is active.
+    private var lastCursorActivityAt = Date.distantPast
+    private var cursorOwnsReceiver: Bool {
+        lastCursorSent.visible || remotePointerInsideReceiver
+    }
+    // The echoed visibility flag can briefly be cleared when receiver-side
+    // and sender-side pointer ownership change at nearly the same time. For
+    // expensive refresh decisions, also sample the real CG cursor so a stale
+    // ownership message can never let a large IDR jump ahead of the pointer.
+    private var cursorBlocksStaticRefresh: Bool {
+        cursorOwnsReceiver || isCursorCurrentlyOnCaptureDisplay()
+    }
+    // ScreenCaptureKit can emit a black buffer while the pointer crosses onto
+    // a virtual display. Filter only content that is actually black: pausing
+    // every frame here makes AVSampleBufferDisplayLayer clear to black while
+    // the independent cursor layer keeps moving (visible as cursor trails).
+    private var suppressCursorEntryBlackFramesUntil = Date.distantPast
+    private var remotePointerInsideReceiver = false
+
+    // A Mac receiver sends hover moves only while its cursor is over the video
+    // view. The sender's synthetic cursor itself remains parked on the virtual
+    // display after the local cursor leaves that view, so `lastCursorSent`
+    // alone cannot detect a later re-entry. A resumed move at the video edge
+    // is the missing transition signal and re-arms the capture guard.
+    private var lastRemotePointerInputAt = Date.distantPast
 
     // Input latency: touches arrive stamped in our clock (the phone applies
     // its sync offset); delta to now = network + deframe + dispatch.
@@ -244,6 +384,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var lastPixelBuffer: CVPixelBuffer?
     private var lastCaptureAt = Date.distantPast
 
+    // The FIRST frame has the same problem, worse: a fresh virtual display
+    // whose wallpaper finished drawing before capture started is fully
+    // static, so SCK delivers nothing at all and the receiver stays dark
+    // with no buffer to replay. A screenshot seeds the pipeline (observed
+    // with Mac receivers, whose displays take seconds to set up).
+    private var captureFilter: SCContentFilter?
+    private var captureConfig: SCStreamConfiguration?
+    private var captureStartedAt = Date.distantFuture
+    private var seedingFirstFrame = false
+    private var firstFrameLogged = false
+
     init(transport: SenderTransport, name: String, mode: CaptureMode,
          quality: StreamQuality = .best, displaySerial: UInt32 = 0x0001,
          awaitingWake: Bool = false) {
@@ -265,6 +416,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             monitorsStarted = true
             schedulePing()
             scheduleWatchdog()
+            scheduleStaticRefresh()
         }
 
         // Screen Recording permission: poll until granted. No auto-prompt at
@@ -324,7 +476,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// phone dimensions. Called at startup and again whenever the phone
     /// rotates (it re-sends hello with swapped dimensions).
     private func setupExtend(_ info: PhoneInfo) async throws {
-        Log.info("phone hello: \(info.pixelsWide)x\(info.pixelsHigh) @\(info.scale)x")
+        Log.info("phone hello: \(info.pixelsWide)x\(info.pixelsHigh) @\(info.scale)x "
+            + "color=\((info.colorSpace ?? .sRGB).rawValue) "
+            + "ICC=\(info.iccProfileData?.count ?? 0)B "
+            + "receiver=\(info.receiverVersion ?? "legacy")"
+            + "(\(info.receiverBuild ?? "unknown")) "
+            + "render=\(info.renderPath ?? "unspecified")")
 
         // Phone panel is @3x; the virtual display runs @2x HiDPI, so points
         // = native pixels / 2 (rounded down to even for the encoder).
@@ -371,6 +528,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 VirtualDisplay(name: displayName,
                                pointsWide: pointsWide, pointsHigh: pointsHigh,
                                sizeInMillimeters: mm, serialNum: serial,
+                               workingColorSpace: info.colorSpace ?? .sRGB,
+                               targetICCProfile: info.iccProfileData,
                                restoreOrigin: DisplayArrangement.origin(for: sizeInPoints,
                                                                         device: arrangementKey),
                                onOriginChange: { origin in
@@ -388,6 +547,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         virtualDisplay = vd
         inputInjector = InputInjector(displayID: vd.displayID)
+
+        // ColorSync registers a new virtual display asynchronously. Wait for
+        // its working profile before ScreenCaptureKit observes the display;
+        // otherwise WindowServer first composites the desktop into sRGB and
+        // clips P3 colors before capture can preserve them.
+        var colorProfileReady = false
+        for _ in 0..<20 {
+            colorProfileReady = await MainActor.run { vd.ensureWorkingColorProfile() }
+            if colorProfileReady { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        if !colorProfileReady {
+            Log.info("virtual display color profile did not settle before capture")
+        }
 
         let display = try await findSCDisplay(id: vd.displayID)
         // Quality scaling: capture/encode below native when requested — the
@@ -420,6 +593,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             stream = nil
             if let encoder { VTCompressionSessionInvalidate(encoder) }
             encoder = nil
+            if let refreshEncoder { VTCompressionSessionInvalidate(refreshEncoder) }
+            refreshEncoder = nil
             virtualDisplay = nil   // removes the old display
             needsKeyframe = true
             do {
@@ -430,7 +605,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 return
             }
             if let latest = lastHello,
-               latest.pixelsWide != target.pixelsWide || latest.pixelsHigh != target.pixelsHigh {
+               latest.pixelsWide != target.pixelsWide
+                || latest.pixelsHigh != target.pixelsHigh
+                || latest.colorSpace != target.colorSpace
+                || latest.iccProfile != target.iccProfile {
                 target = latest   // rotated again while we were rebuilding
                 continue
             }
@@ -452,38 +630,101 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func startCapture(display: SCDisplay, pixelsWide: Int, pixelsHigh: Int) async throws {
+        // The low-latency H.264 hardware encoder silently drops EVERY frame
+        // beyond H.264 level 5.2's 60fps ceiling — observed with a Mac
+        // receiver announcing 4096x2304: VTCompressionSession returns noErr
+        // with a nil sample for 100% of frames, indistinguishable from "no
+        // capture" without the callback-error counter. 3840x2160@60 is the
+        // largest size inside the level, so clamp the CAPTURE there — the
+        // virtual display keeps its native size (window layout and UI
+        // density unaffected); only the stream is downscaled, exactly like
+        // the quality presets already do. HEVC's hardware envelope is far
+        // larger (8K-class), so its clamp exists only as a sanity bound —
+        // 5K iMac panels encode at native size.
+        let maxEncode = (shouldUseProRes4444 || shouldUseHEVC)
+            ? (w: 6144.0, h: 3456.0)
+            : (w: 3840.0, h: 2160.0)
+        let clamp = min(1.0, maxEncode.w / Double(pixelsWide), maxEncode.h / Double(pixelsHigh))
+        let captureW = (Int(Double(pixelsWide) * clamp)) & ~1
+        let captureH = (Int(Double(pixelsHigh) * clamp)) & ~1
+        if clamp < 1.0 {
+            Log.info("capture clamped to \(captureW)x\(captureH) (encoder limit; display stays \(pixelsWide)x\(pixelsHigh))")
+        }
+
         let filter = SCContentFilter(display: display, excludingWindows: [])
 
         let config = SCStreamConfiguration()
-        config.width = pixelsWide
-        config.height = pixelsHigh
+        config.width = captureW
+        config.height = captureH
         // Ask for 120 even though the virtual display is 60Hz: requesting
         // exactly 1/60 makes SCK's rate limiter skip frames that arrive a
         // hair early (beat frequency) — measured ~51fps instead of 60.
         config.minimumFrameInterval = CMTime(value: 1, timescale: 120)
-        // 420v matches the encoder's native input — skips a BGRA→YUV conversion
-        // inside VideoToolbox. (`-pixfmt bgra` reverts for A/B testing.)
-        config.pixelFormat = UserDefaults.standard.string(forKey: "pixfmt") == "bgra"
-            ? kCVPixelFormatType_32BGRA
-            : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        // Preserve the desktop at 10-bit 4:4:4 through capture. The HEVC
+        // Main10 hardware encoder performs the final 4:2:0 conversion once;
+        // the previous 8-bit 4:2:0 capture discarded most chroma samples
+        // before encoding and exposed colored noise/banding on flat fills.
+        // Keep the hidden BGRA override for diagnostics and use the legacy
+        // 420f path for H.264/iOS receivers.
+        let pixelFormat: OSType
+        if UserDefaults.standard.string(forKey: "pixfmt") == "bgra" {
+            pixelFormat = kCVPixelFormatType_32BGRA
+        } else if (shouldUseProRes4444 || shouldUseHEVC), quality == .best {
+            // Compressed YCbCr defaults to video range. The former xf44
+            // full-range input left range propagation dependent on the HEVC
+            // encoder and could look washed out in the system display layer.
+            pixelFormat = kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange
+        } else {
+            pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        }
+        config.pixelFormat = pixelFormat
+        // Make the captured desktop's color meaning deterministic. The Mac
+        // receiver advertises Display P3 when its active ICC is wide-gamut;
+        // old peers and ordinary panels remain in device-independent sRGB.
+        // The encoder writes the same negotiated space into its VUI.
+        // With the receiver's exact ICC installed on the virtual display,
+        // leaving this unset makes ScreenCaptureKit preserve that display
+        // profile. Legacy receivers continue using a standard named space.
+        if workingICCProfile == nil {
+            config.colorSpaceName = workingColorSpace == .displayP3
+                ? CGColorSpace.displayP3
+                : CGColorSpace.sRGB
+        }
+        // ScreenCaptureKit only accepts colorMatrix for 420v/420f. The
+        // 10-bit 4:4:4 format carries full-resolution chroma and preserves
+        // its meaning through the display color space.
+        if pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            || pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
+            config.colorMatrix = kCVImageBufferYCbCrMatrix_ITU_R_709_2
+        }
         // One buffer is held permanently (keyframe replay) and one sits in
         // the encoder for ~13ms — headroom prevents SCK starvation drops.
         config.queueDepth = 8
         config.showsCursor = !localCursor
 
-        setupEncoder(width: pixelsWide, height: pixelsHigh)
+        setupEncoder(width: captureW, height: captureH,
+                     inputPixelFormat: pixelFormat)
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        // Set BEFORE capture starts: delegate frames land on `queue` the
+        // moment startCapture returns, racing assignments made after it
+        // (observed as a distantFuture-based first-frame log line).
+        captureStartedAt = Date()
+        firstFrameLogged = false
         try await stream.startCapture()
         self.stream = stream
         captureDisplayID = display.displayID
+        captureFilter = filter
+        captureConfig = config
         lastCursorPNGHash = 0      // rotation rebuilds: re-send the sprite
         lastCursorSent = (-1, -1, false)
         startCursorEcho()
-        Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) mode \(mode.rawValue) localCursor=\(localCursor)")
+        Log.info("capture started: \(captureW)x\(captureH) display \(display.displayID) "
+            + "mode \(mode.rawValue) localCursor=\(localCursor) "
+            + "color=\(workingColorSpace.rawValue)")
         let kind = lastHello?.kind ?? "device"
-        await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
+        await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(captureW)×\(captureH))")
     }
 
     func stop() {
@@ -496,8 +737,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         stream = nil
         connection?.cancel()
         connection = nil
+        cursorConnection?.cancel()
+        cursorConnection = nil
+        cursorConnectionReady = false
+        cursorEndpointKey = ""
         if let encoder { VTCompressionSessionInvalidate(encoder) }
         encoder = nil
+        if let refreshEncoder { VTCompressionSessionInvalidate(refreshEncoder) }
+        refreshEncoder = nil
         virtualDisplay = nil   // releasing it removes the display
         queue.async { [weak self] in
             // Unblock a start() that is still waiting for the hello.
@@ -527,6 +774,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self.dialGeneration += 1   // a dial still in flight must not adopt
             self.connection?.cancel()
             self.connection = nil
+            self.cursorConnection?.cancel()
+            self.cursorConnection = nil
+            self.cursorConnectionReady = false
+            self.cursorEndpointKey = ""
             self.pendingSends = 0
             self.pipelineLock.lock()
             self.pendingEncodes = 0
@@ -618,7 +869,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func connect() {
         guard !stopped else { return }
         switch transport {
-        case .tcp(let endpoint): connectTCP(endpoint)
+        case .tcp(let endpoint, let requiredInterface):
+            connectTCP(endpoint, requiredInterface: requiredInterface)
         case .usb(let udid, let port): connectUSB(udid: udid, port: port)
         }
     }
@@ -639,30 +891,46 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // the fresh peer — the cursor analogue of forcing a keyframe.
         lastCursorPNGHash = 0
         lastCursorSent = (-1, -1, false)
+        remotePointerInsideReceiver = false
         lastReceived = Date()  // fresh grace period for the watchdog
         receiveControl(on: conn)
+        // Detect the local interface used for this connection. Thunderbolt
+        // bridge interfaces are named "bridge*"; everything else is WiFi/ETH.
+        if let path = conn.currentPath {
+            let ifaceName = path.availableInterfaces.first?.name ?? ""
+            let isBridge = ifaceName.hasPrefix("bridge")
+            Task { @MainActor in
+                self.onTransportDetected?(isBridge ? "bridge" : "wifi")
+            }
+            Log.info("connection interface: \(ifaceName) (bridge=\(isBridge))")
+        }
         Task { await self.status("Connected to \(self.endpointName)") }
     }
 
-    private func connectTCP(_ endpoint: NWEndpoint) {
-        let options = NWProtocolTCP.Options()
-        options.noDelay = true   // latency matters more than throughput here
-        let params = NWParameters(tls: nil, tcp: options)
-        let conn = NWConnection(to: endpoint, using: params)
-        connection = conn
-        // A dial to a withdrawn Bonjour service (receiver asleep or app
-        // closed) sits in .preparing forever — it neither fails nor resolves
-        // when the service later returns, observed on macOS 26. Give every
-        // dial a deadline and redial fresh: a new NWConnection re-runs
-        // Bonjour resolution, so the retry loop reaches the receiver the
-        // moment it advertises again.
+    private func armDialDeadline(_ conn: NWConnection) {
         let generation = dialGeneration
         queue.asyncAfter(deadline: .now() + 5.0) { [weak self] in
             guard let self, generation == self.dialGeneration, !self.stopped,
                   self.connection === conn, conn.state != .ready else { return }
-            Log.info("dial timed out in \(conn.state) — redialing")
+            Log.info("dial timed out — redialing")
+            conn.cancel()
             self.scheduleReconnect()
         }
+    }
+
+    private func connectTCP(_ endpoint: NWEndpoint,
+                            requiredInterface: NWInterface?) {
+        let options = NWProtocolTCP.Options()
+        options.noDelay = true   // latency matters more than throughput here
+        let params = NWParameters(tls: nil, tcp: options)
+        params.includePeerToPeer = true
+        if let requiredInterface {
+            params.requiredInterface = requiredInterface
+            Log.info("dial constrained to interface \(requiredInterface.name)")
+        }
+        let conn = NWConnection(to: endpoint, using: params)
+        connection = conn
+        armDialDeadline(conn)
         conn.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -770,6 +1038,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let generation = dialGeneration
         connection?.cancel()
         connection = nil
+        cursorConnection?.cancel()
+        cursorConnection = nil
+        cursorConnectionReady = false
+        cursorEndpointKey = ""
         pendingSends = 0
         pipelineLock.lock()
         pendingEncodes = 0
@@ -837,7 +1109,219 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 Log.info("static screen after reconnect — replaying last frame as keyframe")
                 self.encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()))
             }
+            // No frame has EVER arrived (static virtual display since before
+            // capture started) — there is nothing to replay, so seed one.
+            if self.connectionReady, self.needsKeyframe, self.stream != nil,
+               self.lastPixelBuffer == nil, !self.seedingFirstFrame,
+               Date().timeIntervalSince(self.captureStartedAt) > 1 {
+                self.seedFirstFrame()
+            }
             self.scheduleWatchdog()
+        }
+    }
+
+    // MARK: - Static-screen refresh (see the property block for rationale)
+
+    private func scheduleStaticRefresh() {
+        queue.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.maybeSendStaticRefresh()
+            self.scheduleStaticRefresh()
+        }
+    }
+
+    /// Must be called on `queue`. Fires at most once per still period, only
+    /// while the pipeline is idle, and never within staticRefreshMinInterval
+    /// of the previous refresh (a blinking cursor must not loop refreshes).
+    private func maybeSendStaticRefresh() {
+        guard connectionReady, encoderIsHEVC, staticRefreshEnabled,
+              !staticRefreshDone, !refreshInFlight, !needsKeyframe,
+              !cursorBlocksStaticRefresh,
+              Date().timeIntervalSince(lastCaptureAt) > staticRefreshDelay,
+              Date().timeIntervalSince(lastCursorActivityAt) > 0.75,
+              Date().timeIntervalSince(lastRefreshAt) > staticRefreshMinInterval,
+              let pixelBuffer = lastPixelBuffer,
+              pendingSends == 0 else { return }
+        pipelineLock.lock()
+        let encoderBusy = pendingEncodes > 0
+        pipelineLock.unlock()
+        guard !encoderBusy else { return }
+        sendStaticRefresh(pixelBuffer)
+    }
+
+    /// Rearm the expensive still-frame cleanup only after real motion. A
+    /// blinking caret or one status redraw is a lone frame every ~500ms and
+    /// must not create the former two-second refresh/keyframe loop.
+    private func noteCaptureForStaticRefresh(at now: Date) {
+        guard staticRefreshDone else {
+            refreshMotionBurstFrames = 0
+            lastRefreshMotionFrameAt = now
+            return
+        }
+        if now.timeIntervalSince(lastRefreshMotionFrameAt) <= 0.25 {
+            refreshMotionBurstFrames += 1
+        } else {
+            refreshMotionBurstFrames = 1
+        }
+        lastRefreshMotionFrameAt = now
+        if refreshMotionBurstFrames >= 3 {
+            staticRefreshDone = false
+            refreshMotionBurstFrames = 0
+            Log.info("static refresh rearmed after sustained motion")
+        }
+    }
+
+    /// The refresh session: low-latency rate control, because that is the
+    /// only mode where BaseFrameQP is honored — the main session cannot be
+    /// low-latency (the mode caps out around 20fps at 4480x2520, and the
+    /// main session needs 60). Lazily created; geometry follows setupEncoder.
+    private func ensureRefreshEncoder() -> VTCompressionSession? {
+        if let refreshEncoder { return refreshEncoder }
+        guard !refreshEncoderFailed, encoderWidth > 0, encoderHeight > 0 else { return nil }
+        let spec = [
+            kVTVideoEncoderSpecification_EnableLowLatencyRateControl: kCFBooleanTrue,
+        ] as CFDictionary
+        let inputAttributes = [
+            kCVPixelBufferPixelFormatTypeKey: encoderInputPixelFormat,
+        ] as CFDictionary
+        var session: VTCompressionSession?
+        VTCompressionSessionCreate(
+            allocator: nil,
+            width: Int32(encoderWidth), height: Int32(encoderHeight),
+            codecType: kCMVideoCodecType_HEVC,
+            encoderSpecification: spec,
+            imageBufferAttributes: inputAttributes,
+            compressedDataAllocator: nil,
+            outputCallback: nil,
+            refcon: nil,
+            compressionSessionOut: &session)
+        guard let session else {
+            // E.g. hardware without a low-latency HEVC engine. The stream
+            // stays correct without refreshes — just less pretty when still.
+            refreshEncoderFailed = true
+            Log.info("static refresh disabled: low-latency HEVC session unavailable")
+            return nil
+        }
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel,
+                             value: encoderInputPixelFormat == kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange
+                                ? kVTProfileLevel_HEVC_Main10_AutoLevel
+                                : kVTProfileLevel_HEVC_Main_AutoLevel)
+        if let workingICCProfile {
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ICCProfile,
+                                 value: workingICCProfile as CFData)
+        }
+        // Keep the named colour metadata explicit even when an exact ICC is
+        // present. VideoToolbox does not reliably serialize ICC into ProRes
+        // and otherwise guesses Rec.709 primaries/transfer on decode, which
+        // conflicts with the receiver's Display P3 panel profile.
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ColorPrimaries,
+                             value: workingColorSpace == .displayP3
+                                ? kCMFormatDescriptionColorPrimaries_P3_D65
+                                : kCMFormatDescriptionColorPrimaries_ITU_R_709_2)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_TransferFunction,
+                             value: kCMFormatDescriptionTransferFunction_sRGB)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_YCbCrMatrix,
+                             value: kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2)
+        VTCompressionSessionPrepareToEncodeFrames(session)
+        refreshEncoder = session
+        Log.info("static refresh encoder ready (\(encoderWidth)x\(encoderHeight) QP\(staticRefreshQP))")
+        return session
+    }
+
+    /// Encode `pixelBuffer` as a fixed-QP IDR on the refresh session and send
+    /// it. Must be called on `queue`.
+    private func sendStaticRefresh(_ pixelBuffer: CVPixelBuffer) {
+        guard let refresher = ensureRefreshEncoder() else { return }
+        staticRefreshDone = true
+        refreshMotionBurstFrames = 0
+        lastRefreshMotionFrameAt = Date.distantPast
+        refreshInFlight = true
+        lastRefreshAt = Date()
+        let stillMark = lastCaptureAt
+        let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let qp = staticRefreshQP
+        let frameProperties: [CFString: Any] = [
+            kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue,
+            kVTEncodeFrameOptionKey_BaseFrameQP: qp as CFNumber,
+        ]
+        let status = VTCompressionSessionEncodeFrame(
+            refresher,
+            imageBuffer: pixelBuffer,
+            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            duration: .invalid,
+            frameProperties: frameProperties as CFDictionary,
+            infoFlagsOut: nil
+        ) { [weak self] status, _, buffer in
+            guard let self else { return }
+            self.queue.async {
+                self.refreshInFlight = false
+                guard status == noErr, let buffer else {
+                    Log.info("static refresh encode failed: \(status)")
+                    return
+                }
+                // A real frame arrived while the refresh encoded — the
+                // refresh content is stale now; sending it would step the
+                // picture backwards for a frame. The same applies when a
+                // pointer entered meanwhile: this large IDR shares TCP with
+                // cursor messages, so it must never be allowed to get ahead
+                // of an active pointer.
+                guard self.lastCaptureAt == stillMark, self.connectionReady else { return }
+                guard !self.cursorBlocksStaticRefresh,
+                      Date().timeIntervalSince(self.lastCursorActivityAt) > 0.75 else {
+                    // Retry once the pointer leaves and the cooldown expires.
+                    self.staticRefreshDone = false
+                    Log.info("static refresh cancelled: cursor active")
+                    return
+                }
+                guard let data = self.annexB(from: buffer) else { return }
+                // The foreign refresh IDR resets the receiver's reference
+                // chain. Force the next main-session frame to be an IDR too,
+                // but only when the refresh is actually going onto the wire.
+                self.resyncMainOnNextFrame = true
+                let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
+                var framed = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs)}".utf8)
+                framed.append(data)
+                self.sendFramed(framed)
+                Log.info("static refresh sent: \(data.count / 1024)KB QP\(qp)")
+            }
+        }
+        if status != noErr {
+            refreshInFlight = false
+            Log.info("static refresh submit failed: \(status)")
+        }
+    }
+
+    /// Grab one screenshot of the captured display and push it through the
+    /// normal encode path as the first (key)frame. Runs at most once at a
+    /// time; must be called on `queue`.
+    private func seedFirstFrame() {
+        guard let filter = captureFilter, let config = captureConfig else { return }
+        seedingFirstFrame = true
+        Log.info("no capture frames since start — seeding one via screenshot")
+        Task { [weak self] in
+            do {
+                let sample = try await SCScreenshotManager.captureSampleBuffer(
+                    contentFilter: filter, configuration: config)
+                self?.queue.async {
+                    guard let self else { return }
+                    self.seedingFirstFrame = false
+                    guard !self.stopped, self.connectionReady,
+                          self.lastPixelBuffer == nil,
+                          let pixelBuffer = CMSampleBufferGetImageBuffer(sample)
+                    else { return }
+                    // Keep it for the reconnect replay too; lastCaptureAt
+                    // stays untouched so that replay path can still fire.
+                    self.lastPixelBuffer = pixelBuffer
+                    self.encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()))
+                }
+            } catch {
+                self?.queue.async {
+                    self?.seedingFirstFrame = false
+                    Log.info("screenshot seed failed: \(error)")
+                }
+            }
         }
     }
 
@@ -847,7 +1331,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard localCursor else { return }
         cursorTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(8))   // 120Hz
+        // Oversample the 60Hz receiver so a busy 4.5K ProRes encode cannot
+        // turn one delayed timer firing into a visibly missing pointer step.
+        timer.schedule(deadline: .now(), repeating: .milliseconds(4),
+                       leeway: .milliseconds(1))   // up to 240Hz
         timer.setEventHandler { [weak self] in self?.pollCursorPosition() }
         timer.resume()
         cursorTimer = timer
@@ -876,6 +1363,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func pollCursorPosition() {
+        // A Mac receiver renders its own hardware pointer position while the
+        // pointer is over the video. Sampling the synthetic CG cursor here
+        // would send an older coordinate back and make diagonal movement
+        // visibly oscillate. iOS/older receivers do not send this state and
+        // continue using the existing sampled echo path.
+        // Suppress only the round-trip echo that overlaps fresh receiver-side
+        // input. Once that input pauses, a genuinely different coordinate
+        // from the sending Mac's physical mouse may take ownership again.
+        if remotePointerInsideReceiver,
+           Date().timeIntervalSince(lastRemotePointerInputAt) < 0.08 {
+            return
+        }
         guard connectionReady, captureDisplayID != 0,
               let loc = CGEvent(source: nil)?.location else { return }
         let bounds = CGDisplayBounds(captureDisplayID)
@@ -883,14 +1382,31 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if bounds.contains(loc) {
             let x = (loc.x - bounds.minX) / bounds.width
             let y = (loc.y - bounds.minY) / bounds.height
+            if !lastCursorSent.visible {
+                armCursorEntryFrameGuard(reason: "cursor became visible")
+            }
             if !lastCursorSent.visible
-                || abs(x - lastCursorSent.x) > 0.0004 || abs(y - lastCursorSent.y) > 0.0004 {
+                || abs(x - lastCursorSent.x) > 0.00005 || abs(y - lastCursorSent.y) > 0.00005 {
                 lastCursorSent = (x, y, true)
-                sendJSONFrame(String(format: "{\"type\":\"cursor\",\"x\":%.4f,\"y\":%.4f,\"v\":1}", x, y))
+                lastCursorActivityAt = Date()
+                cursorSequence &+= 1
+                sendCursorFrame(String(format: "{\"type\":\"cursor\",\"x\":%.6f,\"y\":%.6f,\"v\":1,\"s\":%llu}", x, y, cursorSequence))
             }
         } else if lastCursorSent.visible {
             lastCursorSent.visible = false
-            sendJSONFrame("{\"type\":\"cursor\",\"v\":0}")
+            lastCursorActivityAt = Date()
+            cursorSequence &+= 1
+            sendCursorFrame("{\"type\":\"cursor\",\"v\":0,\"s\":\(cursorSequence)}")
+        }
+    }
+
+    private func armCursorEntryFrameGuard(reason: String) {
+        let now = Date()
+        let wasInactive = now > suppressCursorEntryBlackFramesUntil
+
+        suppressCursorEntryBlackFramesUntil = now.addingTimeInterval(0.40)
+        if wasInactive {
+            Log.info("cursor-entry capture guard armed: \(reason)")
         }
     }
 
@@ -974,6 +1490,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let info = try? JSONDecoder().decode(PhoneInfo.self, from: payload) {
                 let previous = lastHello
                 lastHello = info
+                configureCursorChannel(info)
                 Task { @MainActor in self.onHello?(info) }
                 // Version handshake (issue #132). Reply with our identity, and
                 // if the receiver is below the version we support, tell it to
@@ -990,14 +1507,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     continuation.resume(returning: info)
                 } else if mode == .extend, stream != nil, let previous,
                           previous.pixelsWide != info.pixelsWide
-                          || previous.pixelsHigh != info.pixelsHigh {
-                    // Phone rotated — rebuild after a short debounce so a
-                    // flurry of orientation flips settles into one rebuild.
+                          || previous.pixelsHigh != info.pixelsHigh
+                          || previous.colorSpace != info.colorSpace
+                          || previous.iccProfile != info.iccProfile {
+                    // Rotation or target-profile change — rebuild after a
+                    // short debounce so a flurry of changes settles into one.
                     Task {
                         try? await Task.sleep(for: .milliseconds(300))
                         guard let current = self.lastHello,
                               current.pixelsWide == info.pixelsWide,
-                              current.pixelsHigh == info.pixelsHigh else { return }
+                              current.pixelsHigh == info.pixelsHigh,
+                              current.colorSpace == info.colorSpace,
+                              current.iccProfile == info.iccProfile else { return }
                         await self.reconfigure(info)
                     }
                 }
@@ -1006,6 +1527,29 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
+                if phase == "moved" || phase == "began" {
+                    let now = Date()
+                    lastCursorActivityAt = now
+                    let idle = now.timeIntervalSince(lastRemotePointerInputAt)
+                    let edgeDistance = min(x, 1 - x, y, 1 - y)
+                    // Re-entering the receiver video begins at one of its
+                    // edges. Requiring both an input gap and an edge position
+                    // avoids adding a hold after an ordinary pause in the
+                    // middle of the remote desktop.
+                    if !remotePointerInsideReceiver,
+                       idle > 0.35, edgeDistance <= 0.045 {
+                        armCursorEntryFrameGuard(
+                            reason: String(format: "remote pointer resumed after %.0fms", idle * 1000))
+                    }
+                    lastRemotePointerInputAt = now
+                    // Track the injected position without echoing it back.
+                    // After receiver input pauses, polling sees the same point
+                    // and stays quiet; only a different physical-sender point
+                    // is sent, which cleanly transfers cursor ownership.
+                    if remotePointerInsideReceiver {
+                        lastCursorSent = (x, y, true)
+                    }
+                }
                 inputInjector?.handleTouch(phase: phase, x: x, y: y)
                 if let t = obj["t"] as? Double {
                     let delta = Date().timeIntervalSince1970 * 1000 - t
@@ -1015,8 +1559,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     }
                 }
             }
+        case "pointerPresence":
+            if let inside = obj["inside"] as? Bool {
+                remotePointerInsideReceiver = inside
+                lastCursorActivityAt = Date()
+                if inside {
+                    armCursorEntryFrameGuard(reason: "receiver pointer entered")
+                } else if lastCursorSent.visible {
+                    lastCursorSent.visible = false
+                    sendJSONFrame("{\"type\":\"cursor\",\"v\":0}")
+                }
+            }
         case "scroll":
             if let dx = obj["dx"] as? Double, let dy = obj["dy"] as? Double {
+                lastCursorActivityAt = Date()
                 inputInjector?.handleScroll(dx: dx, dy: dy)
             }
         case "pencil":
@@ -1092,43 +1648,274 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - Encoder setup
 
-    private func setupEncoder(width: Int, height: Int) {
-        // Low-latency rate control: the hardware encoder emits every frame
-        // immediately instead of pipelining. (`-lowlatency NO` for A/B.)
-        let lowLatency = UserDefaults.standard.object(forKey: "lowlatency") == nil
-            || UserDefaults.standard.bool(forKey: "lowlatency")
-        let spec: CFDictionary? = lowLatency
-            ? [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: kCFBooleanTrue] as CFDictionary
-            : nil
+    private func setupEncoder(width: Int, height: Int,
+                              inputPixelFormat: OSType) {
+        // ProRes 4444 is the paired-Mac fidelity experiment. It preserves
+        // 10-bit 4:4:4 and makes every frame independently decodable. If the
+        // hardware session is unavailable, fall through to the established
+        // HEVC/H.264 path so mixed-version installs remain usable.
+        let wantProRes4444 = shouldUseProRes4444
+        let wantProRes4444XQ = shouldUseProRes4444XQ
+        // HEVC when the receiver offered it in its hello (Mac receivers):
+        // better quality per bit, and the hardware encoder sustains 60fps at
+        // sizes where the H.264 engine falls over. iOS receivers don't send
+        // the offer and stay on H.264. Falls back if session creation fails
+        // (e.g. an older Intel machine without an HEVC encoder) — the
+        // receiver auto-detects the codec from the bitstream either way.
+        let wantHEVC = shouldUseHEVC
+        if (lastHello?.prores4444 ?? false), !wantProRes4444 {
+            Log.info("ProRes 4444 offer overridden — using HEVC/H.264")
+        }
+        if (lastHello?.hevc ?? false), !wantHEVC {
+            Log.info("HEVC offer overridden — using H.264")
+        }
+        // Apple's low-latency HEVC rate controller is excellent below 4K,
+        // but throttles a 4480x2520 stream to ~19fps. Let VideoToolbox use its
+        // normal hardware pipeline above 4K (measured 47–48fps with 3 slots).
+        // Keep the hidden override for diagnostics.
+        let pixels = width * height
+        let accurate10Bit = (wantProRes4444 || wantHEVC)
+            && inputPixelFormat == kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange
+        let lowLatency = UserDefaults.standard.object(forKey: "lowlatency") != nil
+            ? UserDefaults.standard.bool(forKey: "lowlatency")
+            : !(wantHEVC && pixels > 3840 * 2160) && !wantProRes4444
+        // Native Mac-receiver best quality is the fidelity path. BaseFrameQP
+        // is only honored by VideoToolbox's low-latency controller; the 4.5K
+        // path uses normal rate control for throughput, so constrain it with
+        // MaxAllowedFrameQP instead of logging a fixed QP that is ignored.
+        let nativeFidelity = accurate10Bit && quality == .best
+        // Asking the hardware encoder to spend extra time on mode decisions
+        // works well through 4K, but measured ~68ms/frame and ~20fps at the
+        // iMac's 4480x2520. At 4.5K, retain the real-time search path and get
+        // fidelity from the tighter QP ceiling, larger bit budget and QP-8
+        // idle refresh instead.
+        let qualityFirstEncoder = nativeFidelity && pixels <= 3840 * 2160
+        fixedDesktopQP = !wantProRes4444 && nativeFidelity && lowLatency ? 12 : nil
+        let maxFrameQP = nativeFidelity ? 16 : 20
+        var proResCodecType = wantProRes4444XQ
+            ? kCMVideoCodecType_AppleProRes4444XQ
+            : kCMVideoCodecType_AppleProRes4444
+        let proResEncoderID = wantProRes4444XQ
+            ? "com.apple.videotoolbox.videoencoder.appleproreshw.4444xq"
+            : "com.apple.videotoolbox.videoencoder.appleproreshw.4444"
+        let spec: CFDictionary? = wantProRes4444
+            ? [kVTVideoEncoderSpecification_EncoderID:
+                proResEncoderID as CFString] as CFDictionary
+            : (lowLatency
+                ? [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: kCFBooleanTrue] as CFDictionary
+                : nil)
+        var usingProRes4444 = wantProRes4444
+        var usingProRes4444XQ = wantProRes4444XQ
+        var usingHEVC = !wantProRes4444 && wantHEVC
+        let inputAttributes = [
+            kCVPixelBufferPixelFormatTypeKey: inputPixelFormat,
+        ] as CFDictionary
         VTCompressionSessionCreate(
             allocator: nil,
             width: Int32(width), height: Int32(height),
-            codecType: kCMVideoCodecType_H264,
+            codecType: wantProRes4444
+                ? proResCodecType
+                : (wantHEVC ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264),
             encoderSpecification: spec,
-            imageBufferAttributes: nil,
+            imageBufferAttributes: inputAttributes,
             compressedDataAllocator: nil,
             outputCallback: nil,
             refcon: nil,
             compressionSessionOut: &encoder
         )
+        if encoder == nil, wantProRes4444XQ {
+            Log.info("hardware ProRes 4444 XQ session creation failed — falling back to hardware 4444")
+            proResCodecType = kCMVideoCodecType_AppleProRes4444
+            usingProRes4444XQ = false
+            let fallbackSpec = [kVTVideoEncoderSpecification_EncoderID:
+                "com.apple.videotoolbox.videoencoder.appleproreshw.4444" as CFString] as CFDictionary
+            VTCompressionSessionCreate(
+                allocator: nil,
+                width: Int32(width), height: Int32(height),
+                codecType: proResCodecType,
+                encoderSpecification: fallbackSpec,
+                imageBufferAttributes: inputAttributes,
+                compressedDataAllocator: nil,
+                outputCallback: nil,
+                refcon: nil,
+                compressionSessionOut: &encoder
+            )
+        }
+        if encoder == nil, wantProRes4444 {
+            Log.info("hardware ProRes session creation failed — trying generic ProRes 4444")
+            proResCodecType = kCMVideoCodecType_AppleProRes4444
+            usingProRes4444XQ = false
+            VTCompressionSessionCreate(
+                allocator: nil,
+                width: Int32(width), height: Int32(height),
+                codecType: kCMVideoCodecType_AppleProRes4444,
+                encoderSpecification: nil,
+                imageBufferAttributes: inputAttributes,
+                compressedDataAllocator: nil,
+                outputCallback: nil,
+                refcon: nil,
+                compressionSessionOut: &encoder
+            )
+        }
+        if encoder == nil, wantProRes4444 {
+            Log.info("ProRes 4444 session creation failed — falling back to HEVC")
+            usingProRes4444 = false
+            usingProRes4444XQ = false
+            usingHEVC = wantHEVC
+            let fallbackSpec: CFDictionary? = lowLatency
+                ? [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: kCFBooleanTrue] as CFDictionary
+                : nil
+            VTCompressionSessionCreate(
+                allocator: nil,
+                width: Int32(width), height: Int32(height),
+                codecType: wantHEVC ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264,
+                encoderSpecification: fallbackSpec,
+                imageBufferAttributes: inputAttributes,
+                compressedDataAllocator: nil,
+                outputCallback: nil,
+                refcon: nil,
+                compressionSessionOut: &encoder
+            )
+        }
+        if encoder == nil, wantHEVC {
+            Log.info("HEVC session creation failed — falling back to H.264")
+            usingProRes4444 = false
+            usingProRes4444XQ = false
+            usingHEVC = false
+            VTCompressionSessionCreate(
+                allocator: nil,
+                width: Int32(width), height: Int32(height),
+                codecType: kCMVideoCodecType_H264,
+                encoderSpecification: nil,
+                imageBufferAttributes: inputAttributes,
+                compressedDataAllocator: nil,
+                outputCallback: nil,
+                refcon: nil,
+                compressionSessionOut: &encoder
+            )
+        }
         guard let encoder else {
             Log.info("FATAL: VTCompressionSessionCreate failed")
             return
         }
-        // Low-latency settings: real-time, no B-frames, periodic keyframes.
+        // Real-time, no B-frames. ProRes is intra-only; inter-frame controls
+        // and rate-control/QP properties below are only meaningful to HEVC/H.264.
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
-        // No periodic IDRs: each one is a bitrate spike → transmit-time hiccup.
-        // TCP never loses data, and we force a keyframe on reconnect/drop.
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 3600 as CFNumber)
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 60 as CFNumber)
+        if !usingProRes4444 {
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ProfileLevel,
+                                 value: usingHEVC
+                                    ? (accurate10Bit
+                                        ? kVTProfileLevel_HEVC_Main10_AutoLevel
+                                        : kVTProfileLevel_HEVC_Main_AutoLevel)
+                                    : kVTProfileLevel_H264_High_AutoLevel)
+        }
+        if let workingICCProfile {
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ICCProfile,
+                                 value: workingICCProfile as CFData)
+        }
+        // ICC and named metadata are complementary here. In particular,
+        // Apple's ProRes encoder accepts ICC but does not put it in the
+        // compressed format description; explicit P3/sRGB prevents the
+        // decoder from guessing a contradictory Rec.709 colour space.
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ColorPrimaries,
+                             value: workingColorSpace == .displayP3
+                                ? kCMFormatDescriptionColorPrimaries_P3_D65
+                                : kCMFormatDescriptionColorPrimaries_ITU_R_709_2)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_TransferFunction,
+                             value: kCMFormatDescriptionTransferFunction_sRGB)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_YCbCrMatrix,
+                             value: kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2)
+        if !usingProRes4444 {
+            // No periodic IDRs: each one is a bitrate spike → transmit-time hiccup.
+            // TCP never loses data, and we force a keyframe on reconnect/drop.
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 3600 as CFNumber)
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 60 as CFNumber)
+        }
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: quality.bitrate as CFNumber)
+        // Preset bitrates were tuned on iPad-class panels (~5.6MP). Scale
+        // with the actual encode size so 4K Mac receivers aren't starved —
+        // 18Mbps at 3840x2160 visibly blurs text. Capped for sanity; WiFi
+        // users pick a lower quality preset, same as before.
+        let referencePixels = 2732.0 * 2048.0
+        let ratio = max(1.0, Double(width * height) / referencePixels)
+        let bitrateScale = nativeFidelity ? 4.0 : (accurate10Bit ? 3.0 : 1.5)
+        let bitrateCap = nativeFidelity ? 180_000_000
+            : (accurate10Bit ? 120_000_000 : 60_000_000)
+        let bitrate = min(Int(Double(quality.bitrate) * ratio * bitrateScale),
+                          bitrateCap)
+        // HEVC benefits from two in-flight frames at smaller sizes. Native
+        // 4480x2520 reaches its best throughput with three: 47–48fps versus
+        // 41–44 with two; four adds ~20ms without increasing throughput.
+        // Beyond iPad-class sizes H.264 also needs a second slot.
+        // `defaults write <bundle-id> encodeSlots -int N` overrides (1-6):
+        // deeper pipelines trade ~16ms queue latency per slot for throughput
+        // on encoders with internal parallel stages. 0/absent = automatic.
+        let slotsOverride = UserDefaults.standard.integer(forKey: "encodeSlots")
+        pipelineLock.lock()
+        maxPendingEncodes = slotsOverride > 0
+            ? min(slotsOverride, 6)
+            : (usingProRes4444
+                ? 6
+                : (usingHEVC
+                ? (pixels > 3840 * 2160 ? 3 : 2)
+                : (Double(pixels) > referencePixels ? 2 : 1)))
+        pipelineLock.unlock()
+        if slotsOverride > 0 {
+            Log.info("encode pipeline depth overridden: \(min(slotsOverride, 6)) slots")
+        }
+        if !usingProRes4444 {
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
+        }
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 60 as CFNumber)
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
+        // Extra quality search is too slow at 4.5K. Through 4K the native
+        // preset can use it; above 4K the lower maximum QP and larger bit
+        // budget preserve detail while the encoder remains real-time.
+        VTSessionSetProperty(
+            encoder,
+            key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+            value: qualityFirstEncoder ? kCFBooleanFalse : kCFBooleanTrue)
+        if accurate10Bit && !usingProRes4444 {
+            // Prevent the rate controller from turning smooth desktop fills
+            // into coarse, differently quantized coding blocks. Native
+            // fidelity uses 16; lower presets retain the previous ceiling.
+            VTSessionSetProperty(encoder,
+                                 key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
+                                 value: maxFrameQP as CFNumber)
+            VTSessionSetProperty(encoder,
+                                 key: kVTCompressionPropertyKey_Quality,
+                                 value: (nativeFidelity ? 0.95 : 0.9) as CFNumber)
+            if #available(macOS 15.0, *), !lowLatency {
+                VTSessionSetProperty(
+                    encoder,
+                    key: kVTCompressionPropertyKey_SpatialAdaptiveQPLevel,
+                    value: 0 as CFNumber)
+            }
+        }
         VTCompressionSessionPrepareToEncodeFrames(encoder)
-        Log.info("encoder ready: \(width)x\(height) H.264 \(quality.bitrate / 1_000_000)Mbps quality=\(quality.rawValue) lowLatencyRC=\(lowLatency)")
+        // The static-refresh session must match the main session's geometry;
+        // recreate it lazily after any (re)configuration.
+        encoderIsHEVC = usingHEVC
+        encoderIsProRes4444 = usingProRes4444
+        encoderIsProRes4444XQ = usingProRes4444XQ
+        encoderWidth = width
+        encoderHeight = height
+        encoderInputPixelFormat = inputPixelFormat
+        if let refreshEncoder { VTCompressionSessionInvalidate(refreshEncoder) }
+        refreshEncoder = nil
+        refreshEncoderFailed = false
+        let qpMode = fixedDesktopQP != nil ? "fixedQP12" : "maxQP\(maxFrameQP)"
+        let colorMode = (usingProRes4444
+            ? "10-bit 4:4:4 intra"
+            : accurate10Bit
+            ? "Main10 x444-video \(qpMode) \(qualityFirstEncoder ? "quality-search" : "realtime-search")"
+            : "8-bit")
+            + " \(workingColorSpace.rawValue) ICC=\(workingICCProfile?.count ?? 0)B"
+        let codecName = usingProRes4444XQ
+            ? "ProRes 4444 XQ"
+            : (usingProRes4444 ? "ProRes 4444" : (usingHEVC ? "HEVC" : "H.264"))
+        let rateDescription = usingProRes4444 ? "intra VBR" : "\(bitrate / 1_000_000)Mbps"
+        Log.info("encoder ready: \(width)x\(height) \(codecName) \(rateDescription) \(colorMode) quality=\(quality.rawValue) lowLatencyRC=\(lowLatency) staticRefresh=\(usingHEVC && staticRefreshEnabled)")
     }
 
     // MARK: - Capture callback
@@ -1141,9 +1928,45 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
         else { return }
 
-        lastPixelBuffer = pixelBuffer
-        lastCaptureAt = Date()
+        // Blank/suspended/idle status buffers contain no new display image.
+        // Encoding them can replace the receiver's last good frame with a
+        // transient black one, so only complete/started frames are eligible.
+        if let status = frameStatus(of: sampleBuffer),
+           status != .complete, status != .started {
+            return
+        }
+
+        if !firstFrameLogged {
+            firstFrameLogged = true
+            Log.info(String(format: "first capture frame %.0fms after capture start",
+                            Date().timeIntervalSince(captureStartedAt) * 1000))
+        }
+        let capturedAt = Date()
+        noteCaptureForStaticRefresh(at: capturedAt)
+        lastCaptureAt = capturedAt
         capFrames += 1
+
+        // Some macOS versions label the cursor-entry glitch as a complete
+        // frame. Reject only a truly frame-wide black buffer; withholding all
+        // frames makes the receiver's video layer itself clear to black.
+        // Requiring an existing good frame also keeps startup safe.
+        let capturedNow = Date()
+        // The capture callback can beat the 120Hz cursor timer when the
+        // sending Mac's physical mouse enters the virtual display. Detect
+        // that transition here as well so the very first suspect frame is
+        // held instead of waiting up to 8ms for pollCursorPosition().
+        if lastPixelBuffer != nil,
+           !lastCursorSent.visible,
+           isCursorCurrentlyOnCaptureDisplay() {
+            armCursorEntryFrameGuard(reason: "capture observed cursor entry")
+        }
+        if lastPixelBuffer != nil,
+           capturedNow <= suppressCursorEntryBlackFramesUntil,
+            isNearlyBlackFrame(pixelBuffer) {
+            Log.info("suppressed transient black capture frame on cursor entry")
+            return
+        }
+        lastPixelBuffer = pixelBuffer
 
         // No receiver, or a pipeline stage is backed up: skip this frame.
         guard connectionReady else { return }
@@ -1151,6 +1974,111 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if shouldDropFrame(reason: "pending_sends") { return }   // TCP send queue full
 
         encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+    }
+
+    /// ScreenCaptureKit's per-frame status attachment. Missing status remains
+    /// eligible for compatibility with older systems/alternate producers.
+    private func frameStatus(of sample: CMSampleBuffer) -> SCFrameStatus? {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
+                sample, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+              let raw = attachments.first?[.status] as? Int else { return nil }
+        return SCFrameStatus(rawValue: raw)
+    }
+
+    private func isCursorCurrentlyOnCaptureDisplay() -> Bool {
+        guard captureDisplayID != 0,
+              let location = CGEvent(source: nil)?.location else { return false }
+        return CGDisplayBounds(captureDisplayID).contains(location)
+    }
+
+    /// Fast whole-frame black check for both capture formats supported by
+    /// startCapture (BGRA and bi-planar YUV). This only runs for ~250 ms on
+    /// cursor entry, not on every frame.
+    private func isNearlyBlackFrame(_ buf: CVPixelBuffer) -> Bool {
+        guard CVPixelBufferLockBaseAddress(buf, .readOnly) == kCVReturnSuccess else { return false }
+        defer { CVPixelBufferUnlockBaseAddress(buf, .readOnly) }
+        let w = CVPixelBufferGetWidth(buf)
+        let h = CVPixelBufferGetHeight(buf)
+        guard w > 0, h > 0 else { return false }
+
+        let format = CVPixelBufferGetPixelFormatType(buf)
+        let samplesPerAxis = 5
+        var darkCount = 0
+        let total = samplesPerAxis * samplesPerAxis
+
+        switch format {
+        case kCVPixelFormatType_32BGRA:
+            guard let base = CVPixelBufferGetBaseAddress(buf) else { return false }
+            let stride = CVPixelBufferGetBytesPerRow(buf)
+            let ptr = base.assumingMemoryBound(to: UInt8.self)
+            for row in 0..<samplesPerAxis {
+                for col in 0..<samplesPerAxis {
+                    let x = (col + 1) * w / (samplesPerAxis + 1)
+                    let y = (row + 1) * h / (samplesPerAxis + 1)
+                    let offset = y * stride + x * 4
+                    if ptr[offset] <= 4, ptr[offset + 1] <= 4, ptr[offset + 2] <= 4 {
+                        darkCount += 1
+                    }
+                }
+            }
+
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+            guard CVPixelBufferGetPlaneCount(buf) > 0,
+                  let yBase = CVPixelBufferGetBaseAddressOfPlane(buf, 0) else { return false }
+            let yStride = CVPixelBufferGetBytesPerRowOfPlane(buf, 0)
+            let yPtr = yBase.assumingMemoryBound(to: UInt8.self)
+            // Video-range black is Y=16; full-range black is Y=0.
+            let threshold: UInt8 = format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ? 20 : 4
+            for row in 0..<samplesPerAxis {
+                for col in 0..<samplesPerAxis {
+                    let x = (col + 1) * w / (samplesPerAxis + 1)
+                    let y = (row + 1) * h / (samplesPerAxis + 1)
+                    if yPtr[y * yStride + x] <= threshold { darkCount += 1 }
+                }
+            }
+
+        case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+            guard CVPixelBufferGetPlaneCount(buf) > 0,
+                  let yBase = CVPixelBufferGetBaseAddressOfPlane(buf, 0) else { return false }
+            let yStride = CVPixelBufferGetBytesPerRowOfPlane(buf, 0) / 2
+            let yPtr = yBase.assumingMemoryBound(to: UInt16.self)
+            // 10 useful bits live in the MSBs of each UInt16. Allow code
+            // values 0...4, matching the 8-bit full-range black threshold.
+            let threshold = UInt16(4 << 6)
+            for row in 0..<samplesPerAxis {
+                for col in 0..<samplesPerAxis {
+                    let x = (col + 1) * w / (samplesPerAxis + 1)
+                    let y = (row + 1) * h / (samplesPerAxis + 1)
+                    if yPtr[y * yStride + x] <= threshold { darkCount += 1 }
+                }
+            }
+
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:
+            guard CVPixelBufferGetPlaneCount(buf) > 0,
+                  let yBase = CVPixelBufferGetBaseAddressOfPlane(buf, 0) else { return false }
+            let yStride = CVPixelBufferGetBytesPerRowOfPlane(buf, 0) / 2
+            let yPtr = yBase.assumingMemoryBound(to: UInt16.self)
+            // Video-range 10-bit black is code value 64, stored in the most
+            // significant ten bits. Allow a small capture tolerance.
+            let threshold = UInt16(68 << 6)
+            for row in 0..<samplesPerAxis {
+                for col in 0..<samplesPerAxis {
+                    let x = (col + 1) * w / (samplesPerAxis + 1)
+                    let y = (row + 1) * h / (samplesPerAxis + 1)
+                    if yPtr[y * yStride + x] <= threshold { darkCount += 1 }
+                }
+            }
+
+        default:
+            return false
+        }
+
+        return darkCount >= total - 2
     }
 
     /// Drop when encode or send pipeline is busy.
@@ -1164,7 +2092,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         case "pending_encode":
             drop = pendingEncodes >= maxPendingEncodes
         case "pending_sends":
-            drop = pendingSends >= maxPendingSends
+            // While a pointer owns the receiver, keep at most one video frame
+            // in TCP. Cursor JSON then waits behind one frame at worst instead
+            // of a three-frame video burst. Latest-wins capture dropping keeps
+            // latency bounded and recovers immediately when the pointer leaves.
+            let sendLimit = cursorOwnsReceiver ? 1 : maxPendingSends
+            drop = pendingSends >= sendLimit
         default:
             drop = false
         }
@@ -1189,11 +2122,28 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         pendingEncodes += 1
         pipelineLock.unlock()
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        var frameProperties: CFDictionary?
-        if needsKeyframe {
-            frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary
+        var properties: [CFString: Any] = [:]
+        if encoderIsProRes4444 {
+            // Every ProRes frame is independently decodable. Clear the
+            // reconnect flags on the first submitted frame so the watchdog
+            // does not keep replaying a static frame as a fictitious IDR.
             needsKeyframe = false
+            resyncMainOnNextFrame = false
+        } else if needsKeyframe || resyncMainOnNextFrame {
+            // resyncMainOnNextFrame: the receiver last displayed a refresh
+            // IDR the main session never encoded — its reference chain is
+            // foreign, so this frame must be an IDR too.
+            properties[kVTEncodeFrameOptionKey_ForceKeyFrame] = kCFBooleanTrue
+            needsKeyframe = false
+            resyncMainOnNextFrame = false
         }
+        if let fixedDesktopQP {
+            // BaseFrameQP disables normal rate control for this frame. It is
+            // intentionally supplied on every frame, as required by VT, so
+            // smooth fills cannot silently fall back to coarse VBR blocks.
+            properties[kVTEncodeFrameOptionKey_BaseFrameQP] = fixedDesktopQP as CFNumber
+        }
+        let frameProperties = properties.isEmpty ? nil : properties as CFDictionary
         let submitStatus = VTCompressionSessionEncodeFrame(
             encoder,
             imageBuffer: pixelBuffer,
@@ -1220,8 +2170,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.handleEncodeOutputFailureLogAction(logAction)
                 return
             }
-            if let data = self.annexB(from: buffer) {
-                let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
+            if self.encoderIsProRes4444,
+               let data = self.sampleData(from: buffer) {
+                let wireCodec = self.encoderIsProRes4444XQ
+                    ? "prores4444xq" : "prores4444"
+                var framed = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs),\"codec\":\"\(wireCodec)\",\"w\":\(self.encoderWidth),\"h\":\(self.encoderHeight)}\n".utf8)
+                framed.append(data)
+                self.sendFramed(framed)
+            } else if let data = self.annexB(from: buffer) {
                 var framed = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs)}".utf8)
                 framed.append(data)
                 self.sendFramed(framed)
@@ -1318,7 +2275,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         Log.info("unparseable control message (\(report.detail) bytes, \(report.count) since last report)")
     }
 
-    // MARK: - H.264 -> Annex B
+    /// Copy a self-contained compressed sample (used by ProRes). Unlike the
+    /// Annex-B codecs, ProRes has no out-of-band parameter sets or NAL framing.
+    private func sampleData(from sample: CMSampleBuffer) -> Data? {
+        guard let block = CMSampleBufferGetDataBuffer(sample) else { return nil }
+        let total = CMBlockBufferGetDataLength(block)
+        guard total > 0 else { return nil }
+        var data = Data(count: total)
+        let status = data.withUnsafeMutableBytes { bytes in
+            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: total,
+                                       destination: bytes.baseAddress!)
+        }
+        return status == noErr ? data : nil
+    }
+
+    // MARK: - H.264 / HEVC -> Annex B
 
     private func annexB(from sample: CMSampleBuffer) -> Data? {
         guard let block = CMSampleBufferGetDataBuffer(sample) else { return nil }
@@ -1328,18 +2299,41 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 lengthAtOffsetOut: &len, totalLengthOut: &total,
                 dataPointerOut: &ptr) == noErr, let ptr else { return nil }
 
-        var out = Data(capacity: total + 128)
-        // On keyframes, prepend SPS/PPS (they live in the format description).
+        var out = Data(capacity: total + 256)
+        // On keyframes, prepend the parameter sets (they live in the format
+        // description). Query the REAL count instead of assuming 3 (HEVC) or
+        // 2 (H.264): the low-latency static-refresh session emits 1 VPS +
+        // 1 SPS + FOUR PPS entries whose ids its slices reference — with the
+        // count hardcoded to 3, PPS 1-3 never reached the receiver and every
+        // refresh IDR failed decode (-12909), looping keyframe requests.
         if isKeyframe(sample), let fmt = CMSampleBufferGetFormatDescription(sample) {
-            for i in 0..<2 {           // index 0 = SPS, 1 = PPS
+            let isHEVC = CMFormatDescriptionGetMediaSubType(fmt) == kCMVideoCodecType_HEVC
+            var psCount = 0
+            let countStatus = isHEVC
+                ? CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                    fmt, parameterSetIndex: 0,
+                    parameterSetPointerOut: nil, parameterSetSizeOut: nil,
+                    parameterSetCountOut: &psCount, nalUnitHeaderLengthOut: nil)
+                : CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    fmt, parameterSetIndex: 0,
+                    parameterSetPointerOut: nil, parameterSetSizeOut: nil,
+                    parameterSetCountOut: &psCount, nalUnitHeaderLengthOut: nil)
+            if countStatus != noErr { psCount = isHEVC ? 3 : 2 }
+            for i in 0..<psCount {
                 var psPtr: UnsafePointer<UInt8>?
                 var psLen = 0
-                if CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                let status = isHEVC
+                    ? CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
                         fmt, parameterSetIndex: i,
                         parameterSetPointerOut: &psPtr,
                         parameterSetSizeOut: &psLen,
-                        parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr,
-                   let psPtr {
+                        parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
+                    : CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                        fmt, parameterSetIndex: i,
+                        parameterSetPointerOut: &psPtr,
+                        parameterSetSizeOut: &psLen,
+                        parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
+                if status == noErr, let psPtr {
                     out.append(contentsOf: startCode)
                     out.append(Data(bytes: psPtr, count: psLen))
                 }
@@ -1401,6 +2395,63 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         var frame = Data(bytes: &header, count: 4)
         frame.append(payload)
         connection.send(content: frame, completion: .contentProcessed { _ in })
+    }
+
+    private func configureCursorChannel(_ info: PhoneInfo) {
+        guard let host = info.cursorHost,
+              let rawPort = info.cursorPort,
+              (1...65535).contains(rawPort),
+              let port = NWEndpoint.Port(rawValue: UInt16(rawPort)) else {
+            cursorConnection?.cancel()
+            cursorConnection = nil
+            cursorConnectionReady = false
+            cursorEndpointKey = ""
+            return
+        }
+        let key = "\(host):\(rawPort)"
+        guard key != cursorEndpointKey || cursorConnection?.state != .ready else { return }
+        cursorConnection?.cancel()
+        cursorConnectionReady = false
+        cursorEndpointKey = key
+        let params = NWParameters.udp
+        params.includePeerToPeer = true
+        params.serviceClass = .responsiveData
+        if let requiredInterface = connection?.currentPath?.availableInterfaces.first {
+            params.requiredInterface = requiredInterface
+        }
+        let conn = NWConnection(
+            host: NWEndpoint.Host(host), port: port, using: params)
+        cursorConnection = conn
+        conn.stateUpdateHandler = { [weak self] state in
+            guard let self, self.cursorConnection === conn else { return }
+            switch state {
+            case .ready:
+                self.cursorConnectionReady = true
+                Log.info("cursor UDP channel ready: \(key)")
+            case .failed(let error):
+                self.cursorConnectionReady = false
+                Log.info("cursor UDP channel failed: \(error) — using TCP fallback")
+            case .cancelled:
+                self.cursorConnectionReady = false
+            default:
+                break
+            }
+        }
+        conn.start(queue: queue)
+    }
+
+    private func sendCursorFrame(_ json: String) {
+        if let cursorConnection, cursorConnectionReady {
+            cursorConnection.send(content: Data(json.utf8),
+                                  completion: .contentProcessed { [weak self] error in
+                if let error {
+                    self?.cursorConnectionReady = false
+                    Log.info("cursor UDP send failed: \(error) — using TCP fallback")
+                }
+            })
+        } else {
+            sendJSONFrame(json)
+        }
     }
 
     private func sendFramed(_ payload: Data) {
