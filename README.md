@@ -232,6 +232,42 @@ Open the iPhone app, then pick **"iPhone (WiFi)"** from the Connection menu
 in the Mac app. Discovery is automatic via Bonjour. USB has lower latency;
 WiFi has no cable.
 
+### Run (Mac as the second display — experimental)
+
+A spare Mac (an iMac gathering dust, an old MacBook) can be the *receiving*
+side ([#17](https://github.com/peetzweg/opendisplay/issues/17)): the
+**OpenDisplay Receiver** app speaks the same wire protocol as the iOS app,
+so the sender needs no changes and lists the Mac like it would an iPhone.
+
+```sh
+xcodebuild -project OpenSidecar.xcodeproj -scheme OpenSidecarMacReceiver \
+  -configuration Release -derivedDataPath build build
+```
+
+1. Copy `build/Build/Products/Release/OpenDisplay Receiver.app` onto the
+   spare Mac (macOS 14+) and open it — it listens on port 9000 and
+   advertises itself via Bonjour. If that Mac runs the application firewall
+   (System Settings → Network → Firewall), allow incoming connections when
+   asked — and prefer building with `DEVELOPMENT_TEAM` set (see `.env`),
+   since the firewall can't remember the choice for an ad-hoc-signed build.
+2. Both Macs on the same network — WiFi works; **wired Ethernet (or a
+   Thunderbolt bridge) gives the lowest latency**. There is no USB mode
+   between two Macs (`usbmuxd` is iOS-only).
+3. On the sending Mac, open OpenDisplay and pick the receiver from the
+   device list. The receiver goes fullscreen and becomes a true extended
+   display; the video window's mouse works as input on it (hover moves the
+   pointer, click-drag and scroll pass through).
+
+The receiver announces its panel at native HiDPI size, so UI density
+matches a real monitor; the sender clamps the *encoded stream* to
+3840×2160@60 (H.264 level 5.2's ceiling — the low-latency encoder silently
+drops every frame beyond it), so panels above 4K get a downscaled stream on
+a native-sized display. A "Text size" setting on the receiver's idle screen
+trades resolution for larger UI and lower bandwidth. Keyboard passthrough
+and right-click don't exist on the wire yet (see
+[#5](https://github.com/peetzweg/opendisplay/issues/5) /
+[#6](https://github.com/peetzweg/opendisplay/issues/6)).
+
 ### Permissions checklist
 
 macOS and iOS gate several things this app needs — most prompt on first use,

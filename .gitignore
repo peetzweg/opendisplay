@@ -6,6 +6,7 @@ DerivedData/
 OpenSidecar.xcodeproj/
 Mac/Info.plist
 iOS/Info.plist
+MacReceiver/Info.plist
 
 # Xcode user state
 xcuserdata/

@@ -5,6 +5,26 @@ import Sparkle
 
 /// How the app presents itself. One bundle, switched at runtime via the
 /// activation policy — like Raycast/Hammerspoon style background agents.
+enum TransportPreference: String, CaseIterable {
+    case auto, wifi, bridge
+
+    var label: String {
+        switch self {
+        case .auto: return "Auto"
+        case .wifi: return "WiFi only"
+        case .bridge: return "Thunderbolt Bridge"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .auto: return "Use the best available path (bridge IP from TXT record, then WiFi)."
+        case .wifi: return "Always connect over WiFi / local network."
+        case .bridge: return "Connect directly to the receiver's Thunderbolt bridge IP."
+        }
+    }
+}
+
 enum AppPresentation: String, CaseIterable {
     case menuBar, dock, background
 
@@ -142,7 +162,15 @@ final class DeviceSession: ObservableObject, Identifiable {
     // and its service row.
     var wifiServiceName: String?
 
-    var transportLabel: String { onUSB ? "USB" : "WiFi" }
+    // Whether the WiFi session is currently going through a Thunderbolt
+    // bridge interface (lower latency than WiFi).
+    @Published var onBridge: Bool = false
+
+    var transportLabel: String {
+        if onUSB { return "USB" }
+        if onBridge { return "TB" }
+        return "WiFi"
+    }
 
     init(id: String, target: ConnectionTarget, name: String, sender: MacSender) {
         self.id = id
@@ -185,10 +213,20 @@ final class SenderController: ObservableObject {
     @Published var quality = StreamQuality(rawValue: UserDefaults.standard.string(forKey: "quality") ?? "") ?? .best {
         didSet { UserDefaults.standard.set(quality.rawValue, forKey: "quality") }
     }
+    @Published var transportPref = TransportPreference(rawValue: UserDefaults.standard.string(forKey: "transportPref") ?? "") ?? .auto {
+        didSet { UserDefaults.standard.set(transportPref.rawValue, forKey: "transportPref") }
+    }
+    @Published var bridgeIP = UserDefaults.standard.string(forKey: "bridgeIP") ?? "" {
+        didSet { UserDefaults.standard.set(bridgeIP, forKey: "bridgeIP") }
+    }
 
     var running: Bool { !sessions.isEmpty }
 
     private var browser: NWBrowser?
+    // IPs belonging to Thunderbolt bridge interfaces (link-local 169.254.x.x
+    // on bridge*). Populated from ifconfig on init and refreshed when browse
+    // results change. Used to prefer the bridge over WiFi when both exist.
+    private var bridgeEndpoints: Set<NWEndpoint> = []
     private var usbWatcher: UsbmuxDeviceWatcher?
 
     // Connection policy — one session per physical device, and the cable
@@ -248,18 +286,106 @@ final class SenderController: ObservableObject {
     }
 
     private func startBrowsing() {
+        refreshBridgeEndpoints()
         // TXT records carry the receiver's install id (new receivers).
-        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_opensidecar._tcp", domain: nil), using: .tcp)
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_opensidecar._tcp", domain: nil), using: params)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.discovered = Array(results)
+                self.refreshBridgeEndpoints()
                 self.endSessionsWhoseServiceVanished()
                 self.autoConnect()
             }
         }
         browser.start(queue: .main)
         self.browser = browser
+    }
+
+    // MARK: - Thunderbolt bridge detection
+
+    /// Scan local interfaces for Thunderbolt bridge endpoints. A bridge
+    /// interface has a name like "bridge0" and typically carries a link-local
+    /// address (169.254.x.x). We collect those IPs so we can match them
+    /// against Bonjour-resolved endpoints and prefer the bridge.
+    private func refreshBridgeEndpoints() {
+        var addrs: Set<String> = []
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return }
+        defer { freeifaddrs(first) }
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let iface = ptr?.pointee {
+            let name = String(cString: iface.ifa_name)
+            if name.hasPrefix("bridge"), (iface.ifa_flags & UInt32(IFF_UP)) != 0 {
+                if let sa = iface.ifa_addr, sa.pointee.sa_family == sa_family_t(AF_INET) {
+                    var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(sa, socklen_t(sa.pointee.sa_len),
+                                   &buf, socklen_t(buf.count),
+                                   nil, 0, NI_NUMERICHOST) == 0 {
+                        addrs.insert(String(cString: buf))
+                    }
+                }
+            }
+            ptr = iface.ifa_next
+        }
+        guard !addrs.isEmpty else { return }
+        // Match bridge IPs against current browse results. We compare by IP
+        // prefix because the browse result's endpoint is a .service that
+        // hasn't been resolved yet; however once a connection is established
+        // the resolved IP will match.
+        let bridge = discovered.filter { result in
+            if case .service(_, _, _, let interface) = result.endpoint {
+                if let iface = interface, iface.name.hasPrefix("bridge") { return true }
+            }
+            return false
+        }
+        // Also keep results whose resolved IP matches a bridge address.
+        for addr in addrs {
+            for result in discovered {
+                if case .hostPort(let host, _) = result.endpoint {
+                    if String(describing: host) == addr {
+                        bridgeEndpoints.insert(result.endpoint)
+                    }
+                }
+            }
+        }
+        // Store service endpoints that are on bridge interfaces.
+        for result in bridge {
+            bridgeEndpoints.insert(result.endpoint)
+        }
+    }
+
+    /// Whether a browse result is on a Thunderbolt bridge interface.
+    private func isBridgeResult(_ result: NWBrowser.Result) -> Bool {
+        // NWBrowser commonly coalesces one Bonjour service seen on several
+        // interfaces into a single Result. In that form endpoint.interface is
+        // nil and the actual paths live in Result.interfaces.
+        if result.interfaces.contains(where: { $0.name.hasPrefix("bridge") }) {
+            return true
+        }
+        if case .service(_, _, _, let interface) = result.endpoint,
+           let iface = interface, iface.name.hasPrefix("bridge") { return true }
+        return bridgeEndpoints.contains(result.endpoint)
+    }
+
+    /// The best browse result for a device, preferring Thunderbolt bridge.
+    private func bestResult(for results: [NWBrowser.Result]) -> NWBrowser.Result? {
+        if let bridge = results.first(where: { isBridgeResult($0) }) { return bridge }
+        return results.first
+    }
+
+    /// Group discovered services by device name and return unique entries,
+    /// picking the bridge endpoint for each device when available.
+    private func preferredDiscovered() -> [NWBrowser.Result] {
+        var byName: [String: [NWBrowser.Result]] = [:]
+        for result in discovered {
+            if let name = serviceName(of: result) {
+                byName[name, default: []].append(result)
+            }
+        }
+        return byName.compactMap { bestResult(for: $0.value) }
     }
 
     // MARK: - Physical-device identity
@@ -271,6 +397,12 @@ final class SenderController: ObservableObject {
 
     private func txtID(of result: NWBrowser.Result) -> String? {
         if case .bonjour(let txt) = result.metadata { return txt["id"] }
+        return nil
+    }
+
+    /// Thunderbolt bridge IP advertised by the receiver (from TXT record).
+    private func txtBridgeIP(of result: NWBrowser.Result) -> String? {
+        if case .bonjour(let txt) = result.metadata { return txt["ip"] }
         return nil
     }
 
@@ -334,8 +466,15 @@ final class SenderController: ObservableObject {
                 connect(to: .usb(udid: device.udid))
             }
         }
+        // Upgrade WiFi sessions to Thunderbolt bridge when available.
+        // Same principle as USB upgrade: the bridge is lower latency.
+        for session in sessions where !session.onUSB {
+            upgradeToBridge(session)
+        }
         guard wifiAutoConnectArmed, Date() < wifiAutoConnectDeadline else { return }
-        for result in discovered {
+        // Use preferredDiscovered() so bridge results are picked over WiFi
+        // when the same device is visible on multiple interfaces.
+        for result in preferredDiscovered() {
             let target = ConnectionTarget.wifi(result)
             if wifiRemembered.contains(target.sessionID),
                activeSession(coveringWiFi: result) == nil,
@@ -372,13 +511,98 @@ final class SenderController: ObservableObject {
     private func failover(detachedUDIDs: Set<String>) {
         guard autoConnectEnabled, !detachedUDIDs.isEmpty else { return }
         for session in sessions where session.onUSB {
-            guard let udid = session.usbUDID, detachedUDIDs.contains(udid),
-                  let result = wifiService(for: session) else { continue }
-            Log.info("cable detached for \(session.id) — failing over to WiFi")
-            session.onUSB = false
-            session.wifiServiceName = serviceName(of: result)
-            session.sender.switchTransport(to: .tcp(result.endpoint))
+            guard let udid = session.usbUDID, detachedUDIDs.contains(udid) else { continue }
+            // Try Thunderbolt bridge first, then WiFi.
+            if let bridge = bridgeService(for: session) {
+                Log.info("cable detached for \(session.id) — failing over to bridge")
+                session.onUSB = false
+                session.onBridge = true
+                session.wifiServiceName = serviceName(of: bridge)
+                if let transport = bridgeTransport(for: bridge) {
+                    session.sender.switchTransport(to: transport)
+                }
+            } else if let result = wifiService(for: session) {
+                Log.info("cable detached for \(session.id) — failing over to WiFi")
+                session.onUSB = false
+                session.onBridge = false
+                session.wifiServiceName = serviceName(of: result)
+                session.sender.switchTransport(
+                    to: .tcp(result.endpoint, requiredInterface: nil))
+            }
         }
+    }
+
+    /// Migrate a WiFi session to the Thunderbolt bridge when available.
+    /// The bridge is lower-latency and more stable than WiFi, same as USB.
+    private func upgradeToBridge(_ session: DeviceSession) {
+        guard !session.onUSB, !session.onBridge else { return }
+        guard let result = bridgeService(for: session) else { return }
+        Log.info("bridge available for \(session.id) — migrating from WiFi")
+        session.onBridge = true
+        session.wifiServiceName = serviceName(of: result)
+        if let transport = bridgeTransport(for: result) {
+            session.sender.switchTransport(to: transport)
+        }
+    }
+
+    /// The discovered Thunderbolt bridge service belonging to this session's
+    /// device. Returns nil if no bridge result is found, or if the session
+    /// is already on the bridge endpoint.
+    private func bridgeService(for session: DeviceSession) -> NWBrowser.Result? {
+        guard let currentName = session.wifiServiceName ?? session.name as String? else { return nil }
+        return discovered.first { result in
+            guard isBridgeResult(result) else { return false }
+            if let id = txtID(of: result), let deviceID = session.deviceID {
+                return id == deviceID
+            }
+            return serviceName(of: result) == currentName
+        }
+    }
+
+    /// Find the Thunderbolt bridge browse result that matches a WiFi result
+    /// (same device, different interface). Used during connect() to prefer
+    /// the bridge endpoint.
+    private func bridgeResult(for wifiResult: NWBrowser.Result) -> NWBrowser.Result? {
+        guard let wifiName = serviceName(of: wifiResult) else { return nil }
+        return discovered.first { result in
+            guard isBridgeResult(result), result.endpoint != wifiResult.endpoint else { return false }
+            if let wifiID = txtID(of: wifiResult), let resultID = txtID(of: result) {
+                return wifiID == resultID
+            }
+            return serviceName(of: result) == wifiName
+        }
+    }
+
+    /// Build a dynamic Bonjour transport pinned to the bridge interface. The
+    /// endpoint remains a service name, not a 169.254 address, so every fresh
+    /// connection resolves the receiver's current address after cable/IP
+    /// changes. Pinning the NWInterface is what prevents en0 fallback.
+    private func bridgeTransport(for result: NWBrowser.Result) -> SenderTransport? {
+        let candidate = isBridgeResult(result) ? result : bridgeResult(for: result)
+        guard let candidate else { return nil }
+        let endpointInterface: NWInterface? = {
+            guard case .service(_, _, _, let interface) = candidate.endpoint else { return nil }
+            return interface
+        }()
+        guard let interface = candidate.interfaces.first(where: {
+                  $0.name.hasPrefix("bridge")
+              }) ?? endpointInterface,
+              interface.name.hasPrefix("bridge") else { return nil }
+        return .tcp(candidate.endpoint, requiredInterface: interface)
+    }
+
+    /// Optional diagnostic/manual escape hatch. Dynamic Bonjour is always
+    /// preferred; this is used only if the receiver failed to advertise on
+    /// bridge0 and the user explicitly supplied an address.
+    private func manualBridgeTransport(port: UInt16) -> SenderTransport? {
+        guard !bridgeIP.isEmpty,
+              let result = discovered.first(where: { isBridgeResult($0) }),
+              let interface = result.interfaces.first(where: {
+                  $0.name.hasPrefix("bridge")
+              }) else { return nil }
+        return .tcp(.hostPort(host: NWEndpoint.Host(bridgeIP),
+                              port: NWEndpoint.Port(rawValue: port)!),
+                    requiredInterface: interface)
     }
 
     /// A quit receiver app loses its Bonjour advertisement within ~1s, far
@@ -496,18 +720,53 @@ final class SenderController: ObservableObject {
         }
 
         let transport: SenderTransport
+        var usedBridge = false
         switch target {
         case .usb(let udid):
             guard let portNum = UInt16(port) else { return }
             if UserDefaults.standard.object(forKey: "host") != nil, udid == nil {
                 // Manual override: dial a plain TCP endpoint instead of usbmuxd.
                 transport = .tcp(.hostPort(host: NWEndpoint.Host(host),
-                                           port: NWEndpoint.Port(rawValue: portNum)!))
+                                           port: NWEndpoint.Port(rawValue: portNum)!),
+                                 requiredInterface: nil)
             } else {
                 transport = .usb(udid: udid, port: portNum)
             }
         case .wifi(let result):
-            transport = .tcp(result.endpoint)
+            if let portNum = UInt16(port) {
+                switch self.transportPref {
+                case .bridge:
+                    // Dynamic first: connect to the Bonjour service instance
+                    // discovered specifically on bridge0. Its IP is resolved
+                    // again on every reconnect, so no 169.254 address is
+                    // persisted. Never silently downgrade forced Bridge to
+                    // en0; a manual IP remains only as an explicit fallback.
+                    if let dynamic = bridgeTransport(for: result) {
+                        transport = dynamic
+                        usedBridge = true
+                        Log.info("dynamic bridge service selected for \(self.label(for: target))")
+                    } else if let manual = manualBridgeTransport(port: portNum) {
+                        transport = manual
+                        usedBridge = true
+                        Log.info("manual bridge override selected for \(self.label(for: target))")
+                    } else {
+                        Log.info("bridge mode: receiver is not advertised on bridge0 yet — not falling back to WiFi")
+                        return
+                    }
+                case .wifi:
+                    transport = .tcp(result.endpoint, requiredInterface: nil)
+                case .auto:
+                    if let dynamic = bridgeTransport(for: result) {
+                        transport = dynamic
+                        usedBridge = true
+                        Log.info("auto: dynamic bridge service selected for \(self.label(for: target))")
+                    } else {
+                        transport = .tcp(result.endpoint, requiredInterface: nil)
+                    }
+                }
+            } else {
+                transport = .tcp(result.endpoint, requiredInterface: nil)
+            }
         }
 
         let name = label(for: target)
@@ -518,6 +777,7 @@ final class SenderController: ObservableObject {
         if case .wifi(let result) = target {
             session.wifiServiceName = serviceName(of: result)
         }
+        session.onBridge = usedBridge
         sender.onStatus = { [weak session] text in
             session?.status = text
             Log.info("status[\(id)]: \(text)")
@@ -537,6 +797,9 @@ final class SenderController: ObservableObject {
         sender.onStats = { [weak session] frames, mbps in
             session?.framesSent = frames
             session?.mbps = mbps
+        }
+        sender.onTransportDetected = { [weak session] transport in
+            session?.onBridge = (transport == "bridge")
         }
         sender.onDisconnected = { [weak self, weak session] in
             // Device unplugged / left the network and stayed gone: end this
@@ -618,12 +881,15 @@ final class SenderController: ObservableObject {
         let name: String
         let usbTarget: ConnectionTarget?
         let wifiTarget: ConnectionTarget?
+        /// Whether the WiFi target is on a Thunderbolt bridge interface.
+        var hasBridge = false
 
         var transportLabel: String {
+            let tb = hasBridge ? "TB" : "WiFi"
             switch (usbTarget != nil, wifiTarget != nil) {
-            case (true, true): return "USB · WiFi"
+            case (true, true): return "USB · \(tb)"
             case (true, false): return "USB"
-            case (false, true): return "WiFi"
+            case (false, true): return tb
             default: return ""
             }
         }
@@ -649,14 +915,16 @@ final class SenderController: ObservableObject {
             if let covering = activeSession(coveringUSB: device) {
                 coveredSessionIDs.insert(covering.id)
             }
-            entries.append(DeviceEntry(
+            var entry = DeviceEntry(
                 id: "device:\(device.udid)",
                 name: device.name
                     ?? twin.flatMap(serviceName)
                     ?? session(for: usbTarget.sessionID)?.deviceKind
                     ?? "iPhone / iPad",
                 usbTarget: usbTarget,
-                wifiTarget: twin.map { .wifi($0) }))
+                wifiTarget: twin.map { .wifi($0) })
+            if let twin { entry.hasBridge = isBridgeResult(twin) }
+            entries.append(entry)
         }
         if UserDefaults.standard.object(forKey: "host") != nil {
             let target = ConnectionTarget.usb(udid: nil)
@@ -664,9 +932,15 @@ final class SenderController: ObservableObject {
             entries.append(DeviceEntry(id: target.sessionID, name: label(for: target),
                                        usbTarget: target, wifiTarget: nil))
         }
+        // Group WiFi/bridge results by service name so each device appears
+        // once, with the bridge endpoint preferred when both exist.
+        var wifiByName: [String: [NWBrowser.Result]] = [:]
         for result in discovered {
-            guard let name = serviceName(of: result), !mergedServices.contains(name)
-            else { continue }
+            guard let name = serviceName(of: result), !mergedServices.contains(name) else { continue }
+            wifiByName[name, default: []].append(result)
+        }
+        for (name, results) in wifiByName {
+            guard let result = bestResult(for: results) else { continue }
             let target = ConnectionTarget.wifi(result)
             coveredSessionIDs.insert(target.sessionID)
             // A USB-identity session that failed over to WiFi serves this
@@ -675,8 +949,10 @@ final class SenderController: ObservableObject {
             if let covering = activeSession(coveringWiFi: result) {
                 coveredSessionIDs.insert(covering.id)
             }
-            entries.append(DeviceEntry(id: "service:\(name)", name: name,
-                                       usbTarget: nil, wifiTarget: target))
+            var entry = DeviceEntry(id: "service:\(name)", name: name,
+                                       usbTarget: nil, wifiTarget: target)
+            entry.hasBridge = isBridgeResult(result)
+            entries.append(entry)
         }
         // Sessions whose device vanished from discovery (e.g. Bonjour record
         // gone while the stream is still alive) keep a row to disconnect.
@@ -831,6 +1107,28 @@ struct ContentView: View {
                     Text(controller.quality.explanation)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Connection", selection: $controller.transportPref) {
+                        ForEach(TransportPreference.allCases, id: \.self) { t in
+                            Text(t.label).tag(t)
+                        }
+                    }
+                    .onChange(of: controller.transportPref) {
+                        if controller.running { controller.restartAll() }
+                    }
+                    Text(controller.transportPref.explanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if controller.transportPref == .bridge {
+                        TextField("Receiver bridge IP (169.254.x.x)", text: $controller.bridgeIP)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.caption)
+                        Text("The receiver's Thunderbolt bridge IP. Leave empty to auto-detect from Bonjour.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 4) {

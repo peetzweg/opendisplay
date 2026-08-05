@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import ColorSync
 
 /// Wraps the private CGVirtualDisplay API: makes macOS believe a real monitor
 /// is attached. Sized in points at HiDPI (@2x), so a phone with native pixels
@@ -10,6 +11,10 @@ final class VirtualDisplay {
     private let settings: CGVirtualDisplaySettings
     let pointsWide: Int
     let pointsHigh: Int
+    private let workingColorSpace: WireColorSpace
+    private let targetICCProfile: Data?
+    private let profileFileID: UInt32
+    private var lastColorProfileLog = ""
 
     private var restoreTarget: CGPoint?
     private let restoreUntil: Date
@@ -26,10 +31,16 @@ final class VirtualDisplay {
     /// `onOriginChange` reports where the display sits afterwards, so the
     /// caller can persist user drags.
     init?(name: String, pointsWide: Int, pointsHigh: Int, sizeInMillimeters: CGSize,
-          serialNum: UInt32 = 0x0001, restoreOrigin: CGPoint? = nil,
+          serialNum: UInt32 = 0x0001,
+          workingColorSpace: WireColorSpace = .sRGB,
+          targetICCProfile: Data? = nil,
+          restoreOrigin: CGPoint? = nil,
           onOriginChange: ((CGPoint) -> Void)? = nil) {
         self.pointsWide = pointsWide
         self.pointsHigh = pointsHigh
+        self.workingColorSpace = workingColorSpace
+        self.targetICCProfile = targetICCProfile
+        self.profileFileID = serialNum
         self.restoreTarget = restoreOrigin
         self.restoreUntil = restoreOrigin == nil ? .distantPast : Date().addingTimeInterval(6)
         self.onOriginChange = onOriginChange
@@ -59,6 +70,7 @@ final class VirtualDisplay {
             return nil
         }
         Log.info("virtual display created: id=\(display.displayID) \(pointsWide)x\(pointsHigh)pt @2x")
+        _ = ensureWorkingColorProfile()
 
         // macOS defaults the new display to its 1x mode AND can restore a
         // stale saved mode for this serial asynchronously, seconds after the
@@ -76,11 +88,85 @@ final class VirtualDisplay {
                     guard let self else { return }
                     self.ensureNotMirrored()
                     if self.selectHiDPIMode(recover: settled) { settled = true }
+                    _ = self.ensureWorkingColorProfile()
                     self.manageOrigin()
                 }
-                try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
+                try? await Task.sleep(for: .milliseconds(settled ? 10000 : 200))
             }
         }
+    }
+
+    /// Give WindowServer a wide-gamut framebuffer when the receiving panel is
+    /// P3. Capture-space selection alone is too late: if this virtual display
+    /// remains sRGB, ColorSync clips app content while compositing the desktop
+    /// and those colors cannot be recovered by the encoder or receiver.
+    @discardableResult
+    func ensureWorkingColorProfile() -> Bool {
+        let id = display.displayID
+        let activeSpace = CGDisplayCopyColorSpace(id)
+        let activeData = activeSpace.copyICCData().map { $0 as Data }
+        let activeName = activeSpace.name as String?
+        let activeGamut = ICCProfileGamut.preferredWorkingSpace(
+            profileData: activeData, name: activeName)
+        if let targetICCProfile, activeData == targetICCProfile {
+            logColorProfile("active exact receiver ICC verified (\(targetICCProfile.count)B)")
+            return true
+        } else if targetICCProfile == nil, activeGamut == workingColorSpace {
+            logColorProfile("active \(workingColorSpace.rawValue) profile verified")
+            return true
+        }
+
+        guard let profileURL = requestedProfileURL(),
+              let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue(),
+              let deviceClass = kColorSyncDisplayDeviceClass?.takeUnretainedValue(),
+              let defaultProfile = kColorSyncDeviceDefaultProfileID?.takeUnretainedValue()
+        else {
+            logColorProfile("profile prerequisites unavailable")
+            return false
+        }
+
+        let info = [defaultProfile as String: profileURL] as CFDictionary
+        let applied = ColorSyncDeviceSetCustomProfiles(deviceClass, uuid, info)
+        let requested = targetICCProfile == nil
+            ? workingColorSpace.rawValue
+            : "exact receiver ICC \(targetICCProfile!.count)B"
+        logColorProfile("requested \(requested) profile "
+            + "(active=\(activeName ?? activeGamut.rawValue), result=\(applied))")
+        return false // ColorSync publishes the new active profile asynchronously.
+    }
+
+    private func requestedProfileURL() -> URL? {
+        guard let targetICCProfile else {
+            let profileName = workingColorSpace == .displayP3
+                ? "Display P3.icc"
+                : "sRGB Profile.icc"
+            let url = URL(fileURLWithPath:
+                "/System/Library/ColorSync/Profiles/\(profileName)")
+            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
+        do {
+            let root = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            let directory = root
+                .appendingPathComponent("OpenDisplay", isDirectory: true)
+                .appendingPathComponent("Receiver Color Profiles", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent("\(profileFileID).icc")
+            if (try? Data(contentsOf: url)) != targetICCProfile {
+                try targetICCProfile.write(to: url, options: .atomic)
+            }
+            return url
+        } catch {
+            logColorProfile("could not persist receiver ICC: \(error)")
+            return nil
+        }
+    }
+
+    private func logColorProfile(_ message: String) {
+        guard message != lastColorProfileLog else { return }
+        lastColorProfileLog = message
+        Log.info("virtual display color: \(message)")
     }
 
     /// Returns true when the display is (now) in its HiDPI mode. Silent when
