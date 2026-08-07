@@ -39,6 +39,7 @@ struct ReceiverScreen: View {
     @StateObject private var model = ReceiverModel()
     @StateObject private var versionGate = VersionGate()
     @State private var showSettings = false
+    @State private var showSendToMac = false
     @State private var showOnboarding = false
     @State private var nagDismissed = false
     @Environment(\.scenePhase) private var scenePhase
@@ -87,7 +88,8 @@ struct ReceiverScreen: View {
                         .allowsHitTesting(false)   // never block touch input
                     }
                 } else {
-                    IdleView(receiver: model.receiver, showSettings: $showSettings)
+                    IdleView(receiver: model.receiver, showSettings: $showSettings,
+                             showSendToMac: $showSendToMac)
                 }
             }
             .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
@@ -103,6 +105,10 @@ struct ReceiverScreen: View {
         .persistentSystemOverlays(isStreaming ? .hidden : .automatic)
         .sheet(isPresented: $showSettings) {
             SettingsView(receiver: model.receiver)
+        }
+        // The reverse direction (issue #122): stream THIS device to a Mac.
+        .sheet(isPresented: $showSendToMac) {
+            SendToMacView()
         }
         // Below the force floor → blocking gate. Setter is a no-op: the user
         // cannot dismiss it, only update.
@@ -180,6 +186,7 @@ struct ReceiverScreen: View {
 struct IdleView: View {
     @ObservedObject var receiver: PhoneReceiver
     @Binding var showSettings: Bool
+    @Binding var showSendToMac: Bool
 
     var body: some View {
         VStack(spacing: 28) {
@@ -218,6 +225,14 @@ struct IdleView: View {
                         in: RoundedRectangle(cornerRadius: 16))
 
             Spacer()
+
+            // The reverse direction: mirror this device onto a Mac instead.
+            Button {
+                showSendToMac = true
+            } label: {
+                Label("Show this \(deviceKind) on a Mac", systemImage: "arrow.uturn.left")
+            }
+            .buttonStyle(.bordered)
 
             Button {
                 showSettings = true
