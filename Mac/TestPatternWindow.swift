@@ -4,7 +4,7 @@ import AppKit
 /// Debug aid: a full-screen animated window on the virtual display so the
 /// pipeline streams continuously — without it, ScreenCaptureKit emits nothing
 /// while the screen is static and steady-state latency can't be measured.
-/// Enable with `defaults write sh.peet.opensidecar.mac testPattern -bool true`.
+/// Enable with `defaults write com.peetzweg.opensidecar.mac testPattern -bool true`.
 @MainActor
 enum TestPattern {
     // One window per virtual display — multi-device sessions each get their
