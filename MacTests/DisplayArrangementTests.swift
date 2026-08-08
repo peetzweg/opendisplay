@@ -15,13 +15,19 @@ final class DisplayArrangementTests: XCTestCase {
     }
 
     func testRotationKeepsDisplayFlushRightOfItsNeighbour() {
+        // The saved portrait hangs above the main display, overlapping it by
+        // only its bottom 345pt. Carrying y over verbatim would put the
+        // shorter landscape entirely above the main display — a disconnected
+        // arrangement WindowServer would snap. Slide it down just far enough
+        // to keep the 345pt of shared edge it had.
         let saved = CGRect(x: 1_512, y: -933, width: 588, height: 1_278)
 
         let target = DisplayArrangement.remappedOrigin(from: saved,
                                                         to: CGSize(width: 1_278, height: 588),
                                                         against: [main])
 
-        XCTAssertEqual(target, CGPoint(x: 1_512, y: -933))
+        XCTAssertEqual(target, CGPoint(x: 1_512, y: -243))
+        XCTAssertEqual(CGRect(origin: target, size: CGSize(width: 1_278, height: 588)).maxY - main.minY, 345)
     }
 
     func testRotationKeepsDisplayFlushAboveAndBelowItsNeighbour() {
@@ -72,6 +78,42 @@ final class DisplayArrangementTests: XCTestCase {
                                                from: saved, side: .left, relativeTo: main)
 
         XCTAssertEqual(target, CGPoint(x: -1_278, y: 120))
+    }
+
+    func testSavedSideStillYieldsAConnectedArrangementWhenTheDisplayShrinks() {
+        // Same shape as the remap case above, on the path that actually runs
+        // once a record carries its side: the rotated display must still share
+        // an edge with the main display rather than float off its top.
+        let saved = CGRect(x: 1_512, y: -933, width: 588, height: 1_278)
+        let size = CGSize(width: 1_278, height: 588)
+
+        let target = DisplayArrangement.origin(for: size, from: saved, side: .right, relativeTo: main)
+
+        XCTAssertEqual(target, CGPoint(x: 1_512, y: -243))
+        XCTAssertTrue(CGRect(origin: target, size: size).intersects(main.insetBy(dx: -1, dy: 0)))
+    }
+
+    func testSavedSideRoundTripsWithoutDrift() {
+        let portrait = CGSize(width: 588, height: 1_278)
+        let landscape = CGSize(width: 1_278, height: 588)
+        let saved = CGRect(origin: CGPoint(x: -588, y: 120), size: portrait)
+
+        let rotated = DisplayArrangement.origin(for: landscape, from: saved, side: .left, relativeTo: main)
+        let back = DisplayArrangement.origin(for: portrait,
+                                             from: CGRect(origin: rotated, size: landscape),
+                                             side: .left, relativeTo: main)
+
+        XCTAssertEqual(rotated, CGPoint(x: -1_278, y: 120))
+        XCTAssertEqual(back, saved.origin)
+    }
+
+    func testSavedSideKeepsACornerAttachmentACorner() {
+        let saved = CGRect(x: 1_512, y: -588, width: 1_278, height: 588)
+
+        let target = DisplayArrangement.origin(for: CGSize(width: 588, height: 1_278),
+                                               from: saved, side: .right, relativeTo: main)
+
+        XCTAssertEqual(target, CGPoint(x: 1_512, y: -588))
     }
 
     func testLegacyRecordTouchingMainDisplayCanAlsoKeepItsSide() {

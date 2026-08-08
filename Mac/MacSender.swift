@@ -213,7 +213,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // ScreenCaptureKit and VideoToolbox finish work asynchronously. During a
     // rotation, an old capture callback or a late encoder completion must not
     // put a frame from the retired display onto this device's new socket.
+    // Bumped on `queue` but read from the SCK sample queue and the VideoToolbox
+    // callback queue, so it lives under `pipelineLock` like the other counters
+    // those callbacks touch — read it via `captureGenerationNow`.
     private var captureGeneration: UInt64 = 0
+    private var captureGenerationNow: UInt64 {
+        pipelineLock.lock()
+        defer { pipelineLock.unlock() }
+        return captureGeneration
+    }
 
     // Input latency: touches arrive stamped in our clock (the phone applies
     // its sync offset); delta to now = network + deframe + dispatch.
@@ -519,7 +527,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         config.showsCursor = !localCursor
 
         invalidateCapturePipeline(discardingLastFrame: true)
-        let generation = captureGeneration
+        let generation = captureGenerationNow
         try setupEncoder(width: pixelsWide, height: pixelsHigh)
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
@@ -929,7 +937,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 let pixelBuffer = self.lastPixelBuffer {
                 Log.info("static screen after reconnect to \(self.endpointName) — replaying last frame as keyframe")
                 self.encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()),
-                            generation: self.captureGeneration)
+                            generation: self.captureGenerationNow)
             }
             self.scheduleWatchdog()
         }
@@ -1265,7 +1273,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
         else { return }
 
-        let generation = captureGeneration
+        let generation = captureGenerationNow
 
         lastPixelBuffer = pixelBuffer
         lastCaptureAt = Date()
@@ -1310,7 +1318,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime, generation: UInt64) {
-        guard generation == captureGeneration, let encoder else { return }
+        guard generation == captureGenerationNow, let encoder else { return }
         pipelineLock.lock()
         pendingEncodes += 1
         pipelineLock.unlock()
@@ -1346,7 +1354,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.handleEncodeOutputFailureLogAction(logAction)
                 return
             }
-            guard generation == self.captureGeneration else { return }
+            guard generation == self.captureGenerationNow else { return }
             if let data = self.annexB(from: buffer) {
                 let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
                 var framed = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs)}".utf8)
@@ -1566,7 +1574,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Invalidate the retired ScreenCaptureKit/VideoToolbox callbacks before
     /// changing the display or encoder they feed.
     private func invalidateCapturePipeline(discardingLastFrame: Bool = false) {
+        pipelineLock.lock()
         captureGeneration &+= 1
+        pipelineLock.unlock()
         captureDisplayID = 0
         if discardingLastFrame {
             lastPixelBuffer = nil

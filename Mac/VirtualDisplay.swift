@@ -13,7 +13,7 @@ final class VirtualDisplay {
     private(set) var pointsHigh: Int
 
     private var restoreTarget: CGPoint?
-    private let restoreUntil: Date
+    private var restoreUntil: Date
     private var lastReportedOrigin: CGPoint?
     private let onOriginChange: ((CGPoint, CGSize) -> Void)?
 
@@ -120,8 +120,19 @@ final class VirtualDisplay {
             if CGBeginDisplayConfiguration(&config) == .success {
                 CGConfigureDisplayOrigin(config, display.displayID, Int32(origin.x), Int32(origin.y))
                 let err = CGCompleteDisplayConfiguration(config, .permanently)
+                // A mode change is a display reconfiguration, so macOS may
+                // restore ITS arrangement for this identity a moment later,
+                // exactly as it does after creation. Re-arm the same window so
+                // that gets overridden, and adopt whatever WindowServer settled
+                // on: a snap is system state, and persisting it as if it were a
+                // user drag is the ratchet #203 is about.
+                let settled = CGDisplayBounds(display.displayID).origin
+                restoreTarget = settled
+                restoreUntil = Date().addingTimeInterval(6)
+                lastReportedOrigin = settled
                 Log.info("virtual display \(display.displayID) resized to \(pointsWide)x\(pointsHigh)pt "
-                    + "at (\(Int(origin.x)),\(Int(origin.y))) (result \(err.rawValue))")
+                    + "at (\(Int(origin.x)),\(Int(origin.y))), settled "
+                    + "(\(Int(settled.x)),\(Int(settled.y))) (result \(err.rawValue))")
             }
         } else {
             Log.info("virtual display \(display.displayID) resized to \(pointsWide)x\(pointsHigh)pt")

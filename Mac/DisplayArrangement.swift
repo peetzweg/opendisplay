@@ -4,13 +4,13 @@ import Foundation
 /// Remembers where the user placed each device's virtual display (#116).
 ///
 /// macOS does persist display arrangement, but keys it on the monitor
-/// identity (vendor/product/serial) — and ours legitimately changes: each
-/// orientation uses a distinct serial (saved-mode separation, see
-/// setupExtend), and the serial also derives from the session id, so USB
-/// and WiFi produce different identities for the same iPad. Every such
-/// change makes macOS treat the display as a brand-new monitor and park it
-/// at the default position. Keying saved origins on the device's install id
-/// makes the arrangement follow the physical device instead.
+/// identity (vendor/product/serial) — and ours legitimately changes: the
+/// serial derives from the session id, so USB and WiFi produce different
+/// identities for the same iPad, and a display that has to be rebuilt comes
+/// back as a fresh monitor. Every such change makes macOS treat the display
+/// as brand new and park it at the default position. Keying saved origins on
+/// the device's install id makes the arrangement follow the physical device
+/// instead.
 enum DisplayArrangement {
 
     /// Record the origin (global desktop points) the display settled at.
@@ -31,10 +31,11 @@ enum DisplayArrangement {
 
     /// Where a new display of `size` points should go: the saved spot
     /// verbatim when the size matches. On rotation, keep the device on the
-    /// same side of the built-in display and retain its cross-axis offset. A
-    /// center-preserving remap puts a rotated display half the aspect-ratio
-    /// difference into a gap or overlap; WindowServer then snaps it, and the
-    /// snap becomes the next saved position (#203).
+    /// same side of the built-in display and as close to its cross-axis
+    /// position as still shares an edge with it. A center-preserving remap
+    /// puts a rotated display half the aspect-ratio difference into a gap or
+    /// overlap; WindowServer then snaps it, and the snap becomes the next
+    /// saved position (#203).
     ///
     /// Nil on first contact — let macOS choose.
     static func origin(for size: CGSize, device: String) -> CGPoint? {
@@ -68,14 +69,18 @@ enum DisplayArrangement {
     /// Pure geometry seam for side-preserving arrangement tests.
     static func origin(for size: CGSize, from saved: CGRect, side: Side, relativeTo main: CGRect) -> CGPoint {
         switch side {
-        case .left:
-            return CGPoint(x: main.minX - size.width, y: saved.minY)
-        case .right:
-            return CGPoint(x: main.maxX, y: saved.minY)
-        case .above:
-            return CGPoint(x: saved.minX, y: main.minY - size.height)
-        case .below:
-            return CGPoint(x: saved.minX, y: main.maxY)
+        case .left, .right:
+            let y = crossAxisPosition(
+                saved: saved.minY, length: size.height,
+                against: main.minY...main.maxY,
+                keeping: sharedLength(of: saved.minY...saved.maxY, and: main.minY...main.maxY))
+            return CGPoint(x: side == .left ? main.minX - size.width : main.maxX, y: y)
+        case .above, .below:
+            let x = crossAxisPosition(
+                saved: saved.minX, length: size.width,
+                against: main.minX...main.maxX,
+                keeping: sharedLength(of: saved.minX...saved.maxX, and: main.minX...main.maxX))
+            return CGPoint(x: x, y: side == .above ? main.minY - size.height : main.maxY)
         }
     }
 
@@ -87,19 +92,20 @@ enum DisplayArrangement {
         guard saved.size != size else { return saved.origin }
 
         if let attachment = attachment(of: saved, to: displays) {
+            let neighbour = attachment.display
             switch attachment.side {
-            case .left:
-                return CGPoint(x: attachment.display.minX - size.width,
-                               y: attachment.display.minY + attachment.crossAxisOffset)
-            case .right:
-                return CGPoint(x: attachment.display.maxX,
-                               y: attachment.display.minY + attachment.crossAxisOffset)
-            case .above:
-                return CGPoint(x: attachment.display.minX + attachment.crossAxisOffset,
-                               y: attachment.display.minY - size.height)
-            case .below:
-                return CGPoint(x: attachment.display.minX + attachment.crossAxisOffset,
-                               y: attachment.display.maxY)
+            case .left, .right:
+                let y = crossAxisPosition(saved: saved.minY, length: size.height,
+                                          against: neighbour.minY...neighbour.maxY,
+                                          keeping: attachment.overlap)
+                return CGPoint(x: attachment.side == .left ? neighbour.minX - size.width : neighbour.maxX,
+                               y: y)
+            case .above, .below:
+                let x = crossAxisPosition(saved: saved.minX, length: size.width,
+                                          against: neighbour.minX...neighbour.maxX,
+                                          keeping: attachment.overlap)
+                return CGPoint(x: x,
+                               y: attachment.side == .above ? neighbour.minY - size.height : neighbour.maxY)
             }
         }
 
@@ -138,10 +144,27 @@ enum DisplayArrangement {
         side(of: rect, relativeTo: main, preferring: nil)
     }
 
+    /// Where the rotated display sits along the edge it shares with its
+    /// neighbour: as close to `saved` as it can while still overlapping that
+    /// edge by as much as it did before. Carrying the old offset over verbatim
+    /// is what put a shorter rotated display past the end of the shared edge —
+    /// a disconnected arrangement WindowServer snaps, and the snap is what
+    /// gets saved (#203). `overlap` may legitimately be 0: a corner
+    /// attachment stays a corner attachment.
+    private static func crossAxisPosition(saved: CGFloat, length: CGFloat,
+                                          against neighbour: ClosedRange<CGFloat>,
+                                          keeping overlap: CGFloat) -> CGFloat {
+        let neighbourLength = neighbour.upperBound - neighbour.lowerBound
+        let required = min(overlap, min(length, neighbourLength))
+        let lowest = neighbour.lowerBound - length + required
+        let highest = neighbour.upperBound - required
+        guard lowest <= highest else { return saved }
+        return min(max(saved, lowest), highest)
+    }
+
     private struct Attachment {
         let side: Side
         let display: CGRect
-        let crossAxisOffset: CGFloat
         let overlap: CGFloat
     }
 
@@ -150,27 +173,19 @@ enum DisplayArrangement {
             var attachments: [Attachment] = []
             if saved.maxX == display.minX,
                let overlap = overlap(of: saved.minY...saved.maxY, and: display.minY...display.maxY) {
-                attachments.append(Attachment(side: .left, display: display,
-                                              crossAxisOffset: saved.minY - display.minY,
-                                              overlap: overlap))
+                attachments.append(Attachment(side: .left, display: display, overlap: overlap))
             }
             if saved.minX == display.maxX,
                let overlap = overlap(of: saved.minY...saved.maxY, and: display.minY...display.maxY) {
-                attachments.append(Attachment(side: .right, display: display,
-                                              crossAxisOffset: saved.minY - display.minY,
-                                              overlap: overlap))
+                attachments.append(Attachment(side: .right, display: display, overlap: overlap))
             }
             if saved.maxY == display.minY,
                let overlap = overlap(of: saved.minX...saved.maxX, and: display.minX...display.maxX) {
-                attachments.append(Attachment(side: .above, display: display,
-                                              crossAxisOffset: saved.minX - display.minX,
-                                              overlap: overlap))
+                attachments.append(Attachment(side: .above, display: display, overlap: overlap))
             }
             if saved.minY == display.maxY,
                let overlap = overlap(of: saved.minX...saved.maxX, and: display.minX...display.maxX) {
-                attachments.append(Attachment(side: .below, display: display,
-                                              crossAxisOffset: saved.minX - display.minX,
-                                              overlap: overlap))
+                attachments.append(Attachment(side: .below, display: display, overlap: overlap))
             }
             return attachments
         }
@@ -189,6 +204,10 @@ enum DisplayArrangement {
         // WindowServer permits a desktop to be connected at a single corner.
         // That still gives us a valid attachment side to preserve on rotation.
         return amount >= 0 ? amount : nil
+    }
+
+    private static func sharedLength(of first: ClosedRange<CGFloat>, and second: ClosedRange<CGFloat>) -> CGFloat {
+        overlap(of: first, and: second) ?? 0
     }
 
     private static func activeDisplayBounds() -> [CGRect] {
