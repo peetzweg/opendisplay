@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.16.0](https://github.com/peetzweg/opendisplay/compare/v1.15.0...v1.16.0) (2026-08-08)
+
+
+### Features
+
+* **web:** add compatible apps section to the landing page ([#200](https://github.com/peetzweg/opendisplay/issues/200)) ([3d68908](https://github.com/peetzweg/opendisplay/commit/3d68908808d9b8bfe97a0bad3e1ce0e7e61f43df))
+
+
+### Bug Fixes
+
+* **mac:** fall back to a nil encoderSpecification when creation fails ([#197](https://github.com/peetzweg/opendisplay/issues/197)) ([#202](https://github.com/peetzweg/opendisplay/issues/202)) ([d9eb302](https://github.com/peetzweg/opendisplay/commit/d9eb302d4d25e2c72847420d5e462ff035520e49))
+* **mac:** log rejected encodes instead of dropping them silently ([#118](https://github.com/peetzweg/opendisplay/issues/118)) ([215100d](https://github.com/peetzweg/opendisplay/commit/215100d09477712f75cfd6684a13cc6a68d0edc8))
+* **mac:** preserve virtual displays across rotation ([#210](https://github.com/peetzweg/opendisplay/issues/210)) ([2a4abf7](https://github.com/peetzweg/opendisplay/commit/2a4abf7408866dec05e8461cf7086e8059cda877)), closes [#203](https://github.com/peetzweg/opendisplay/issues/203)
+* **mac:** re-attach capture on stream death instead of full display rebuild ([#29](https://github.com/peetzweg/opendisplay/issues/29)) ([#157](https://github.com/peetzweg/opendisplay/issues/157)) ([ceebb2d](https://github.com/peetzweg/opendisplay/commit/ceebb2d46130c8aac912439279d7b1f71c851e31))
+
 ## [1.15.0](https://github.com/peetzweg/opendisplay/compare/v1.14.0...v1.15.0) (2026-08-02)
 
 
