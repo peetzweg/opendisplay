@@ -222,7 +222,31 @@ final class UsbmuxDeviceWatcher {
 
     init(onChange: @escaping ([UsbmuxDevice]) -> Void) {
         self.onChange = onChange
-        Task { await listenLoop() }
+        Task {
+            // `Listen` only reports changes after its subscription begins.
+            // Seed the watcher from usbmuxd's current inventory as well, so
+            // devices already plugged in when the Mac app launches are not
+            // silently omitted until they are physically reattached.
+            await loadInitiallyAttachedDevices()
+            await listenLoop()
+        }
+    }
+
+    private func loadInitiallyAttachedDevices() async {
+        do {
+            let attached = try await Usbmux.listDevices(queue: queue)
+            guard !attached.isEmpty else { return }
+            for device in attached {
+                devices[device.deviceID] = device
+                Log.info("usbmux initial device: \(device.udid)")
+                resolveName(deviceID: device.deviceID)
+            }
+            publish()
+        } catch {
+            // The long-lived listener retries independently. A failed seed
+            // must not prevent it from observing later attach events.
+            Log.info("usbmux initial device scan: \(error)")
+        }
     }
 
     private func listenLoop() async {

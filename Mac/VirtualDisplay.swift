@@ -7,14 +7,15 @@ import CoreGraphics
 final class VirtualDisplay {
 
     private let display: CGVirtualDisplay
-    private let settings: CGVirtualDisplaySettings
-    let pointsWide: Int
-    let pointsHigh: Int
+    private var settings: CGVirtualDisplaySettings
+    private let maxPointsPerAxis: Int
+    private(set) var pointsWide: Int
+    private(set) var pointsHigh: Int
 
     private var restoreTarget: CGPoint?
     private let restoreUntil: Date
     private var lastReportedOrigin: CGPoint?
-    private let onOriginChange: ((CGPoint) -> Void)?
+    private let onOriginChange: ((CGPoint, CGSize) -> Void)?
 
     var displayID: CGDirectDisplayID { display.displayID }
 
@@ -27,9 +28,13 @@ final class VirtualDisplay {
     /// caller can persist user drags.
     init?(name: String, pointsWide: Int, pointsHigh: Int, sizeInMillimeters: CGSize,
           serialNum: UInt32 = 0x0001, restoreOrigin: CGPoint? = nil,
-          onOriginChange: ((CGPoint) -> Void)? = nil) {
+          onOriginChange: ((CGPoint, CGSize) -> Void)? = nil) {
         self.pointsWide = pointsWide
         self.pointsHigh = pointsHigh
+        // Reserve the longer orientation on both axes. That lets a phone or
+        // tablet change orientation by applying a new mode to this *same*
+        // virtual monitor instead of removing it and stranding its windows.
+        maxPointsPerAxis = max(pointsWide, pointsHigh)
         self.restoreTarget = restoreOrigin
         self.restoreUntil = restoreOrigin == nil ? .distantPast : Date().addingTimeInterval(6)
         self.onOriginChange = onOriginChange
@@ -37,8 +42,8 @@ final class VirtualDisplay {
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.setDispatchQueue(DispatchQueue.main)
         descriptor.name = name
-        descriptor.maxPixelsWide = UInt32(pointsWide * 2)
-        descriptor.maxPixelsHigh = UInt32(pointsHigh * 2)
+        descriptor.maxPixelsWide = UInt32(maxPointsPerAxis * 2)
+        descriptor.maxPixelsHigh = UInt32(maxPointsPerAxis * 2)
         descriptor.sizeInMillimeters = sizeInMillimeters
         descriptor.productID = 0x4F53   // "OS"
         descriptor.vendorID = 0x5043    // "PC"
@@ -83,6 +88,47 @@ final class VirtualDisplay {
         }
     }
 
+    /// Change orientation without changing the virtual monitor's identity.
+    /// Releasing a CGVirtualDisplay makes WindowServer redistribute every
+    /// window on it before the replacement appears; with multiple devices,
+    /// it may choose a sibling virtual display. Applying a new mode avoids
+    /// that reassignment entirely.
+    ///
+    /// Must be called on the main thread.
+    @discardableResult
+    func resize(pointsWide: Int, pointsHigh: Int, movingTo origin: CGPoint?) -> Bool {
+        guard pointsWide <= maxPointsPerAxis, pointsHigh <= maxPointsPerAxis else {
+            Log.info("virtual display \(display.displayID) cannot resize beyond its descriptor")
+            return false
+        }
+
+        let newSettings = CGVirtualDisplaySettings()
+        newSettings.hiDPI = 1
+        newSettings.modes = [
+            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
+        ]
+        guard display.apply(newSettings) else {
+            Log.info("virtual display \(display.displayID) applySettings FAILED during resize")
+            return false
+        }
+        settings = newSettings
+        self.pointsWide = pointsWide
+        self.pointsHigh = pointsHigh
+
+        if let origin {
+            var config: CGDisplayConfigRef?
+            if CGBeginDisplayConfiguration(&config) == .success {
+                CGConfigureDisplayOrigin(config, display.displayID, Int32(origin.x), Int32(origin.y))
+                let err = CGCompleteDisplayConfiguration(config, .permanently)
+                Log.info("virtual display \(display.displayID) resized to \(pointsWide)x\(pointsHigh)pt "
+                    + "at (\(Int(origin.x)),\(Int(origin.y))) (result \(err.rawValue))")
+            }
+        } else {
+            Log.info("virtual display \(display.displayID) resized to \(pointsWide)x\(pointsHigh)pt")
+        }
+        return true
+    }
+
     /// Returns true when the display is (now) in its HiDPI mode. Silent when
     /// nothing needed doing — this runs every 2s as enforcement. With
     /// `recover`, a missing @2x mode (macOS can replace the whole mode list
@@ -124,7 +170,13 @@ final class VirtualDisplay {
         let id = display.displayID
         let origin = CGDisplayBounds(id).origin
         if let target = restoreTarget, Date() < restoreUntil {
-            guard origin != target else { return }
+            // Initial arrangement is system state, not a user drag. Mark it
+            // observed so it cannot overwrite the saved device placement
+            // when the restore window expires (#203).
+            guard origin != target else {
+                lastReportedOrigin = origin
+                return
+            }
             var config: CGDisplayConfigRef?
             guard CGBeginDisplayConfiguration(&config) == .success else { return }
             CGConfigureDisplayOrigin(config, id, Int32(target.x), Int32(target.y))
@@ -133,6 +185,9 @@ final class VirtualDisplay {
             // arrangement — adopt what it settled on, or every remaining
             // tick of the window would re-apply against the snap.
             restoreTarget = CGDisplayBounds(id).origin
+            // A snap is also system state. Keep observing from the settled
+            // point, but only a later origin change may be a user drag.
+            lastReportedOrigin = restoreTarget
             Log.info("display \(id) origin (\(Int(origin.x)),\(Int(origin.y))) → restored "
                 + "(\(Int(target.x)),\(Int(target.y))), settled "
                 + "(\(Int(restoreTarget!.x)),\(Int(restoreTarget!.y))) (result \(err.rawValue))")
@@ -140,7 +195,7 @@ final class VirtualDisplay {
         }
         if origin != lastReportedOrigin {
             lastReportedOrigin = origin
-            onOriginChange?(origin)
+            onOriginChange?(origin, CGSize(width: pointsWide, height: pointsHigh))
         }
     }
 

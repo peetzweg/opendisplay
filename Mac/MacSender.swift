@@ -210,6 +210,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var lastCursorSent: (x: Double, y: Double, visible: Bool) = (-1, -1, false)
     private var lastCursorPNGHash = 0
     private var captureDisplayID: CGDirectDisplayID = 0
+    // ScreenCaptureKit and VideoToolbox finish work asynchronously. During a
+    // rotation, an old capture callback or a late encoder completion must not
+    // put a frame from the retired display onto this device's new socket.
+    private var captureGeneration: UInt64 = 0
 
     // Input latency: touches arrive stamped in our clock (the phone applies
     // its sync offset); delta to now = network + deframe + dispatch.
@@ -340,13 +344,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let displayName = endpointName.hasPrefix("iPhone / iPad")
             ? "OpenDisplay — \(info.kind)"
             : "OpenDisplay — \(endpointName)"
-        // Orientation-specific serial: macOS persists the chosen mode per
-        // serial, and a portrait mode restored onto a landscape display
-        // pillarboxes the desktop INTO the framebuffer (streamed as-is).
-        // Distinct serials per orientation keep the two configs apart.
-        let serial = info.pixelsWide >= info.pixelsHigh
-            ? displaySerial
-            : displaySerial ^ 0x8000_0000
+        // Keep one stable identity across rotations. Reconfiguration below
+        // applies a new mode to the existing virtual monitor, so macOS keeps
+        // its windows and arrangement attached to this physical device.
+        let serial = displaySerial
         // Arrangement memory (#116): keyed on the device's install id so the
         // display returns to its spot across transports and orientations —
         // the serial-keyed memory macOS keeps starts from scratch whenever
@@ -368,15 +369,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // `if stopped` checks in the permission-poll loops above.)
             if stopped { return }
             vd = await MainActor.run {
-                VirtualDisplay(name: displayName,
-                               pointsWide: pointsWide, pointsHigh: pointsHigh,
-                               sizeInMillimeters: mm, serialNum: serial,
-                               restoreOrigin: DisplayArrangement.origin(for: sizeInPoints,
-                                                                        device: arrangementKey),
-                               onOriginChange: { origin in
-                                   DisplayArrangement.save(origin: origin, size: sizeInPoints,
-                                                           device: arrangementKey)
-                               })
+                let restoreOrigin = DisplayArrangement.origin(for: sizeInPoints, device: arrangementKey)
+                return VirtualDisplay(name: displayName,
+                                      pointsWide: pointsWide, pointsHigh: pointsHigh,
+                                      sizeInMillimeters: mm, serialNum: serial,
+                                      restoreOrigin: restoreOrigin,
+                                      onOriginChange: { origin, currentSize in
+                                          DisplayArrangement.save(origin: origin, size: currentSize,
+                                                                  device: arrangementKey)
+                                      })
             }
             if vd != nil { break }
             Log.info("virtual display creation failed (attempt \(attempt + 1)) — retrying")
@@ -416,14 +417,25 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         var target = info
         while !stopped {
             Log.info("reconfiguring for \(target.pixelsWide)x\(target.pixelsHigh)")
+            // A cached frame is valid for a network reconnect to the same
+            // display, but never for a rotation: it belongs to the retired
+            // desktop and can otherwise be replayed onto the new one.
+            invalidateCapturePipeline(discardingLastFrame: true)
             if let stream { try? await stream.stopCapture() }
             stream = nil
             if let encoder { VTCompressionSessionInvalidate(encoder) }
             encoder = nil
-            virtualDisplay = nil   // removes the old display
             needsKeyframe = true
             do {
-                try await setupExtend(target)
+                if try await resizeExistingDisplay(for: target) {
+                    // The display identity survived, so WindowServer has no
+                    // reason to migrate this device's windows to a sibling.
+                } else {
+                    // Safety fallback for a system that refuses an in-place
+                    // mode switch. This keeps the old recovery behaviour.
+                    virtualDisplay = nil
+                    try await setupExtend(target)
+                }
             } catch {
                 Log.info("reconfigure failed: \(error)")
                 await status("Rotation failed: \(error.localizedDescription)")
@@ -438,11 +450,46 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    /// Apply the rotated mode to the existing virtual monitor and restart
+    /// only the capture/encoder pieces that depend on pixel dimensions.
+    /// Returns false when there is no reusable display or macOS rejected the
+    /// mode switch, letting the caller use the legacy rebuild fallback.
+    private func resizeExistingDisplay(for info: PhoneInfo) async throws -> Bool {
+        guard let vd = virtualDisplay else { return false }
+
+        let pointsWide = (info.pixelsWide / 2) & ~1
+        let pointsHigh = (info.pixelsHigh / 2) & ~1
+        let arrangementKey = info.id ?? String(format: "serial-%08x", displaySerial)
+        let size = CGSize(width: pointsWide, height: pointsHigh)
+        let didResize = await MainActor.run {
+            vd.resize(pointsWide: pointsWide, pointsHigh: pointsHigh,
+                      movingTo: DisplayArrangement.origin(for: size, device: arrangementKey))
+        }
+        guard didResize else { return false }
+
+        let display = try await findSCDisplay(id: vd.displayID, expectedSize: size)
+        let captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
+        let captureH = (Int(Double(pointsHigh * 2) * quality.scale)) & ~1
+        try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
+        inputInjector = InputInjector(displayID: vd.displayID)
+
+        if UserDefaults.standard.bool(forKey: "testPattern") {
+            let id = vd.displayID
+            Task { @MainActor in TestPattern.show(on: id) }
+        }
+        return true
+    }
+
     /// The virtual display takes a moment to show up in shareable content.
-    private func findSCDisplay(id: CGDirectDisplayID) async throws -> SCDisplay {
+    private func findSCDisplay(id: CGDirectDisplayID, expectedSize: CGSize? = nil) async throws -> SCDisplay {
         for _ in 0..<20 {
             let content = try await SCShareableContent.current
-            if let display = content.displays.first(where: { $0.displayID == id }) {
+            if let display = content.displays.first(where: {
+                $0.displayID == id
+                    && (expectedSize == nil
+                        || ($0.width == Int(expectedSize!.width)
+                            && $0.height == Int(expectedSize!.height)))
+            }) {
                 return display
             }
             try await Task.sleep(for: .milliseconds(250))
@@ -471,23 +518,31 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         config.queueDepth = 8
         config.showsCursor = !localCursor
 
+        invalidateCapturePipeline(discardingLastFrame: true)
+        let generation = captureGeneration
         try setupEncoder(width: pixelsWide, height: pixelsHigh)
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        try await stream.startCapture()
         self.stream = stream
+        do {
+            try await stream.startCapture()
+        } catch {
+            if self.stream === stream { self.stream = nil }
+            throw error
+        }
         captureDisplayID = display.displayID
         lastCursorPNGHash = 0      // rotation rebuilds: re-send the sprite
         lastCursorSent = (-1, -1, false)
         startCursorEcho()
-        Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) mode \(mode.rawValue) localCursor=\(localCursor)")
+        Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) generation \(generation) mode \(mode.rawValue) localCursor=\(localCursor)")
         let kind = lastHello?.kind ?? "device"
         await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
     }
 
     func stop() {
         stopped = true
+        invalidateCapturePipeline(discardingLastFrame: true)
         cursorTimer?.cancel()
         cursorTimer = nil
         cursorImageTimer?.cancel()
@@ -585,11 +640,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
+        // A retired stream commonly reports its stop after the replacement is
+        // already live. It must not tear down that replacement (#203).
+        guard stream === self.stream else { return }
         Log.info("stream stopped with error: \(error)")
         Task { await status("Capture stopped: \(error.localizedDescription)") }
         // E.g. display sleep can tear the virtual display down underneath the
         // stream — rebuild instead of sitting dead until an app restart.
         guard !stopped, mode == .extend else { return }
+        invalidateCapturePipeline()
         self.stream = nil
         scheduleCaptureRecovery()
     }
@@ -867,9 +926,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // the receiver would stay black — replay the last frame as IDR.
             if self.connectionReady, self.needsKeyframe,
                Date().timeIntervalSince(self.lastCaptureAt) > 1,
-               let pixelBuffer = self.lastPixelBuffer {
-                Log.info("static screen after reconnect — replaying last frame as keyframe")
-                self.encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()))
+                let pixelBuffer = self.lastPixelBuffer {
+                Log.info("static screen after reconnect to \(self.endpointName) — replaying last frame as keyframe")
+                self.encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()),
+                            generation: self.captureGeneration)
             }
             self.scheduleWatchdog()
         }
@@ -1199,10 +1259,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream,
                 didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
-        guard type == .screen,
+        guard stream === self.stream,
+              type == .screen,
               CMSampleBufferIsValid(sampleBuffer),
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
         else { return }
+
+        let generation = captureGeneration
 
         lastPixelBuffer = pixelBuffer
         lastCaptureAt = Date()
@@ -1213,7 +1276,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if shouldDropFrame(reason: "pending_encode") { return }  // encoder busy
         if shouldDropFrame(reason: "pending_sends") { return }   // TCP send queue full
 
-        encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), generation: generation)
     }
 
     /// Drop when encode or send pipeline is busy.
@@ -1246,8 +1309,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         return true
     }
 
-    private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime) {
-        guard let encoder else { return }
+    private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime, generation: UInt64) {
+        guard generation == captureGeneration, let encoder else { return }
         pipelineLock.lock()
         pendingEncodes += 1
         pipelineLock.unlock()
@@ -1283,6 +1346,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.handleEncodeOutputFailureLogAction(logAction)
                 return
             }
+            guard generation == self.captureGeneration else { return }
             if let data = self.annexB(from: buffer) {
                 let sndMs = Int64(Date().timeIntervalSince1970 * 1000)
                 var framed = Data("{\"cap\":\(capturedAtMs),\"snd\":\(sndMs)}".utf8)
@@ -1497,5 +1561,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func status(_ text: String) async {
         await MainActor.run { onStatus?(text) }
+    }
+
+    /// Invalidate the retired ScreenCaptureKit/VideoToolbox callbacks before
+    /// changing the display or encoder they feed.
+    private func invalidateCapturePipeline(discardingLastFrame: Bool = false) {
+        captureGeneration &+= 1
+        captureDisplayID = 0
+        if discardingLastFrame {
+            lastPixelBuffer = nil
+            lastCaptureAt = .distantPast
+        }
     }
 }

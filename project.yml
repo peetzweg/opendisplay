@@ -93,6 +93,7 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - MacTests
+      - Mac/DisplayArrangement.swift
       - Mac/Log.swift
       - Mac/LogPolicies.swift
     settings:
