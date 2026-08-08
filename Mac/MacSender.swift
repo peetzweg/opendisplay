@@ -240,6 +240,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // keyframe on — so keep the last frame around and re-encode it.
     private var lastPixelBuffer: CVPixelBuffer?
     private var lastCaptureAt = Date.distantPast
+    /// Debounced replay after encoder/send backpressure drops a frame.
+    /// At most one timer is active; each new drop resets the 30ms deadline.
+    private var dropReplayTimer: DispatchSourceTimer?
 
     init(transport: SenderTransport, name: String, mode: CaptureMode,
          quality: StreamQuality = .best, displaySerial: UInt32 = 0x0001,
@@ -496,6 +499,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if let encoder { VTCompressionSessionInvalidate(encoder) }
         encoder = nil
         virtualDisplay = nil   // releasing it removes the display
+        cancelDropReplayTimer()
         queue.async { [weak self] in
             // Unblock a start() that is still waiting for the hello.
             self?.helloContinuation?.resume(throwing: CancellationError())
@@ -629,6 +633,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         consecutiveRefusals = 0
         disconnectedSince = nil
         needsKeyframe = true   // new peer needs SPS/PPS + IDR
+        // Drop any cached pixels from before this connection — otherwise a
+        // manual reconnect on a static virtual display replays the last
+        // captured frame (e.g. Chrome) even after the app was quit.
+        lastPixelBuffer = nil
+        cancelDropReplayTimer()
         // A reconnect can recreate the phone's video view with no cursor
         // sprite; the sprite is otherwise only sent on shape change, so the
         // cursor would stay invisible until the user hovers something that
@@ -1150,6 +1159,41 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
     }
 
+    private func isPipelineBackedUp() -> Bool {
+        pipelineLock.lock()
+        defer { pipelineLock.unlock() }
+        return pendingEncodes >= maxPendingEncodes || pendingSends >= maxPendingSends
+    }
+
+    /// Schedule (or reset) a one-shot replay of `lastPixelBuffer` after drops.
+    private func scheduleDropReplayTimer() {
+        dropReplayTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .milliseconds(30))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.dropReplayTimer = nil
+            self.replayLastFrameAfterDrop()
+        }
+        timer.resume()
+        dropReplayTimer = timer
+    }
+
+    private func cancelDropReplayTimer() {
+        dropReplayTimer?.cancel()
+        dropReplayTimer = nil
+    }
+
+    /// Re-encode the most recent pixel buffer once backpressure clears.
+    private func replayLastFrameAfterDrop() {
+        guard !stopped, connectionReady, let pixelBuffer = lastPixelBuffer else { return }
+        if isPipelineBackedUp() {
+            scheduleDropReplayTimer()
+            return
+        }
+        encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()))
+    }
+
     /// Drop when encode or send pipeline is busy.
     /// Pre-encode drops are invisible to the decoder — the H.264 reference
     /// chain stays intact, so the next frame can be a normal P-frame (n → n+2).
@@ -1167,6 +1211,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         pipelineLock.unlock()
         guard drop else { return false }
+        scheduleDropReplayTimer()
         switch reason {
         case "pending_encode":
             dropsEncThisWindow += 1
@@ -1375,6 +1420,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 Log.info("send error: \(error)")
                 return
             }
+            self.cancelDropReplayTimer()
             self.framesSent += 1
             self.bytesSent += frame.count
             // Report stats roughly once a second.
