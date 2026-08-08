@@ -1258,7 +1258,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.sendFramed(framed)
             }
         }
-        if submitStatus != noErr {
+        if submitStatus == noErr {
+            // Encode submission commits this frame to the pipeline; stale in-flight
+            // encodes started before a drop won't reach here again, so cancel replay.
+            cancelDropReplayTimer()
+        } else {
             pipelineLock.lock()
             pendingEncodes = max(0, pendingEncodes - 1)
             // A dead encoder session keeps failing, and this runs per frame, so
@@ -1420,7 +1424,6 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 Log.info("send error: \(error)")
                 return
             }
-            self.cancelDropReplayTimer()
             self.framesSent += 1
             self.bytesSent += frame.count
             // Report stats roughly once a second.
