@@ -248,8 +248,12 @@ final class SenderController: ObservableObject {
     }
 
     private func startBrowsing() {
+        // Include Apple's peer-to-peer WiFi path so Bonjour discovery also
+        // works when the Mac and receiver are not joined to an access point.
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
         // TXT records carry the receiver's install id (new receivers).
-        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_opensidecar._tcp", domain: nil), using: .tcp)
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_opensidecar._tcp", domain: nil), using: params)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             DispatchQueue.main.async {
                 guard let self else { return }

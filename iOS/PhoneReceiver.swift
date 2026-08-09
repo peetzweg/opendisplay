@@ -328,6 +328,9 @@ final class PhoneReceiver: ObservableObject {
             let params = NWParameters(tls: nil, tcp: tcp)
             params.allowLocalEndpointReuse = true
             params.serviceClass = .interactiveVideo
+            // Advertise and accept over Apple's peer-to-peer WiFi path as
+            // well as a normal LAN, so no access point is required.
+            params.includePeerToPeer = true
             listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
         } catch {
             setStatus("Listener failed: \(error.localizedDescription)")

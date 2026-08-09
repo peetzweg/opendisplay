@@ -749,6 +749,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let options = NWProtocolTCP.Options()
         options.noDelay = true   // latency matters more than throughput here
         let params = NWParameters(tls: nil, tcp: options)
+        // The Bonjour endpoint may live on Apple's peer-to-peer WiFi path
+        // when there is no infrastructure network.
+        params.includePeerToPeer = true
         let conn = NWConnection(to: endpoint, using: params)
         connection = conn
         // A dial to a withdrawn Bonjour service (receiver asleep or app

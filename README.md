@@ -48,7 +48,8 @@ pipeline, USB transport, input injection) are already working.
   cable via macOS's built-in `usbmuxd`; plug in and go, no network, no
   WiFi jitter, no helper tools.
 - 📶 **WiFi with zero config** — the iPhone advertises itself via Bonjour;
-  pick it from a dropdown on the Mac.
+  pick it from a dropdown on the Mac. Apple peer-to-peer WiFi also works when
+  no router or access point is available.
 - 🔍 **Retina / HiDPI** — the virtual display matches the device panel
   pixel-for-pixel (@2x), so text is sharp.
 - 👆 **Touch input built in** — your iPhone becomes a touchscreen for macOS:
@@ -86,8 +87,9 @@ you a capture is running.
 **The Mac app doesn't show my iPhone in the Connection menu (WiFi).**
 Both sides need **Local Network** permission, and both fail *silently*
 without it: check Privacy & Security → Local Network on the Mac **and** on
-the iPhone, make sure both are on the same WiFi network, and keep the
-iPhone app open in the foreground. USB mode is unaffected.
+the iPhone, make sure WiFi is enabled on both devices, and keep the iPhone app
+open in the foreground. They may use the same WiFi network or connect directly
+with Apple peer-to-peer WiFi. USB mode is unaffected.
 
 **What USB cable or version do I need?** Your cable **must support data** — a
 charge-only USB cable will **not** work. Look for a cable described as a
@@ -241,8 +243,10 @@ under Membership, or just pick your team in Xcode's Signing pane.)
 ### Run (WiFi)
 
 Open the iPhone app, then pick **"iPhone (WiFi)"** from the Connection menu
-in the Mac app. Discovery is automatic via Bonjour. USB has lower latency;
-WiFi has no cable.
+in the Mac app. Discovery is automatic via Bonjour. When both devices are on
+the same LAN OpenDisplay uses it; without an access point, Network.framework
+can establish an Apple peer-to-peer WiFi link instead. Keep WiFi enabled on
+both devices. USB has lower latency; WiFi has no cable.
 
 ### Permissions checklist
 
