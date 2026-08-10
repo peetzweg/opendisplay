@@ -737,10 +737,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         consecutiveRefusals = 0
         disconnectedSince = nil
         needsKeyframe = true   // new peer needs SPS/PPS + IDR
-        // Drop any cached pixels from before this connection — otherwise a
-        // manual reconnect on a static virtual display replays the last
-        // captured frame (e.g. Chrome) even after the app was quit.
-        lastPixelBuffer = nil
+        // Keep cached pixels: ScreenCaptureKit stays quiet on a static
+        // display, and the watchdog needs them to force the reconnect IDR.
         cancelDropReplayTimer()
         // A reconnect can recreate the phone's video view with no cursor
         // sprite; the sprite is otherwise only sent on shape change, so the
@@ -1328,7 +1326,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             scheduleDropReplayTimer()
             return
         }
-        encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()))
+        encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()),
+               generation: captureGenerationNow)
     }
 
     /// Drop when encode or send pipeline is busy.
