@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.1](https://github.com/peetzweg/opendisplay/compare/v1.16.0...v1.16.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* Prevent Mac & iOS device displays from diverging due to dropped frames ([#207](https://github.com/peetzweg/opendisplay/issues/207)) ([c8b2417](https://github.com/peetzweg/opendisplay/commit/c8b24177cbab6df58bfc727873261c53a412cb89))
+
 ## [1.16.0](https://github.com/peetzweg/opendisplay/compare/v1.15.0...v1.16.0) (2026-08-08)
 
 
