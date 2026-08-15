@@ -18,6 +18,11 @@ final class VirtualDisplay {
     private let onOriginChange: ((CGPoint, CGSize) -> Void)?
 
     var displayID: CGDirectDisplayID { display.displayID }
+    var isUsable: Bool {
+        !CGDisplayBounds(displayID).isEmpty
+            && CGDisplayIsOnline(displayID) != 0
+            && CGDisplayIsActive(displayID) != 0
+    }
 
     /// Must be called on the main thread. `serialNum` must be unique per
     /// concurrent display AND stable per device — macOS keys saved display
@@ -45,7 +50,10 @@ final class VirtualDisplay {
         descriptor.maxPixelsWide = UInt32(maxPointsPerAxis * 2)
         descriptor.maxPixelsHigh = UInt32(maxPointsPerAxis * 2)
         descriptor.sizeInMillimeters = sizeInMillimeters
-        descriptor.productID = 0x4F53   // "OS"
+        // A stale WindowServer record can pin one identity offline. A fresh
+        // product ID per rebuild bypasses that cache; arrangement is restored
+        // separately by DisplayArrangement.
+        descriptor.productID = UInt32.random(in: 0x1000...0xFFFE)
         descriptor.vendorID = 0x5043    // "PC"
         descriptor.serialNum = serialNum
         descriptor.terminationHandler = { _, _ in
