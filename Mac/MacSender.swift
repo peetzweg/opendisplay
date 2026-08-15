@@ -466,7 +466,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Returns false when there is no reusable display or macOS rejected the
     /// mode switch, letting the caller use the legacy rebuild fallback.
     private func resizeExistingDisplay(for info: PhoneInfo) async throws -> Bool {
-        guard let vd = virtualDisplay else { return false }
+        guard let vd = virtualDisplay, vd.isUsable else { return false }
 
         let pointsWide = (info.pixelsWide / 2) & ~1
         let pointsHigh = (info.pixelsHigh / 2) & ~1
@@ -675,13 +675,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             guard let self, !self.stopped, self.stream == nil,
                   let hello = self.lastHello else { return }
-            // Does our virtual display still exist? CGDisplayBounds returns a
-            // zero rect for an unknown id, so a non-empty bounds means it's live.
-            // Test isEmpty, not isNull: isNull is only true for the special
-            // CGRect.null, so it reads as "live" for a dead display too and the
-            // rebuild fallback below would become unreachable.
-            if let vd = self.virtualDisplay,
-               !CGDisplayBounds(vd.displayID).isEmpty {
+            // WindowServer may keep non-empty bounds for a display it has
+            // already marked offline. Re-attach only to an online, active
+            // display; otherwise rebuild with a fresh identity.
+            if let vd = self.virtualDisplay, vd.isUsable {
                 Log.info("capture died — display still present, re-attaching capture only (#29)")
                 Task {
                     do {
@@ -703,8 +700,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
                 return
             }
-            // Display genuinely gone — full rebuild (preserves old behavior).
-            Log.info("capture died — rebuilding pipeline")
+            Log.info("capture died — display offline, rebuilding with fresh identity")
             Task {
                 await self.reconfigure(hello)
                 self.queue.async {
