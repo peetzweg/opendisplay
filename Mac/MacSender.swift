@@ -83,6 +83,7 @@ struct PhoneInfo: Decodable {
 enum SenderTransport {
     case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
+    case accessory                         // Android over USB, no adb — see USBAccessory.swift
 }
 
 @available(macOS 14.0, *)
@@ -111,6 +112,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var encoder: VTCompressionSession?
     /// Active transport connection. See ByteStream.swift.
     private var peer: ByteStream?
+    /// Kept alive for the duration of an AOA dial — it owns the wait for the
+    /// device to re-enumerate.
+    private var androidAccessoryConnector: AndroidAccessoryConnector?
     private var virtualDisplay: VirtualDisplay?
     private let queue = DispatchQueue(label: "sender.video")
     private let startCode: [UInt8] = [0, 0, 0, 1]
@@ -726,8 +730,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         switch transport {
         case .tcp(let endpoint): connectTCP(endpoint)
         case .usb(let udid, let port): connectUSB(udid: udid, port: port)
+        case .accessory: connectAndroidAccessory()
         }
     }
+
 
     /// Bookkeeping shared by both transports once a connection is live.
     private func becomeReady(_ peer: ByteStream) {
@@ -863,6 +869,30 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    /// Android over USB via AOA. See USBAccessory.swift.
+    ///
+    /// It can take seconds because the device leaves the bus and re-enumerates, and on
+    /// first plug the user has an accessory dialog to dismiss.
+    /// `dialGeneration` guards against a stale dial adopting late.
+    private func connectAndroidAccessory() {
+        dialGeneration += 1
+        let generation = dialGeneration
+        let connector = AndroidAccessoryConnector(queue: queue)
+        androidAccessoryConnector = connector
+        Task { await status("Putting the Android device into accessory mode…") }
+        connector.connect { [weak self] result in
+            guard let self, generation == self.dialGeneration, !self.stopped else { return }
+            switch result {
+            case .success(let peer):
+                self.peer = peer
+                self.becomeReady(peer)
+            case .failure(let error):
+                Log.info("accessory dial failed: \(error)")
+                Task { await self.status("USB: \(error.localizedDescription)") }
+                self.scheduleReconnect()
+            }
+        }
+    }
     private func scheduleReconnect() {
         guard !stopped else { return }
         if everConnected {
