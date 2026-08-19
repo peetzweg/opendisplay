@@ -151,10 +151,13 @@ final class DeviceSession: ObservableObject, Identifiable {
         self.target = target
         self.name = name
         self.sender = sender
-        if case .usb(let udid) = target {
+        switch target {
+        case .usb(let udid):
             onUSB = true
             usbUDID = udid
-        } else {
+        case .accessory:
+            onUSB = true
+        case .wifi:
             onUSB = false
         }
     }
@@ -303,9 +306,13 @@ final class SenderController: ObservableObject {
             return direct
         }
         return sessions.first { s in
-            guard case .usb(let udid) = s.target else { return false }
+            switch s.target {
+            case .usb, .accessory: break
+            case .wifi: return false
+            }
             if let id = txtID(of: result), s.deviceID == id { return true }
-            if let udid, let device = usbDevices.first(where: { $0.udid == udid }),
+            if case .usb(let udid?) = s.target,
+               let device = usbDevices.first(where: { $0.udid == udid }),
                sameDevice(result, device) { return true }
             // Browse results routinely lack their TXT record and the USB
             // device is gone after a failover — the service name is then
@@ -424,17 +431,19 @@ final class SenderController: ObservableObject {
     /// sessions, the transports steal the receiver's single connection from
     /// each other forever. Keep the cable, drop the WiFi twin.
     private func dedupeSessions() {
-        let usbSessionIDs = Set(sessions.compactMap { s -> String? in
-            if case .usb = s.target { return s.deviceID }
-            return nil
+        let cabledDeviceIDs = Set(sessions.compactMap { s -> String? in
+            switch s.target {
+            case .usb, .accessory: return s.deviceID
+            case .wifi: return nil
+            }
         })
         let cabledNames = Set(usbDevices.compactMap { device in
             session(for: "usb:\(device.udid)") != nil ? device.name : nil
         })
         for s in sessions {
             guard case .wifi(let result) = s.target else { continue }
-            let duplicate = (s.deviceID.map { usbSessionIDs.contains($0) } ?? false)
-                || (txtID(of: result).map { usbSessionIDs.contains($0) } ?? false)
+            let duplicate = (s.deviceID.map { cabledDeviceIDs.contains($0) } ?? false)
+                || (txtID(of: result).map { cabledDeviceIDs.contains($0) } ?? false)
                 || (serviceName(of: result).map { cabledNames.contains($0) } ?? false)
             if duplicate {
                 Log.info("two sessions for one device — keeping the cable, dropping \(s.id)")
