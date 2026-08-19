@@ -253,17 +253,8 @@ Coordinates use the conventions of section 7.
 | `proximity` | pv 3 | `entering`, `x`, `y` | Stylus hover enter/leave |
 | `kf` | pv 1 | none | Request an IDR (section 5.3) |
 | `stats` | pv 1 | free-form | Receiver-side telemetry for the sender's log |
-| `sleeping` | pv 2 era* | none | Device locked; session ends, reconnect on wake expected |
-| `closing` | pv 2 era* | none | App quit; session ends for good |
-
-\* "pv 2 era" is deliberately weaker than "pv 2": these types were added in
-a later release while `pv` was still 2, without a bump (additive types
-never bump the version, section 10). So unlike `welcome`, which shipped in
-the build that raised `pv` to 2, a peer advertising `pv` 2 may still
-predate them. That is fine here because they are fire-and-forget: an older
-peer ignores them and merely loses the courtesy. Only features that need
-*both* ends to cooperate (like `pencil`) get a `pv` gate and an exact
-"since" version.
+| `sleeping` | pv 2 | none | Device locked; session ends, reconnect on wake expected |
+| `closing` | pv 2 | none | App quit; session ends for good |
 
 **`hello`** MUST be the first message a receiver sends on every new
 connection, because the sender sizes its virtual display from it and can do
@@ -327,7 +318,7 @@ with fields like `transport`, `fps`, `mbps`, `e2e50`, `e2e95`, `enc50`,
 `rtt`, `stalls`, `dec50`, `ph50`, `ph95`, `offsetKnown`. No field is
 normative; senders MUST accept any object.
 
-**`sleeping`** and **`closing`** (introduced during pv 2, additive) let the
+**`sleeping`** and **`closing`** let the
 sender distinguish "device locked, it will come back" (keep listening for a
 wake, tear the display down in the meantime) from "user quit the app" (end
 the session, stop redialing). Both are courtesy messages sent best-effort
@@ -522,7 +513,7 @@ Mechanics at a glance (the policy behind them lives in COMPATIBILITY.md):
 | `pv` | Introduced |
 |---|---|
 | 1 | Baseline: framing, demux heuristic, video format, `hello`, `ping`/`pong`, `touch`, `scroll`, `kf`, `stats`, `cursor`, `cursorImg`, Bonjour TXT `id` |
-| 2 | Version handshake: `pv` in `hello` and TXT, `welcome`, `updateRequired`. Later in the pv 2 era, additively: `sleeping`, `closing` (a pv 2 peer may predate them; they are safe to send regardless) |
+| 2 | Version handshake: `pv` in `hello` and TXT, `welcome`, `updateRequired`, `sleeping`, `closing` |
 | 3 | `pencil`, `proximity`; below pv 3 the receiver degrades stylus to `touch` |
 | 4 (reserved) | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
 
