@@ -448,24 +448,36 @@ the device to come back.
 
 ## 9. Session lifecycle
 
-```
-RECEIVER                                   SENDER
-listen :9000, advertise (id, pv)
-                                           discover (Bonjour) or pick USB device
-        <-------------- TCP connect ---------------
---- hello (panel, scale, id, pv) ------------------>
-        (sender sizes/creates its display, starts capture)
-<-- welcome (pv, min) ------------------------------   [pv 2+]
-<-- updateRequired ---------------------------------   [only if hello.pv < min]
-<== video frames (IDR first: SPS+PPS+slices) =======
-<-- cursorImg, cursor ------------------------------
---- ping / <-- pong  and  <-- ping                     (every 2 s, both ways)
---- touch / scroll / pencil / proximity ----------->
---- kf --------------------------------------------->  (when decode is lost)
---- stats ------------------------------------------>  (every ~5 s)
---- rotation: hello with swapped dimensions ------->
-        (sender rebuilds; stream restarts with new SPS/PPS + IDR)
---- sleeping or closing --------------------------->   (best-effort, then close)
+```mermaid
+sequenceDiagram
+    participant R as Receiver
+    participant S as Sender
+    Note over R: listen on TCP :9000, advertise (id, pv)
+    Note over S: discover via Bonjour, or pick a USB device
+    S->>R: TCP connect
+    R->>S: hello (panel, scale, id, pv)
+    Note over S: size and create the display, start capture
+    S->>R: welcome (pv, min) [pv 2+]
+    alt hello.pv below welcome.min
+        S->>R: updateRequired (target, store, message)
+        Note over R: blocking update screen, no video
+    else compatible
+        S->>R: video frames (IDR first: SPS + PPS + slices)
+        S->>R: cursorImg, cursor (as the cursor changes)
+        par every 2 s, both directions
+            R->>S: ping (t)
+            S->>R: pong (t, mt)
+            S->>R: ping (sender health)
+        end
+        R->>S: touch / scroll / pencil / proximity
+        R->>S: kf (when decode is lost)
+        S->>R: IDR video frame
+        R->>S: stats (every ~5 s)
+        R->>S: hello with swapped dimensions (rotation)
+        Note over S: rebuild display, stream restarts with new SPS/PPS + IDR
+    end
+    R->>S: sleeping or closing (best-effort)
+    Note over R,S: connection closes
 ```
 
 Rules already stated elsewhere, gathered:
