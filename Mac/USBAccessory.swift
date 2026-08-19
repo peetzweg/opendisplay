@@ -25,16 +25,16 @@ enum AOA {
 
     static let appleVendorID = 0x05AC
 
-    /// Sent as strings 0...5 during the handshake. Must match the Android
-    /// app's `res/xml/accessory_filter.xml` byte for byte, or the OS never
-    /// offers the app even though the handshake succeeds.
+    /// Sent as strings 0...5 during the handshake. manufacturer/model is what
+    /// any Android app should implement  by matching those two in its
+    /// own accessory_filter.xml. The rest is free
     static let identity = [
-        "OpenDisplay",                                          // manufacturer
-        "OpenDisplay Receiver",                                 // model
-        "Second display over USB",                              // description
-        "1.0",                                                  // version
-        "https://github.com/josepacelli/opendisplay-android",   // URI
-        "0001",                                                 // serial
+        "OpenDisplay",                                              // manufacturer
+        "OpenDisplay Receiver",                                     // model
+        "Second display over USB",                                  // description
+        "1.0",                                                      // version
+        "https://github.com/peetzweg/opendisplay#compatible-apps",  // URI
+        "0001",                                                     // serial
     ]
 
     /// Covers slow re-enumeration plus the user reading the accessory dialog
