@@ -277,7 +277,7 @@ A receiver MUST re-send `hello` on the live connection whenever its
 announced dimensions change (rotation). The sender rebuilds the display in
 response; the official sender debounces this by 300 ms so an orientation
 flurry settles into one rebuild, and replies to *every* `hello` with a
-fresh `welcome` (receivers dedupe by content).
+fresh `welcome` (receivers treat repeats idempotently).
 
 **`ping`** carries `t` (number): milliseconds since the Unix epoch on the
 receiver's clock. The sender MUST reply with `pong` echoing `t` (section
@@ -373,13 +373,16 @@ only party that can detect an outdated sender and SHOULD tell its user to
 update the sender. A receiver that never gets a `welcome` at all is talking
 to a pre-pv-2 sender and MUST assume sender `pv` 1.
 
-**`updateRequired`**: the sender refuses this pairing until the receiver
-updates. `target` names the end that must act (`"ios"` today), `store` is a
-platform-appropriate update URL, `message` is user-facing prose. Receivers
-SHOULD surface it prominently and stop expecting video. At `pv` 3 this is
-only sent when `hello.pv < welcome.min`, which never happens while `min`
-is 1; the machinery exists so a future floor raise degrades into a clear
-message instead of a silent failure.
+**`updateRequired`**: the sender declares the pairing unsupported until the
+receiver updates. `target` names the end that must act (`"ios"` today),
+`store` is a platform-appropriate update URL, `message` is user-facing
+prose. Receivers SHOULD surface it prominently and stop expecting video —
+but MUST NOT depend on the video actually stopping: the official sender
+currently keeps streaming after sending it and relies on the receiver to
+block its own UI. At `pv` 3 this is only sent when
+`hello.pv < welcome.min`, which never happens while `min` is 1; the
+machinery exists so a future floor raise degrades into a clear message
+instead of a silent failure.
 
 ## 7. Coordinate spaces and units
 
@@ -442,9 +445,11 @@ Reconnection policy is the dialing sender's business, not the protocol's.
 For the record, the official sender: redials ~1 s after a failure, gives
 each dial attempt 5 s (a dial to a withdrawn Bonjour name hangs forever
 otherwise), and gives a previously connected device a **10 s grace**
-before declaring the session over, except after `closing`, which ends it
-immediately, and `sleeping`, which ends the session but keeps waiting for
-the device to come back.
+before declaring the session over. It ends sooner when the evidence is
+unambiguous: after `closing`, after a few actively refused dials in a row
+(reachable device, nothing listening), or when the receiver's Bonjour
+service withdraws while the connection is down. `sleeping` also ends the
+session, but the sender keeps waiting for the device to come back.
 
 ## 9. Session lifecycle
 
@@ -460,7 +465,7 @@ sequenceDiagram
     S->>R: welcome (pv, min) [pv 2+]
     alt hello.pv below welcome.min
         S->>R: updateRequired (target, store, message)
-        Note over R: blocking update screen, no video
+        Note over R: blocking update screen, ignore any video
     else compatible
         S->>R: video frames (IDR first: SPS + PPS + slices)
         S->>R: cursorImg, cursor (as the cursor changes)
