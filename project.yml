@@ -96,6 +96,7 @@ targets:
       - Mac/DisplayArrangement.swift
       - Mac/Log.swift
       - Mac/LogPolicies.swift
+      - Mac/NetworkDiagnostics.swift
     settings:
       base:
         # A hostless test bundle: the sources under test are compiled straight

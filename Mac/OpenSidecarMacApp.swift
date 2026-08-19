@@ -49,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hand the updater to the control window, which is built outside the
         // SwiftUI App scene (NSHostingView), so it can offer the same button.
         MainWindow.updater = updater
+        // Probe at launch, not when a window first opens: the verdict belongs
+        // in the log of every session so attached logs answer "was this a
+        // locked-down network?" without asking the reporter to reproduce it.
+        NetworkDiagnostics.shared.probe()
         let presentation = SenderController.shared.presentation
         NSApp.setActivationPolicy(presentation == .dock ? .regular : .accessory)
         if presentation != .menuBar {
@@ -748,6 +752,7 @@ final class PermissionMonitor: ObservableObject {
 struct ContentView: View {
     @ObservedObject var controller: SenderController
     @StateObject private var permissions = PermissionMonitor()
+    @ObservedObject private var network = NetworkDiagnostics.shared
     // Optional so the view still compiles/previews without an updater (e.g.
     // if Sparkle ever fails to start); the button just disables itself then.
     let updater: SPUStandardUpdaterController?
@@ -783,6 +788,18 @@ struct ContentView: View {
                         Text("No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    // Only while WiFi discovery is actually coming up empty:
+                    // a network that blocks peer traffic is invisible when USB
+                    // is carrying a session, and saying nothing beats nagging.
+                    if controller.discovered.isEmpty, let advice = network.verdict.advice {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "wifi.exclamationmark")
+                                .foregroundStyle(.orange)
+                            Text(advice)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     ForEach(controller.deviceEntries) { entry in
                         if let session = controller.session(for: entry) {
@@ -873,11 +890,17 @@ struct ContentView: View {
                     )
                     // macOS offers no API to query Local Network access, so
                     // infer from discovery results and let the user check.
+                    // On a network that blocks client-to-client traffic that
+                    // inference is worthless — discovery is empty either way —
+                    // so say so rather than sending them to a settings pane
+                    // that cannot fix it (issue #125).
                     permissionRow(
                         "Local Network",
                         granted: !controller.discovered.isEmpty,
                         uncertain: controller.discovered.isEmpty,
-                        help: "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
+                        help: network.verdict == .blocked
+                            ? "Can't be determined while nothing on this network answers. Grant it anyway — if the Devices list stays empty, the network is what's blocking you."
+                            : "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
                         anchor: "Privacy_LocalNetwork"
                     )
                 }
@@ -916,6 +939,9 @@ struct ContentView: View {
             .padding(.vertical, 10)
         }
         .frame(width: 440, height: 540)
+        // Opening the panel is the moment the user is looking for a missing
+        // device, so make sure the verdict on screen is current.
+        .onAppear { network.probe() }
     }
 
     @ViewBuilder
