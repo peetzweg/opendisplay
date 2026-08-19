@@ -253,8 +253,17 @@ Coordinates use the conventions of section 7.
 | `proximity` | pv 3 | `entering`, `x`, `y` | Stylus hover enter/leave |
 | `kf` | pv 1 | none | Request an IDR (section 5.3) |
 | `stats` | pv 1 | free-form | Receiver-side telemetry for the sender's log |
-| `sleeping` | pv 2 era | none | Device locked; session ends, reconnect on wake expected |
-| `closing` | pv 2 era | none | App quit; session ends for good |
+| `sleeping` | pv 2 era* | none | Device locked; session ends, reconnect on wake expected |
+| `closing` | pv 2 era* | none | App quit; session ends for good |
+
+\* "pv 2 era" is deliberately weaker than "pv 2": these types were added in
+a later release while `pv` was still 2, without a bump (additive types
+never bump the version, section 10). So unlike `welcome`, which shipped in
+the build that raised `pv` to 2, a peer advertising `pv` 2 may still
+predate them. That is fine here because they are fire-and-forget: an older
+peer ignores them and merely loses the courtesy. Only features that need
+*both* ends to cooperate (like `pencil`) get a `pv` gate and an exact
+"since" version.
 
 **`hello`** MUST be the first message a receiver sends on every new
 connection, because the sender sizes its virtual display from it and can do
