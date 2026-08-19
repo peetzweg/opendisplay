@@ -133,7 +133,10 @@ The capture/streaming pipeline itself uses only public APIs.
 The official apps cover a Mac sender and an iPhone/iPad receiver on iOS 16.4+.
 Other people have built their own clients that speak the same protocol, so
 you can also use an Android device or an older iPad as a display, or drive
-one from Linux. If your hardware is not covered yet, start here:
+one from Linux. The wire protocol is specified in
+[PROTOCOL.md](PROTOCOL.md), so a new client can be written against the spec
+instead of reverse-engineered from the Swift sources. If your hardware is
+not covered yet, start here:
 
 **Android receivers**
 * [gprot42/android-opendisplay](https://github.com/gprot42/android-opendisplay) - GrapheneOS receiver for de-Googled Pixel phones and tablets, Android 8.0+
@@ -169,6 +172,11 @@ exact same code work over USB (via the `usbmuxd` daemon built into every
 macOS install) and WiFi. The phone
 announces its native panel size; the Mac creates a `CGVirtualDisplay` at
 exactly half that in points (@2x HiDPI) and streams the pixels back.
+
+Everything that crosses the socket — framing, discovery, the video format,
+every control message — is specified in [PROTOCOL.md](PROTOCOL.md). How the
+protocol evolves across releases is covered in
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
 `CGVirtualDisplay` is a **private CoreGraphics API** (the same one used by
 BetterDisplay and DeskPad) — which is precisely why this project can't ship

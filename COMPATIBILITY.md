@@ -7,6 +7,10 @@ support. This is the spec for issues
 orchestration), [#135](https://github.com/peetzweg/opendisplay/issues/135)
 (force update), and the wire-protocol handshake.
 
+The wire protocol itself — framing, discovery, the video format, and the
+full control-message catalog — is specified in [PROTOCOL.md](PROTOCOL.md).
+This document is the companion policy for *evolving* it.
+
 > Status: **draft / not yet fully implemented.** Phase 1 (version on the wire +
 > the remote-config force lever) is in progress. Sections marked _(planned)_
 > describe target behavior.
