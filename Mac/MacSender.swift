@@ -455,7 +455,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let candidate = created else { continue }
             virtualDisplay = candidate
             do {
-                display = try await findSCDisplay(id: candidate.displayID)
+                // A healthy display surfaces in well under a second; a poisoned
+                // one never does. Wait on a short clock for the first identity
+                // so the user isn't staring at a black device for the full
+                // window — the fallback probes keep the patient clock, so a Mac
+                // that is merely slow still comes online before the identity
+                // walk gives up (a false timeout here just moves the serial,
+                // which the arrangement memory doesn't key on).
+                display = try await findSCDisplay(id: candidate.displayID,
+                                                  polls: probe == 0 ? 12 : 20)
                 vd = candidate
                 if probe > 0, sawPoisonedIdentity {
                     Log.info("display identity +\(totalOffset) came online — the previous one is "
@@ -575,9 +583,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     /// The virtual display takes a moment to show up in shareable content.
-    private func findSCDisplay(id: CGDirectDisplayID, expectedSize: CGSize? = nil) async throws -> SCDisplay {
+    private func findSCDisplay(id: CGDirectDisplayID, expectedSize: CGSize? = nil,
+                               polls: Int = 20) async throws -> SCDisplay {
         var lastDisplayCount = 0
-        for _ in 0..<20 {
+        for poll in 0..<polls {
             let content = try await SCShareableContent.current
             lastDisplayCount = content.displays.count
             if let display = content.displays.first(where: {
@@ -588,6 +597,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }) {
                 return display
             }
+            // Taking longer than the usual sub-second surfacing deserves a
+            // word — until now the UI sat on the previous status (and the
+            // device on a black screen) for the whole wait, and the messages
+            // explaining a poisoned identity only appear after it's resolved.
+            if poll == 3 { await status("Bringing the display online…") }
             try await Task.sleep(for: .milliseconds(250))
         }
         // An empty display list is a different disease from "ours is
