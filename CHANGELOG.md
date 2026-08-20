@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.17.0](https://github.com/peetzweg/opendisplay/compare/v1.16.1...v1.17.0) (2026-08-20)
+
+
+### Features
+
+* **ios:** share the phone's connection log from Settings & Help ([#227](https://github.com/peetzweg/opendisplay/issues/227)) ([ba2ddb2](https://github.com/peetzweg/opendisplay/commit/ba2ddb2ceae30577a1d872f12425aa18a1cd3bde))
+
+
+### Bug Fixes
+
+* Honor the system capture stop and survive poisoned display identities ([#231](https://github.com/peetzweg/opendisplay/issues/231)) ([87b000b](https://github.com/peetzweg/opendisplay/commit/87b000b9906587d793c642e0dcd1b1032069f2e8))
+
 ## [1.16.1](https://github.com/peetzweg/opendisplay/compare/v1.16.0...v1.16.1) (2026-08-10)
 
 
