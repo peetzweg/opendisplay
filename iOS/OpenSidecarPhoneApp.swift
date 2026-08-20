@@ -77,6 +77,20 @@ struct ReceiverScreen: View {
                                    useMetal: metalRenderer)
                         .id(metalRenderer)   // rebuild the layer tree on toggle
                         .ignoresSafeArea()
+                    // Connected but no frames coming: without this the screen
+                    // is silently black while the Mac sorts itself out (e.g.
+                    // the poisoned-identity recovery, #230).
+                    if model.receiver.awaitingVideo {
+                        VStack(spacing: 14) {
+                            ProgressView()
+                                .tint(.white)
+                            Text("Connected — waiting for video from the Mac…")
+                                .font(.callout)
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        .allowsHitTesting(false)   // never block touch input
+                        .transition(.opacity)
+                    }
                     if showAnalytics {
                         VStack {
                             Spacer()
@@ -90,6 +104,7 @@ struct ReceiverScreen: View {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
             }
+            .animation(.easeInOut(duration: 0.3), value: model.receiver.awaitingVideo)
             .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
             .onChange(of: geo.size) { size in
                 model.receiver.setOrientation(portrait: size.height > size.width)

@@ -51,6 +51,13 @@ final class PhoneReceiver: ObservableObject {
     @Published var connected = false
     @Published var videoSize = CGSize.zero   // for touch coordinate mapping
     @Published var perf = PerfStats()
+    /// True while a Mac is connected but no frame has decoded for a couple of
+    /// seconds (or ever). Once a session has streamed, the receiver view is a
+    /// bare black canvas between frames — so a Mac that is connected but not
+    /// sending (e.g. while it works around a poisoned display identity, #230)
+    /// otherwise reads as a dead black screen with no explanation.
+    @Published var awaitingVideo = false
+    private var awaitingVideoNow = false   // queue-side mirror of the above
     // Compatibility signal from the connected Mac (issue #132). Nil = no signal.
     // Merged into the update gate by ReceiverScreen.
     @Published var peerSignal: PeerUpdateSignal?
@@ -471,8 +478,19 @@ final class PhoneReceiver: ObservableObject {
                 self.connection = nil
                 self.setConnected(false)
             }
+            // Frame drought while the link is up — surfaced by the UI so the
+            // screen isn't silently black. Cleared eagerly in enqueueFrame;
+            // this tick only needs to catch the onset.
+            self.setAwaitingVideo(self.connection?.state == .ready
+                && (self.lastFrameAt.map { Date().timeIntervalSince($0) > 2 } ?? true))
             self.scheduleWatchdog()
         }
+    }
+
+    private func setAwaitingVideo(_ value: Bool) {
+        guard awaitingVideoNow != value else { return }
+        awaitingVideoNow = value
+        DispatchQueue.main.async { self.awaitingVideo = value }
     }
 
     private func resetStreamState() {
@@ -779,6 +797,7 @@ final class PhoneReceiver: ObservableObject {
             if ms > 50 { stallsThisWindow += 1 }
         }
         lastFrameAt = now
+        setAwaitingVideo(false)
 
         // True end-to-end latency: Mac capture timestamp vs our clock mapped
         // onto the Mac's via the ping/pong offset.
