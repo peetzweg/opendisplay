@@ -83,6 +83,7 @@ struct PhoneInfo: Decodable {
 enum SenderTransport {
     case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
+    case accessory                         // Android over USB, no adb — see USBAccessory.swift
 }
 
 @available(macOS 14.0, *)
@@ -121,7 +122,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private var stream: SCStream?
     private var encoder: VTCompressionSession?
-    private var connection: NWConnection?
+    /// Active transport connection. See ByteStream.swift.
+    private var peer: ByteStream?
+    /// Kept alive for the duration of an AOA dial — it owns the wait for the
+    /// device to re-enumerate.
+    private var androidAccessoryConnector: AndroidAccessoryConnector?
     private var virtualDisplay: VirtualDisplay?
     private let queue = DispatchQueue(label: "sender.video")
     private let startCode: [UInt8] = [0, 0, 0, 1]
@@ -660,8 +665,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         cursorImageTimer = nil
         stream?.stopCapture { _ in }
         stream = nil
-        connection?.cancel()
-        connection = nil
+        peer?.cancel()
+        peer = nil
         if let encoder { VTCompressionSessionInvalidate(encoder) }
         encoder = nil
         virtualDisplay = nil   // releasing it removes the display
@@ -692,8 +697,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self.disconnectedSince = Date()
             self.connectionReady = false
             self.dialGeneration += 1   // a dial still in flight must not adopt
-            self.connection?.cancel()
-            self.connection = nil
+            self.peer?.cancel()
+            self.peer = nil
             self.pendingSends = 0
             self.pipelineLock.lock()
             self.pendingEncodes = 0
@@ -864,11 +869,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         switch transport {
         case .tcp(let endpoint): connectTCP(endpoint)
         case .usb(let udid, let port): connectUSB(udid: udid, port: port)
+        case .accessory: connectAndroidAccessory()
         }
     }
 
+
     /// Bookkeeping shared by both transports once a connection is live.
-    private func becomeReady(_ conn: NWConnection) {
+    private func becomeReady(_ peer: ByteStream) {
         Log.info("connection ready to \(endpointName)")
         connectionReady = true
         everConnected = true
@@ -887,7 +894,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastCursorPNGHash = 0
         lastCursorSent = (-1, -1, false)
         lastReceived = Date()  // fresh grace period for the watchdog
-        receiveControl(on: conn)
+        receiveControl(on: peer)
         Task { await self.status("Connected to \(self.endpointName)") }
     }
 
@@ -896,7 +903,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         options.noDelay = true   // latency matters more than throughput here
         let params = NWParameters(tls: nil, tcp: options)
         let conn = NWConnection(to: endpoint, using: params)
-        connection = conn
+        let peer = NetworkByteStream(conn)
+        self.peer = peer
         // A dial to a withdrawn Bonjour service (receiver asleep or app
         // closed) sits in .preparing forever — it neither fails nor resolves
         // when the service later returns, observed on macOS 26. Give every
@@ -906,7 +914,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let generation = dialGeneration
         queue.asyncAfter(deadline: .now() + 5.0) { [weak self] in
             guard let self, generation == self.dialGeneration, !self.stopped,
-                  self.connection === conn, conn.state != .ready else { return }
+                  self.peer === peer, conn.state != .ready else { return }
             Log.info("dial timed out in \(conn.state) — redialing")
             self.scheduleReconnect()
         }
@@ -914,7 +922,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let self else { return }
             switch state {
             case .ready:
-                self.becomeReady(conn)
+                self.becomeReady(peer)
             case .failed(let error):
                 Log.info("connection failed: \(error)")
                 self.connectionReady = false
@@ -958,7 +966,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         conn.cancel()
                         return
                     }
-                    self.connection = conn
+                    let peer = NetworkByteStream(conn)
+                    self.peer = peer
                     conn.stateUpdateHandler = { [weak self] state in
                         guard let self else { return }
                         switch state {
@@ -972,7 +981,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                             break
                         }
                     }
-                    self.becomeReady(conn)
+                    self.becomeReady(peer)
                 }
             } catch {
                 queue.async {
@@ -999,6 +1008,30 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    /// Android over USB via AOA. See USBAccessory.swift.
+    ///
+    /// It can take seconds because the device leaves the bus and re-enumerates, and on
+    /// first plug the user has an accessory dialog to dismiss.
+    /// `dialGeneration` guards against a stale dial adopting late.
+    private func connectAndroidAccessory() {
+        dialGeneration += 1
+        let generation = dialGeneration
+        let connector = AndroidAccessoryConnector(queue: queue)
+        androidAccessoryConnector = connector
+        Task { await status("Putting the Android device into accessory mode…") }
+        connector.connect { [weak self] result in
+            guard let self, generation == self.dialGeneration, !self.stopped else { return }
+            switch result {
+            case .success(let peer):
+                self.peer = peer
+                self.becomeReady(peer)
+            case .failure(let error):
+                Log.info("accessory dial failed: \(error)")
+                Task { await self.status("USB: \(error.localizedDescription)") }
+                self.scheduleReconnect()
+            }
+        }
+    }
     private func scheduleReconnect() {
         guard !stopped else { return }
         if everConnected {
@@ -1015,8 +1048,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         connectionReady = false
         dialGeneration += 1   // a USB dial still in flight must not adopt
         let generation = dialGeneration
-        connection?.cancel()
-        connection = nil
+        peer?.cancel()
+        peer = nil
         pendingSends = 0
         pipelineLock.lock()
         pendingEncodes = 0
@@ -1176,15 +1209,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - Control messages (phone -> Mac)
 
-    private func receiveControl(on conn: NWConnection) {
-        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, error in
-            guard let self, error == nil, let data, data.count == 4 else { return }
+    private func receiveControl(on peer: ByteStream) {
+        peer.receive(exactly: 4) { [weak self] data in
+            guard let self, let data else { return }
             let len = Int(UInt32(bigEndian: data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }))
             guard len > 0, len < 1 << 20 else { return }
-            conn.receive(minimumIncompleteLength: len, maximumLength: len) { [weak self] payload, _, _, error in
-                guard let self, error == nil, let payload, payload.count == len else { return }
+            peer.receive(exactly: len) { [weak self] payload in
+                guard let self, let payload else { return }
                 self.handleControl(payload)
-                self.receiveControl(on: conn)
+                self.receiveControl(on: peer)
             }
         }
     }
@@ -1717,21 +1750,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func sendJSONFrame(_ json: String) {
-        guard let connection, connectionReady else { return }
+        guard let peer, connectionReady else { return }
         let payload = Data(json.utf8)
         var header = UInt32(payload.count).bigEndian
         var frame = Data(bytes: &header, count: 4)
         frame.append(payload)
-        connection.send(content: frame, completion: .contentProcessed { _ in })
+        peer.send(frame) { _ in }
     }
 
     private func sendFramed(_ payload: Data) {
-        guard let connection, connectionReady else { return }
+        guard let peer, connectionReady else { return }
         var header = UInt32(payload.count).bigEndian
         var frame = Data(bytes: &header, count: 4)
         frame.append(payload)
         pendingSends += 1
-        connection.send(content: frame, completion: .contentProcessed { [weak self] error in
+        peer.send(frame) { [weak self] error in
             guard let self else { return }
             self.pendingSends -= 1
             if let error {
@@ -1749,7 +1782,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.statsWindowStart = Date()
                 Task { @MainActor in self.onStats?(frames, mbps) }
             }
-        })
+        }
     }
 
     // MARK: - Helpers

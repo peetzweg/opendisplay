@@ -95,6 +95,7 @@ enum MainWindow {
 enum ConnectionTarget: Hashable {
     case usb(udid: String?)           // wired via built-in usbmuxd; nil = first device
     case wifi(NWBrowser.Result)       // discovered via Bonjour
+    case accessory                    // Android over USB via AOA
 
     /// Stable identity for sessions and persistence — survives Bonjour
     /// re-discovery (fresh NWBrowser.Result) and USB replugs (new DeviceID).
@@ -104,6 +105,7 @@ enum ConnectionTarget: Hashable {
         case .wifi(let result):
             if case .service(let name, _, _, _) = result.endpoint { return "wifi:\(name)" }
             return "wifi:unknown"
+        case .accessory: return "accessory"
         }
     }
 }
@@ -332,6 +334,11 @@ final class SenderController: ObservableObject {
            !usbDisabled.contains("usb:first"), session(for: "usb:first") == nil {
             connect(to: .usb(udid: nil))
         }
+        // Escape hatch until there's UI: `defaults write <bundle> accessory -bool YES`.
+        if UserDefaults.standard.bool(forKey: "accessory"),
+           !usbDisabled.contains("accessory"), session(for: "accessory") == nil {
+            connect(to: .accessory)
+        }
         for device in usbDevices {
             if let covering = activeSession(coveringUSB: device) {
                 // usbDisabled gates auto-connecting a device, not the
@@ -458,6 +465,8 @@ final class SenderController: ObservableObject {
             return udid == nil ? "Manual (\(host):\(port))" : "iPhone / iPad"
         case .wifi(let result):
             return serviceName(of: result) ?? "WiFi device"
+        case .accessory:
+            return "Android (USB)"
         }
     }
 
@@ -516,7 +525,7 @@ final class SenderController: ObservableObject {
 
         // Connecting a device clears its "don't auto-connect" state.
         switch target {
-        case .usb: usbDisabled.remove(id)
+        case .usb, .accessory: usbDisabled.remove(id)
         case .wifi: wifiRemembered.insert(id)
         }
 
@@ -531,6 +540,8 @@ final class SenderController: ObservableObject {
             } else {
                 transport = .usb(udid: udid, port: portNum)
             }
+        case .accessory:
+            transport = .accessory
         case .wifi(let result):
             transport = .tcp(result.endpoint)
         }
@@ -633,7 +644,7 @@ final class SenderController: ObservableObject {
     /// User-initiated disconnect: also opt the device out of auto-connect.
     func disconnect(_ session: DeviceSession) {
         switch session.target {
-        case .usb: usbDisabled.insert(session.id)
+        case .usb, .accessory: usbDisabled.insert(session.id)
         case .wifi: wifiRemembered.remove(session.id)
         }
         // A migrated session is also reachable the other way — opt that side
