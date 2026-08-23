@@ -245,7 +245,7 @@ Coordinates use the conventions of section 7.
 
 | `type` | Since | Fields | Purpose |
 |---|---|---|---|
-| `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `device`?, `id`?, `pv`? | Identify the panel; (re)sent on connect and on rotation |
+| `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `panelWide`?, `panelHigh`?, `device`?, `id`?, `pv`? | Identify the panel (or a sub-region of it); (re)sent on connect and whenever the announced dimensions change |
 | `ping` | pv 1 | `t` | Liveness + clock sync probe |
 | `touch` | pv 1 | `phase`, `x`, `y`, `t`? | Finger input |
 | `scroll` | pv 1 | `dx`, `dy` | Two-finger scroll |
@@ -261,10 +261,25 @@ connection, because the sender sizes its virtual display from it and can do
 nothing before it arrives.
 
 * `pixelsWide`, `pixelsHigh` (int): the panel size in **physical pixels**,
-  in the panel's **current orientation** (portrait swaps them).
+  in the panel's **current orientation** (portrait swaps them). A receiver
+  MAY announce a sub-region of its physical panel instead — the official
+  iOS app does this when the user opts to avoid the notch and rounded
+  corners — and MUST then display the video within that region and
+  normalize input against it. Senders treat the values as opaque
+  dimensions either way; no wire change is involved.
 * `scale` (number): the device's UI scale factor (2 or 3 on Apple
   hardware). The sender uses it to pick a sensible point-size for the
   virtual display.
+* `panelWide`, `panelHigh` (int, optional): the **full physical panel**
+  in pixels, long edge first, independent of orientation and of any
+  sub-region announced in `pixelsWide`/`pixelsHigh`. A sub-region's long
+  edge differs per orientation (safe-area insets are asymmetric), so a
+  sender that sizes resize headroom — e.g. a virtual display's maximum
+  mode — from the first announcement alone would have to destroy and
+  recreate the display when a later announcement is larger. These fields
+  bound every announcement the device can ever make. Absent on older
+  receivers, where `pixelsWide`/`pixelsHigh` **are** the full panel and
+  reserving from them is already sufficient.
 * `device` (string, optional): device kind for UI text, `"iPhone"` or
   `"iPad"` from the official receiver. Free-form.
 * `id` (string, optional): stable per-install UUID. MUST match the Bonjour
@@ -274,7 +289,8 @@ nothing before it arrives.
   1** (every pre-handshake install).
 
 A receiver MUST re-send `hello` on the live connection whenever its
-announced dimensions change (rotation). The sender rebuilds the display in
+announced dimensions change (rotation, or a display-area setting flip).
+The sender rebuilds the display in
 response; the official sender debounces this by 300 ms so an orientation
 flurry settles into one rebuild, and replies to *every* `hello` with a
 fresh `welcome` (receivers treat repeats idempotently).
@@ -395,7 +411,8 @@ sender).
 
 | What | Space | Units | Origin / sign |
 |---|---|---|---|
-| `hello.pixelsWide/High` | physical panel | pixels | current orientation |
+| `hello.pixelsWide/High` | panel, or a sub-region of it | pixels | current orientation |
+| `hello.panelWide/High` | physical panel | pixels | long edge first |
 | `hello.scale` | none | UI scale factor | n/a |
 | `touch.x/y`, `pencil.x/y`, `proximity.x/y` | video | normalized 0..1 | top-left, x right, y down |
 | `scroll.dx/dy` | video | **pixels** (not normalized) | natural-scrolling sign |

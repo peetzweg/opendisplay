@@ -27,6 +27,7 @@ final class VirtualDisplay {
     /// `onOriginChange` reports where the display sits afterwards, so the
     /// caller can persist user drags.
     init?(name: String, pointsWide: Int, pointsHigh: Int, sizeInMillimeters: CGSize,
+          reservePointsPerAxis: Int = 0,
           serialNum: UInt32 = 0x0001, productID: UInt32 = 0x4F53,
           restoreOrigin: CGPoint? = nil,
           onOriginChange: ((CGPoint, CGSize) -> Void)? = nil) {
@@ -35,7 +36,10 @@ final class VirtualDisplay {
         // Reserve the longer orientation on both axes. That lets a phone or
         // tablet change orientation by applying a new mode to this *same*
         // virtual monitor instead of removing it and stranding its windows.
-        maxPointsPerAxis = max(pointsWide, pointsHigh)
+        // `reservePointsPerAxis` raises the bound when the caller knows a
+        // larger mode may come later (a receiver announcing a safe-area
+        // sub-rect can announce up to its full panel on a settings change).
+        maxPointsPerAxis = max(pointsWide, pointsHigh, reservePointsPerAxis)
         self.restoreTarget = restoreOrigin
         self.restoreUntil = restoreOrigin == nil ? .distantPast : Date().addingTimeInterval(6)
         self.onOriginChange = onOriginChange
@@ -148,12 +152,19 @@ final class VirtualDisplay {
     /// `recover`, a missing @2x mode (macOS can replace the whole mode list
     /// when it restores saved display state) re-applies our settings to
     /// publish it again instead of failing silently forever.
+    ///
+    /// Both matches compare height as well as width: a safe-area sub-rect in
+    /// portrait derives the same point width as the full panel (the side
+    /// insets are zero there), so width alone would bless a stale restored
+    /// full-height mode as "correct" and leave the display mismatched with
+    /// the announced rect.
     @discardableResult
     private func selectHiDPIMode(recover: Bool = false) -> Bool {
         let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         guard let modes = CGDisplayCopyAllDisplayModes(display.displayID, opts) as? [CGDisplayMode],
               let hidpi = modes.first(where: {
-                  $0.width == pointsWide && $0.pixelWidth == pointsWide * 2
+                  $0.width == pointsWide && $0.height == pointsHigh
+                      && $0.pixelWidth == pointsWide * 2
               }) else {
             if recover {
                 Log.info("@2x mode vanished from display \(display.displayID) — re-applying settings")
@@ -162,7 +173,8 @@ final class VirtualDisplay {
             return false
         }
         if let current = CGDisplayCopyDisplayMode(display.displayID),
-           current.width == hidpi.width, current.pixelWidth == hidpi.pixelWidth {
+           current.width == hidpi.width, current.height == hidpi.height,
+           current.pixelWidth == hidpi.pixelWidth {
             return true
         }
         var config: CGDisplayConfigRef?
