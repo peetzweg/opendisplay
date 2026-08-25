@@ -64,9 +64,12 @@ enum StreamQuality: String, CaseIterable {
 }
 
 struct PhoneInfo: Decodable {
-    let pixelsWide: Int   // landscape-oriented (long edge)
-    let pixelsHigh: Int
+    let pixelsWide: Int   // announced display rect (panel or a safe-area
+    let pixelsHigh: Int   // sub-rect), in the panel's current orientation
     let scale: Double
+    let panelWide: Int?   // full physical panel, long edge first — resize
+    let panelHigh: Int?   // headroom (older receivers omit it: the announced
+                          // rect IS the panel there, so it reserves enough)
     let device: String?   // "iPad" / "iPhone" (older receivers omit it)
     let id: String?       // per-install identity (older receivers omit it) —
                           // lets the controller match the same physical device
@@ -76,6 +79,14 @@ struct PhoneInfo: Decodable {
 
     var kind: String { device ?? "device" }
     var protocolVersion: Int { pv ?? WireProtocol.assumedWhenAbsent }
+
+    // The derived virtual-display mode (points at @2x, floored to even for
+    // the encoder). Rebuild decisions MUST compare these, not raw pixels:
+    // hellos can differ in pixels yet agree here — the receiver's init seed
+    // (raw nativeBounds) vs its refined announcement (floored to a multiple
+    // of 4) — and rebuilding for those changes nothing visible.
+    var pointsWide: Int { (pixelsWide / 2) & ~1 }
+    var pointsHigh: Int { (pixelsHigh / 2) & ~1 }
 }
 
 /// How the sender reaches the receiver. Reconnects re-dial from scratch, so
@@ -347,6 +358,25 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let info = try await waitForHello()
             try await setupExtend(info)
 
+            // A hello that changed while the display was being built updated
+            // lastHello but triggered nothing: the rebuild path is gated on
+            // stream != nil, which only holds once setupExtend finishes.
+            // Reconcile here so a rotation — or the receiver refining its
+            // first announcement (safe-area fit resolves its window a beat
+            // after the listener starts) — isn't stale for the whole session.
+            // Compared at the derived mode, not raw pixels: the refinement
+            // often changes pixels without changing the mode. A failure here
+            // throws like a failed initial setup would, instead of parking
+            // the session with the pipeline torn down and no recovery armed.
+            if let latest = await latestHello(),
+               latest.pointsWide != info.pointsWide || latest.pointsHigh != info.pointsHigh {
+                Log.info("hello changed during setup — reconfiguring for \(latest.pixelsWide)x\(latest.pixelsHigh)")
+                guard await reconfigure(latest) else {
+                    throw NSError(domain: "MacSender", code: 6, userInfo: [
+                        NSLocalizedDescriptionKey: "display reconfiguration failed"])
+                }
+            }
+
             // Touch back-channel (Milestone 3). Needs Accessibility trust;
             // streaming works without it, so don't interrupt with a prompt —
             // the permission panel's Grant button asks when the user is ready.
@@ -371,8 +401,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
         // Phone panel is @3x; the virtual display runs @2x HiDPI, so points
         // = native pixels / 2 (rounded down to even for the encoder).
-        let pointsWide = (info.pixelsWide / 2) & ~1
-        let pointsHigh = (info.pixelsHigh / 2) & ~1
+        let pointsWide = info.pointsWide
+        let pointsHigh = info.pointsHigh
+        // Resize headroom: a safe-area sub-rect has orientation-dependent
+        // long edges (the insets differ per orientation), and turning the
+        // setting off re-announces the full panel — reserving only the
+        // current mode would force the destroy-and-recreate fallback (and
+        // its window scatter) on the first such change. The full panel
+        // bounds every possible announcement from this device.
+        let reservePoints = max((info.panelWide ?? 0) / 2, (info.panelHigh ?? 0) / 2)
         // Rough physical size so macOS picks a sane default UI scale.
         let mm = info.pixelsWide >= info.pixelsHigh
             ? CGSize(width: 147, height: 68)
@@ -440,6 +477,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     return VirtualDisplay(name: displayName,
                                           pointsWide: pointsWide, pointsHigh: pointsHigh,
                                           sizeInMillimeters: mm,
+                                          reservePointsPerAxis: reservePoints,
                                           serialNum: serial &+ totalOffset,
                                           productID: 0x4F53 &+ totalOffset,
                                           restoreOrigin: restoreOrigin,
@@ -500,16 +538,38 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    /// `lastHello` is owned by `queue` (written in the connection's receive
+    /// handler) and holds String refs, so an unsynchronized read while a new
+    /// hello is being decoded isn't merely stale — snapshot it on the queue.
+    private func latestHello() async -> PhoneInfo? {
+        await withCheckedContinuation { cont in
+            queue.async { cont.resume(returning: self.lastHello) }
+        }
+    }
+
     /// Tear down and rebuild when the phone announces new dimensions. Loops
     /// until the built display matches the latest hello, so rotations that
     /// arrive mid-rebuild aren't lost (and rapid flip-flops settle once).
+    /// Returns false only when a rebuild was attempted and failed; skipping
+    /// (another rebuild in flight, session stopped, already at the target
+    /// mode) counts as success.
     private var reconfiguring = false
-    private func reconfigure(_ info: PhoneInfo) async {
-        guard !reconfiguring, !stopped else { return }
+    @discardableResult
+    private func reconfigure(_ info: PhoneInfo) async -> Bool {
+        guard !reconfiguring, !stopped else { return true }
         reconfiguring = true
         defer { reconfiguring = false }
         var target = info
         while !stopped {
+            // Already built and capturing at this mode — nothing to do. This
+            // absorbs redundant callers (the startup reconcile racing the
+            // debounced rebuild for the same hello). Never skip while capture
+            // is down: the recovery path reuses this function to rebuild a
+            // dead pipeline at unchanged dimensions.
+            if let vd = virtualDisplay, stream != nil,
+               vd.pointsWide == target.pointsWide, vd.pointsHigh == target.pointsHigh {
+                return true
+            }
             Log.info("reconfiguring for \(target.pixelsWide)x\(target.pixelsHigh)")
             // A cached frame is valid for a network reconnect to the same
             // display, but never for a rotation: it belongs to the retired
@@ -533,15 +593,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             } catch {
                 Log.info("reconfigure failed: \(error)")
                 await status("Rotation failed: \(error.localizedDescription)")
-                return
+                return false
             }
-            if let latest = lastHello,
-               latest.pixelsWide != target.pixelsWide || latest.pixelsHigh != target.pixelsHigh {
+            if let latest = await latestHello(),
+               latest.pointsWide != target.pointsWide || latest.pointsHigh != target.pointsHigh {
                 target = latest   // rotated again while we were rebuilding
                 continue
             }
-            return
+            return true
         }
+        return true
     }
 
     /// Apply the rotated mode to the existing virtual monitor and restart
@@ -551,8 +612,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func resizeExistingDisplay(for info: PhoneInfo) async throws -> Bool {
         guard let vd = virtualDisplay else { return false }
 
-        let pointsWide = (info.pixelsWide / 2) & ~1
-        let pointsHigh = (info.pixelsHigh / 2) & ~1
+        let pointsWide = info.pointsWide
+        let pointsHigh = info.pointsHigh
         let arrangementKey = info.id ?? String(format: "serial-%08x", displaySerial)
         let size = CGSize(width: pointsWide, height: pointsHigh)
         let didResize = await MainActor.run {
@@ -647,7 +708,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // starts with as little as one round left.
         queue.async { self.captureRecoveryFailures = 0 }
         Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) generation \(generation) mode \(mode.rawValue) localCursor=\(localCursor)")
-        let kind = lastHello?.kind ?? "device"
+        // Snapshot on the owning queue (see latestHello) — this runs off it,
+        // and hellos now arrive continuously during margin-slider rebuilds.
+        let kind = await latestHello()?.kind ?? "device"
         await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
     }
 
@@ -792,7 +855,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // CGRect.null, so it reads as "live" for a dead display too and the
             // rebuild fallback below would become unreachable.
             if let vd = self.virtualDisplay,
-               !CGDisplayBounds(vd.displayID).isEmpty {
+               !CGDisplayBounds(vd.displayID).isEmpty,
+               vd.pointsWide == hello.pointsWide, vd.pointsHigh == hello.pointsHigh {
                 Log.info("capture died — display still present, re-attaching capture only (#29)")
                 Task {
                     do {
@@ -812,7 +876,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
                 return
             }
-            // Display genuinely gone — full rebuild (preserves old behavior).
+            // Display gone — or alive at a stale mode: a hello arriving while
+            // capture is down triggers nothing (the rebuild path is gated on
+            // stream != nil) and the receiver won't repeat it (it dedupes by
+            // dimensions), so re-attaching as-is would strand the session at
+            // the old size for good. reconfigure resizes the surviving
+            // display in place, so the mismatch case costs no window scatter.
             Log.info("capture died — rebuilding pipeline")
             Task {
                 await self.reconfigure(hello)
@@ -1237,16 +1306,32 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     helloContinuation = nil
                     continuation.resume(returning: info)
                 } else if mode == .extend, stream != nil, let previous,
-                          previous.pixelsWide != info.pixelsWide
-                          || previous.pixelsHigh != info.pixelsHigh {
+                          previous.pointsWide != info.pointsWide
+                          || previous.pointsHigh != info.pointsHigh {
                     // Phone rotated — rebuild after a short debounce so a
                     // flurry of orientation flips settles into one rebuild.
+                    // Compared at the derived mode (see PhoneInfo.pointsWide)
+                    // so pixel-only refinements don't rebuild a display they
+                    // wouldn't change.
                     Task {
                         try? await Task.sleep(for: .milliseconds(300))
-                        guard let current = self.lastHello,
-                              current.pixelsWide == info.pixelsWide,
-                              current.pixelsHigh == info.pixelsHigh else { return }
-                        await self.reconfigure(info)
+                        // Points, like the trigger above: a pixel-only
+                        // refinement inside the window must not cancel the
+                        // rebuild this task was armed for.
+                        guard let current = await self.latestHello(),
+                              current.pointsWide == info.pointsWide,
+                              current.pointsHigh == info.pointsHigh else { return }
+                        if await self.reconfigure(info) == false {
+                            // The startup path throws on this failure; here
+                            // nothing would re-arm and the session would look
+                            // live (pings flowing) with its pipeline torn
+                            // down — invisible to auto-connect and dedupe.
+                            // Hand it to the bounded capture-recovery loop:
+                            // stream is nil after the failure, so recovery's
+                            // guard passes; it re-attaches or rebuilds, and
+                            // ends the session after the retry budget.
+                            self.scheduleCaptureRecovery()
+                        }
                     }
                 }
             }
@@ -1326,8 +1411,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func waitForHello() async throws -> PhoneInfo {
-        if let lastHello { return lastHello }
-        return try await withCheckedThrowingContinuation { continuation in
+        // No unsynchronized fast path: lastHello is owned by `queue` (see
+        // latestHello), and the queue-confined check below covers it anyway.
+        try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 if let hello = self.lastHello {
                     continuation.resume(returning: hello)

@@ -44,6 +44,12 @@ struct ReceiverScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    // Safe-area fit: shrink the streamed display to the panel's safe area
+    // (plus an extra margin) so macOS content never hides under the notch
+    // or the rounded corners. The smaller size is announced in `hello`, so
+    // the Mac builds a matching virtual display — no letterboxing.
+    @AppStorage("safeAreaFit") private var safeAreaFit = false
+    @AppStorage("safeAreaMargin") private var safeAreaMargin = 8.0
     // First-run onboarding (issue #49): explain the Mac app is required.
     // Shown until either the user dismisses it or the device connects once.
     @AppStorage("hasConnectedBefore") private var hasConnectedBefore = false
@@ -67,6 +73,43 @@ struct ReceiverScreen: View {
         return nil
     }
 
+    // The UIWindow actually hosting this view, reported by WindowReader.
+    // Scanning UIApplication's scene windows could pick a system window —
+    // the remote keyboard window can report isKeyWindow while a text field
+    // is focused — and announce a rect nobody lays out.
+    @State private var hostWindow: UIWindow?
+
+    /// (Re)announce the panel size the Mac should build its display for:
+    /// the full panel, or — with safe-area fit on — the safe area minus the
+    /// extra margin, in the current orientation. Mirrors the video view's
+    /// layout above so the stream's aspect ratio matches the visible rect.
+    private func updatePanel() {
+        guard let window = hostWindow else {
+            // Cold-launch race: the hierarchy isn't attached to its window
+            // yet (WindowReader reports it moments later and re-announces).
+            // Announcing a guess would let a fast connection build a
+            // wrong-size Mac display (ReceiverModel already seeded the full
+            // native panel as a floor) — retry shortly instead.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { updatePanel() }
+            return
+        }
+        var size = window.bounds.size
+        if safeAreaFit {
+            let insets = window.safeAreaInsets
+            let margin = CGFloat(safeAreaMargin)
+            size.width -= insets.left + insets.right + 2 * margin
+            size.height -= insets.top + insets.bottom + 2 * margin
+        }
+        // Round down to a multiple of 4: the Mac floors to even *points*
+        // ((px / 2) & ~1) and captures at points × 2, so only multiples of
+        // 4 survive the round-trip — anything else re-letterboxes by a
+        // pixel or two and skews the announced aspect ratio.
+        let scale = UIScreen.main.nativeScale
+        let wide = Int(size.width * scale) & ~3
+        let high = Int(size.height * scale) & ~3
+        model.receiver.setPanelPixels(wide: wide, high: high, scale: Double(scale))
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -76,7 +119,21 @@ struct ReceiverScreen: View {
                                    receiver: model.receiver,
                                    useMetal: metalRenderer)
                         .id(metalRenderer)   // rebuild the layer tree on toggle
-                        .ignoresSafeArea()
+                        // Safe-area fit keeps the video inside the safe area
+                        // (plus margin) instead of edge-to-edge. The insets
+                        // reach this view only because the outer modifier
+                        // below stops ignoring them when the setting is on;
+                        // the announced panel matches (updatePanel), so
+                        // aspect-fit fills the inset rect exactly and touch
+                        // mapping stays aligned.
+                        .padding(safeAreaFit ? CGFloat(safeAreaMargin) : 0)
+                        // Keyboard region always ignored: updatePanel reads
+                        // window.safeAreaInsets, which never include the
+                        // keyboard, so letting SwiftUI's keyboard avoidance
+                        // shrink the video would break the announced-rect
+                        // match while the device-name field is focused.
+                        .ignoresSafeArea(.keyboard)
+                        .ignoresSafeArea(edges: safeAreaFit ? [] : .all)
                     if showAnalytics {
                         VStack {
                             Spacer()
@@ -90,16 +147,31 @@ struct ReceiverScreen: View {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
             }
-            .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
-            .onChange(of: geo.size) { size in
-                model.receiver.setOrientation(portrait: size.height > size.width)
-            }
+            .background(WindowReader { window in
+                hostWindow = window
+                if window != nil { updatePanel() }
+            })
+            .onAppear { updatePanel() }
+            .onChange(of: geo.size) { _ in updatePanel() }   // rotation
+            .onChange(of: safeAreaFit) { _ in updatePanel() }
+            .onChange(of: safeAreaMargin) { _ in updatePanel() }
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView { onboardingDismissed = true }
             }
         }
-        .ignoresSafeArea(edges: isStreaming ? .all : [])
-        .statusBarHidden(isStreaming)
+        // Ignoring the safe area here consumes it for the entire subtree —
+        // descendants can't opt back in — so with safe-area fit on the
+        // insets must be preserved at this level for the video view's
+        // layout to see them. The black background still covers the glass
+        // edge-to-edge via its own ignoresSafeArea.
+        .ignoresSafeArea(edges: (isStreaming && !safeAreaFit) ? .all : [])
+        // Hidden whenever safe-area fit is on (not just while streaming):
+        // on devices whose top inset comes from the status bar rather than
+        // a notch (iPads, home-button iPhones), hiding it at stream start
+        // would change the insets after the pre-stream hello and force a
+        // second display rebuild. Keeping it hidden makes the announced
+        // panel identical before and during streaming.
+        .statusBarHidden(isStreaming || safeAreaFit)
         .persistentSystemOverlays(isStreaming ? .hidden : .automatic)
         .sheet(isPresented: $showSettings) {
             SettingsView(receiver: model.receiver)
@@ -129,7 +201,11 @@ struct ReceiverScreen: View {
         .onChange(of: scenePhase) { phase in
             Log.info("scenePhase -> \(String(describing: phase))")
             switch phase {
-            case .active: model.sceneDidActivate()
+            case .active:
+                model.sceneDidActivate()
+                // Orientation or insets may have changed while suspended
+                // (and this also backstops the cold-launch no-window retry).
+                updatePanel()
             case .background: model.sceneDidBackground()
             default: break
             }
@@ -490,6 +566,16 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    @AppStorage("safeAreaFit") private var safeAreaFit = false
+    @AppStorage("safeAreaMargin") private var safeAreaMargin = 8.0
+    // Slider draft: every committed margin permanently reconfigures the
+    // Mac's virtual display, so the live drag value stays local and commits
+    // debounced. The commit must NOT depend on onEditingChanged alone:
+    // stepped sliders never deliver the closing `false` on iOS 26 (known
+    // OS bug), VoiceOver adjustments bypass the drag lifecycle entirely,
+    // and a cancelled gesture (rotation, alert mid-drag) skips it too.
+    @State private var marginDraft = 8.0
+    @State private var marginCommit: Task<Void, Never>?
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -519,6 +605,46 @@ struct SettingsView: View {
                     Text("Name")
                 } footer: {
                     Text("Shown in the Mac app's WiFi connection menu. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
+                }
+
+                Section {
+                    Toggle("Avoid notch & rounded corners", isOn: $safeAreaFit)
+                    if safeAreaFit {
+                        HStack {
+                            Text("Extra margin")
+                            Slider(value: $marginDraft, in: 0...24, step: 2) { editing in
+                                // Accelerator only — see the debounced
+                                // onChange below for why this can't be the
+                                // sole commit path.
+                                if !editing {
+                                    marginCommit?.cancel()
+                                    safeAreaMargin = marginDraft
+                                }
+                            }
+                            Text("\(Int(marginDraft)) pt")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        .onAppear { marginDraft = safeAreaMargin }
+                        .onChange(of: marginDraft) { value in
+                            marginCommit?.cancel()
+                            marginCommit = Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(400))
+                                guard !Task.isCancelled else { return }
+                                safeAreaMargin = value
+                            }
+                        }
+                        .onDisappear {
+                            // Row removed mid-interaction (fit toggled off,
+                            // sheet dismissed): commit what the user saw.
+                            marginCommit?.cancel()
+                            safeAreaMargin = marginDraft
+                        }
+                    }
+                } header: {
+                    Text("Display area")
+                } footer: {
+                    Text("Shrinks the streamed display to this \(deviceKind)'s safe area so macOS windows and the menu bar never hide under the notch or the rounded corners. Extra margin trims a little more off every edge. Changing this rebuilds the Mac-side display — windows may briefly rearrange, like rotating does.")
                 }
 
                 Section {
@@ -612,6 +738,36 @@ private struct DeviceNameField: View {
     }
 }
 
+// MARK: - Window reader
+
+/// Reports the UIWindow hosting this hierarchy (for updatePanel). UIKit's
+/// scene-window lists include system windows (remote keyboard, text
+/// effects), so "the key window" is not reliably the one the video is laid
+/// out in — the view's own `window` is.
+private struct WindowReader: UIViewRepresentable {
+    let onWindow: (UIWindow?) -> Void
+
+    func makeUIView(context: Context) -> Probe {
+        let view = Probe()
+        view.isUserInteractionEnabled = false
+        view.onWindow = onWindow
+        return view
+    }
+
+    func updateUIView(_ uiView: Probe, context: Context) {}
+
+    final class Probe: UIView {
+        var onWindow: ((UIWindow?) -> Void)?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            let window = self.window
+            // Async: this fires during UIKit layout, and mutating SwiftUI
+            // state mid-update is undefined.
+            DispatchQueue.main.async { self.onWindow?(window) }
+        }
+    }
+}
+
 // MARK: - Model
 
 @MainActor
@@ -622,10 +778,12 @@ final class ReceiverModel: ObservableObject {
 
     init() {
         receiver = PhoneReceiver(displayLayer: AVSampleBufferDisplayLayer())
-        // Announce the native panel size to the Mac.
+        // Seed the full native panel size (landscape) so a hello is never
+        // empty; the view refines it with orientation and safe-area fit on
+        // first layout (ReceiverScreen.updatePanel), before connections start.
         let native = UIScreen.main.nativeBounds.size   // portrait pixels
-        receiver.setNativePanel(long: Int(max(native.width, native.height)),
-                                short: Int(min(native.width, native.height)),
+        receiver.setPanelPixels(wide: Int(max(native.width, native.height)),
+                                high: Int(min(native.width, native.height)),
                                 scale: Double(UIScreen.main.nativeScale))
         let savedName = UserDefaults.standard.string(forKey: "deviceName")
         receiver.serviceName = (savedName?.isEmpty == false) ? savedName! : UIDevice.current.name

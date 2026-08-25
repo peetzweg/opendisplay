@@ -140,15 +140,22 @@ final class PhoneReceiver: ObservableObject {
 
     let displayLayer: AVSampleBufferDisplayLayer
 
-    /// Native panel size in pixels + scale, announced to the Mac in a "hello"
-    /// message so it can size the virtual display. Orientation-dependent:
-    /// rotating the phone re-announces with swapped dimensions and the Mac
-    /// rebuilds the virtual display as a portrait/landscape monitor.
-    private var nativeLong = 0
-    private var nativeShort = 0
+    /// Panel size in pixels + scale, announced to the Mac in a "hello"
+    /// message so it can size the virtual display. The view layer reports
+    /// the current value: the full native panel by default, or a safe-area
+    /// sub-rect when the user opts to avoid the notch and rounded corners
+    /// ("safeAreaFit" setting). Any change (rotation, setting flip)
+    /// re-announces and the Mac rebuilds the virtual display to match.
     private(set) var devicePixelsWide = 0
     private(set) var devicePixelsHigh = 0
     var deviceScale: Double = 2
+    // Full physical panel (long edge first), orientation-independent and
+    // unaffected by the safe-area sub-rect. Announced alongside the display
+    // rect so the Mac can reserve resize headroom for the largest mode this
+    // device may ever switch to (sub-rect long edges differ per orientation,
+    // and turning the setting off announces the full panel again).
+    private let panelLongPixels: Int
+    private let panelShortPixels: Int
     // Name advertised over Bonjour for the Mac's WiFi picker. iOS 16+ returns
     // a generic "iPhone" from UIDevice.current.name (the user-assigned name
     // needs an entitlement Apple gates behind approval and personal teams
@@ -192,29 +199,29 @@ final class PhoneReceiver: ObservableObject {
         }
     }
 
-    func setNativePanel(long: Int, short: Int, scale: Double) {
-        nativeLong = long
-        nativeShort = short
-        deviceScale = scale
-        if devicePixelsWide == 0 {   // default landscape until the view reports
-            devicePixelsWide = long
-            devicePixelsHigh = short
+    /// Called from the main thread; hops to the receiver queue (like
+    /// setServiceName) because `connection` and the announced dimensions are
+    /// owned there — a hello built in the connection's ready handler must
+    /// never observe a half-updated width/height pair.
+    func setPanelPixels(wide: Int, high: Int, scale: Double) {
+        queue.async {
+            guard wide > 0, high > 0,
+                  wide != self.devicePixelsWide || high != self.devicePixelsHigh
+            else { return }
+            self.deviceScale = scale
+            self.devicePixelsWide = wide
+            self.devicePixelsHigh = high
+            Log.info("panel -> \(wide)x\(high) @\(scale)x")
+            if let connection = self.connection { self.sendHello(on: connection) }
         }
-    }
-
-    func setOrientation(portrait: Bool) {
-        let w = portrait ? nativeShort : nativeLong
-        let h = portrait ? nativeLong : nativeShort
-        guard w > 0, w != devicePixelsWide else { return }
-        devicePixelsWide = w
-        devicePixelsHigh = h
-        Log.info("orientation changed -> \(portrait ? "portrait" : "landscape") \(w)x\(h)")
-        if let connection { sendHello(on: connection) }
     }
 
     init(displayLayer: AVSampleBufferDisplayLayer) {
         self.displayLayer = displayLayer
         displayLayer.videoGravity = .resizeAspect
+        let native = UIScreen.main.nativeBounds.size   // portrait pixels
+        panelLongPixels = Int(max(native.width, native.height))
+        panelShortPixels = Int(min(native.width, native.height))
     }
 
     func start(port: UInt16 = 9000) {
@@ -500,6 +507,8 @@ final class PhoneReceiver: ObservableObject {
             "pixelsWide": devicePixelsWide,
             "pixelsHigh": devicePixelsHigh,
             "scale": deviceScale,
+            "panelWide": panelLongPixels,   // full panel, long edge first —
+            "panelHigh": panelShortPixels,  // resize headroom (see above)
             "device": UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
             "id": Self.installID,
             "pv": WireProtocol.version,   // issue #132 — absent on old receivers
