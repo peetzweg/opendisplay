@@ -789,6 +789,10 @@ struct VideoLayerView: UIViewRepresentable {
         pan.maximumNumberOfTouches = 2
         view.addGestureRecognizer(pan)
 
+        let twoFingerTap = UITapGestureRecognizer(target: view, action: #selector(VideoView.didTwoFingerTap(_:)))
+        twoFingerTap.numberOfTouchesRequired = 2
+        view.addGestureRecognizer(twoFingerTap)
+
         // Local cursor echo: position updates ride the ~2ms control path
         // instead of the ~30ms video path, so the pointer feels native.
         receiver.onCursor = { [weak view] x, y, visible in
@@ -950,6 +954,14 @@ struct VideoLayerView: UIViewRepresentable {
             }
         }
 
+        @objc func didTwoFingerTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended,
+                  let video = receiver?.videoSize, video != .zero else { return }
+            guard let n = normalized(recognizer.location(in: self)) else { return }
+            receiver?.sendTouch(phase: "began", x: n.x, y: n.y, button: "right")
+            receiver?.sendTouch(phase: "ended", x: n.x, y: n.y, button: "right")
+        }
+
         // A press is only a click once we know a second finger is not coming.
         // Sending `began` on contact posted a mouse-down we then had to take
         // back, and taking it back only works when UIKit happens to deliver
@@ -1093,7 +1105,8 @@ struct VideoLayerView: UIViewRepresentable {
                 }
             }
             // Palm rejection: ignore resting fingers while the pen is down.
-            if !finger.isEmpty && !inputEngine.hasActivePen {
+            // Suppress began and moved, but forward ended and cancelled so isDown does not stick (#189).
+            if !finger.isEmpty && (!inputEngine.hasActivePen || ended) {
                 send(phase, finger, event)
             }
         }

@@ -510,8 +510,9 @@ final class PhoneReceiver: ObservableObject {
     /// Touch events: x/y normalized [0,1] in video space, origin top-left.
     /// Stamped in *Mac* clock time (our clock + sync offset) so the Mac can
     /// measure touch→injection latency without doing its own clock sync.
-    func sendTouch(phase: String, x: Double, y: Double) {
+    func sendTouch(phase: String, x: Double, y: Double, button: String = "left") {
         var msg: [String: Any] = ["type": "touch", "phase": phase, "x": x, "y": y]
+        if button != "left" { msg["button"] = button }
         if let offset = clockOffsetMs { msg["t"] = nowMs + offset }
         sendControl(msg)
     }
