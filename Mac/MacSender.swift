@@ -330,10 +330,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 throw NSError(domain: "MacSender", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "no displays found"])
             }
-            // SCDisplay reports points; capture at point resolution for M1.
-            let captureW = (Int(Double(display.width) * quality.scale)) & ~1
-            let captureH = (Int(Double(display.height) * quality.scale)) & ~1
+            let displayMode = CGDisplayCopyDisplayMode(display.displayID)
+            let pixelW = displayMode?.pixelWidth ?? (display.width * 2)
+            let pixelH = displayMode?.pixelHeight ?? (display.height * 2)
+            let captureW = (Int(Double(pixelW) * quality.scale)) & ~1
+            let captureH = (Int(Double(pixelH) * quality.scale)) & ~1
             try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
+            inputInjector = InputInjector(displayID: display.displayID)
 
         case .extend:
             // awaitingWake is queue-confined — read it there before surfacing.

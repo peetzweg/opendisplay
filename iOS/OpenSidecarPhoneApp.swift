@@ -1209,6 +1209,15 @@ final class InputCaptureEngine: NSObject {
                            azimuth: Double(c.azimuthAngle(in: view)),
                            altitude: Double(c.altitudeAngle))
             }
+            if let predicted = event?.predictedTouches(for: touch) {
+                for p in predicted {
+                    guard let pn = normalize?(p.location(in: view)) else { continue }
+                    emitPencil("move", x: pn.x, y: pn.y,
+                               pressure: min(Double(p.force), 1.0),
+                               azimuth: Double(p.azimuthAngle(in: view)),
+                               altitude: Double(p.altitudeAngle))
+                }
+            }
             return
         }
 

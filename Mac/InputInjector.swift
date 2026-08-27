@@ -25,8 +25,8 @@ private enum SystemClickMetrics {
 final class InputInjector {
 
     private let displayID: CGDirectDisplayID
-    private var isDown = false
-    private var penDown = false
+    private(set) var isDown = false
+    private(set) var penDown = false
     // A real event source (vs nil) plus non-zero clickState on down/up: menu
     // tracking treats sourceless/zero-click synthetic clicks as malformed — menus
     // open but their tracking session breaks, leaving zombie menu windows
@@ -40,7 +40,7 @@ final class InputInjector {
     private let pointerID: Int64 = 0x0D02              // pen tip
     private let vendorPointerType: Int64 = 0x0802    // Grip Pen (what apps expect)
     private let capabilityMask: Int64 = 0x05C7       // pressure + tilt + rotation + buttons
-    private var inRange = false
+    private(set) var inRange = false
 
     // Pencil-only synthetic click counting — tablet events don't get click
     // state from the Window Server, so we mirror macOS double-click prefs here.
@@ -140,7 +140,7 @@ final class InputInjector {
         if phase == "down", !inRange {
             setProximity(entering: true, at: p)
         }
-        let (tiltX, tiltY) = deriveTilt(azimuth: azimuth, altitude: altitude)
+        let (tiltX, tiltY) = Self.tiltVector(altitude: altitude, azimuth: azimuth)
 
         switch phase {
         case "down":
@@ -279,7 +279,7 @@ final class InputInjector {
     /// is a unit vector in -1...1, so normalize rather than pass radians through
     /// (unnormalized, a flat pen reads 1.57 and apps that scale tilt by 90 report
     /// impossible angles).
-    private func deriveTilt(azimuth: Double, altitude: Double) -> (Double, Double) {
+    static func tiltVector(altitude: Double, azimuth: Double) -> (x: Double, y: Double) {
         let mag = min(max(0, Double.pi / 2 - altitude) / (Double.pi / 2), 1)
         return (sin(azimuth) * mag, cos(azimuth) * mag)
     }
