@@ -118,6 +118,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // not a delta — repeated bumps in one session must not accumulate into
     // an offset nothing ever validated.
     @MainActor var onDisplayIdentityBumped: ((UInt32) -> Void)?
+    @MainActor var onTransportConfirmed: ((SenderTransport) -> Void)?
 
     private var stream: SCStream?
     private var encoder: VTCompressionSession?
@@ -449,7 +450,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                           })
                 }
                 if created != nil { break }
-                Log.info("virtual display creation failed (identity +\(totalOffset), attempt \(attempt + 1)) — retrying")
+                if attempt < (probe == 0 ? 7 : 2) {
+                    Log.info("virtual display creation failed (identity +\(totalOffset), attempt \(attempt + 1)) — retrying")
+                } else {
+                    Log.info("virtual display creation failed (identity +\(totalOffset), attempt \(attempt + 1)) — max attempts reached")
+                }
                 await status("Preparing virtual display…")
             }
             guard let candidate = created else { continue }
@@ -888,7 +893,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastCursorSent = (-1, -1, false)
         lastReceived = Date()  // fresh grace period for the watchdog
         receiveControl(on: conn)
-        Task { await self.status("Connected to \(self.endpointName)") }
+        let activeTransport = self.transport
+        Task { @MainActor in
+            self.onTransportConfirmed?(activeTransport)
+            await self.status("Connected to \(self.endpointName)")
+        }
     }
 
     private func connectTCP(_ endpoint: NWEndpoint) {
