@@ -236,6 +236,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var cursorImageTimer: DispatchSourceTimer?
     private var lastCursorSent: (x: Double, y: Double, visible: Bool) = (-1, -1, false)
     private var lastCursorPNGHash = 0
+    private var lastCursorObject: (cursor: NSCursor, hotSpot: NSPoint, displayWidth: CGFloat)?
     private var captureDisplayID: CGDirectDisplayID = 0
     // ScreenCaptureKit and VideoToolbox finish work asynchronously. During a
     // rotation, an old capture callback or a late encoder completion must not
@@ -638,6 +639,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         captureDisplayID = display.displayID
         lastCursorPNGHash = 0      // rotation rebuilds: re-send the sprite
+        lastCursorObject = nil
         lastCursorSent = (-1, -1, false)
         startCursorEcho()
         // A capture that came back through any path (recovery, rotation,
@@ -755,7 +757,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // A retired stream commonly reports its stop after the replacement is
         // already live. It must not tear down that replacement (#203).
         guard stream === self.stream else { return }
-        Log.info("stream stopped with error: \(error)")
+        let errorDesc = (error as NSError).description
+        Log.info("stream stopped with error: \(errorDesc)")
         // The user stopped this capture from the system UI (the menu bar's
         // recording indicator / "Stop Extending"). That is a disconnect, not
         // a fault: restarting capture would defy the user — and macOS
@@ -767,7 +770,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             Task { @MainActor in self.onCaptureStoppedByUser?() }
             return
         }
-        Task { await status("Capture stopped: \(error.localizedDescription)") }
+        let locDesc = error.localizedDescription
+        Task { await status("Capture stopped: \(locDesc)") }
         // E.g. display sleep can tear the virtual display down underneath the
         // stream — rebuild instead of sitting dead until an app restart.
         guard !stopped, mode == .extend else { return }
@@ -885,6 +889,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // changes it. Reset the dedup state to re-send sprite + position to
         // the fresh peer — the cursor analogue of forcing a keyframe.
         lastCursorPNGHash = 0
+        lastCursorObject = nil
         lastCursorSent = (-1, -1, false)
         lastReceived = Date()  // fresh grace period for the watchdog
         receiveControl(on: conn)
@@ -1152,14 +1157,24 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
               let cursor = NSCursor.currentSystem else { return }
         let displaySize = CGDisplayBounds(captureDisplayID).size   // points, current mode
         guard displaySize.width > 0, displaySize.height > 0 else { return }
+        if let last = lastCursorObject,
+           last.cursor === cursor,
+           last.hotSpot == cursor.hotSpot,
+           last.displayWidth == displaySize.width {
+            return
+        }
         let image = cursor.image
         guard let tiff = image.tiffRepresentation else { return }
         let hash = tiff.hashValue ^ Int(displaySize.width) &* 31
-        guard hash != lastCursorPNGHash else { return }
+        guard hash != lastCursorPNGHash else {
+            lastCursorObject = (cursor, cursor.hotSpot, displaySize.width)
+            return
+        }
         guard let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]),
               png.count < 24_000 else { return }
         lastCursorPNGHash = hash
+        lastCursorObject = (cursor, cursor.hotSpot, displaySize.width)
         let size = image.size            // Mac points
         let hot = cursor.hotSpot
         // Normalized against the display so the phone can size/anchor the
@@ -1360,6 +1375,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func setupEncoder(width: Int, height: Int) throws {
+        if let existing = encoder {
+            VTCompressionSessionInvalidate(existing)
+            encoder = nil
+        }
         // Low-latency rate control: the hardware encoder emits every frame
         // immediately instead of pipelining. (`-lowlatency NO` for A/B.)
         let lowLatency = UserDefaults.standard.object(forKey: "lowlatency") == nil
