@@ -41,6 +41,7 @@ final class InputInjector {
     private let vendorPointerType: Int64 = 0x0802    // Grip Pen (what apps expect)
     private let capabilityMask: Int64 = 0x05C7       // pressure + tilt + rotation + buttons
     private var inRange = false
+    private var stickyModifiers: CGEventFlags = []
 
     // Pencil-only synthetic click counting — tablet events don't get click
     // state from the Window Server, so we mirror macOS double-click prefs here.
@@ -60,6 +61,33 @@ final class InputInjector {
 
     init(displayID: CGDirectDisplayID) {
         self.displayID = displayID
+    }
+
+    /// Sets sticky modifier flags sent from on-screen modifier sidebar (issue #7).
+    func setStickyModifiers(_ rawFlags: UInt) {
+        stickyModifiers = Self.eventFlags(for: rawFlags)
+    }
+
+    /// Injects keyboard key down/up events from connected hardware keyboards (issue #6).
+    func handleKey(hidUsage: UInt16, down: Bool, rawModifiers: UInt = 0, characters: String? = nil) {
+        guard let vk = Self.macKeyCode(for: hidUsage) else { return }
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: vk, keyDown: down) else { return }
+        var flags = Self.eventFlags(for: rawModifiers, sticky: stickyModifiers)
+        if down {
+            switch vk {
+            case 0x38, 0x3C: flags.insert(.maskShift)
+            case 0x3B, 0x3E: flags.insert(.maskControl)
+            case 0x3A, 0x3D: flags.insert(.maskAlternate)
+            case 0x37, 0x36: flags.insert(.maskCommand)
+            default: break
+            }
+        }
+        event.flags = flags
+        if let chars = characters, !chars.isEmpty, down {
+            let utf16 = Array(chars.utf16)
+            event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+        }
+        event.post(tap: .cghidEventTap)
     }
 
     static func ensureAccessibilityPermission() -> Bool {
@@ -110,6 +138,9 @@ final class InputInjector {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                   mouseCursorPosition: point, mouseButton: .left) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+        if !stickyModifiers.isEmpty {
+            event.flags.insert(stickyModifiers)
+        }
         event.post(tap: .cghidEventTap)
     }
 
@@ -140,7 +171,7 @@ final class InputInjector {
         if phase == "down", !inRange {
             setProximity(entering: true, at: p)
         }
-        let (tiltX, tiltY) = deriveTilt(azimuth: azimuth, altitude: altitude)
+        let (tiltX, tiltY) = Self.tiltVector(altitude: altitude, azimuth: azimuth)
 
         switch phase {
         case "down":
@@ -279,9 +310,102 @@ final class InputInjector {
     /// is a unit vector in -1...1, so normalize rather than pass radians through
     /// (unnormalized, a flat pen reads 1.57 and apps that scale tilt by 90 report
     /// impossible angles).
-    private func deriveTilt(azimuth: Double, altitude: Double) -> (Double, Double) {
+    static func tiltVector(altitude: Double, azimuth: Double) -> (x: Double, y: Double) {
         let mag = min(max(0, Double.pi / 2 - altitude) / (Double.pi / 2), 1)
         return (sin(azimuth) * mag, cos(azimuth) * mag)
+    }
+
+    /// Converts UIKeyModifierFlags bitmask to macOS CGEventFlags.
+    static func eventFlags(for rawModifiers: UInt, sticky: CGEventFlags = []) -> CGEventFlags {
+        var flags: CGEventFlags = sticky
+        if rawModifiers & (1 << 17) != 0 { flags.insert(.maskShift) }
+        if rawModifiers & (1 << 18) != 0 { flags.insert(.maskControl) }
+        if rawModifiers & (1 << 19) != 0 { flags.insert(.maskAlternate) }
+        if rawModifiers & (1 << 20) != 0 { flags.insert(.maskCommand) }
+        if rawModifiers & (1 << 16) != 0 { flags.insert(.maskAlphaShift) }
+        return flags
+    }
+
+    /// Maps standard USB HID Keyboard Usage page (0x07) codes to macOS virtual keycodes (CGKeyCode).
+    static func macKeyCode(for hidUsage: UInt16) -> CGKeyCode? {
+        switch hidUsage {
+        // Letters (A-Z)
+        case 0x04: return 0x00 // A
+        case 0x05: return 0x0B // B
+        case 0x06: return 0x08 // C
+        case 0x07: return 0x02 // D
+        case 0x08: return 0x0E // E
+        case 0x09: return 0x03 // F
+        case 0x0A: return 0x05 // G
+        case 0x0B: return 0x04 // H
+        case 0x0C: return 0x22 // I
+        case 0x0D: return 0x26 // J
+        case 0x0E: return 0x28 // K
+        case 0x0F: return 0x25 // L
+        case 0x10: return 0x2E // M
+        case 0x11: return 0x2D // N
+        case 0x12: return 0x1F // O
+        case 0x13: return 0x23 // P
+        case 0x14: return 0x0C // Q
+        case 0x15: return 0x0F // R
+        case 0x16: return 0x01 // S
+        case 0x17: return 0x11 // T
+        case 0x18: return 0x20 // U
+        case 0x19: return 0x09 // V
+        case 0x1A: return 0x0D // W
+        case 0x1B: return 0x07 // X
+        case 0x1C: return 0x10 // Y
+        case 0x1D: return 0x06 // Z
+
+        // Digits (1-0)
+        case 0x1E: return 0x12 // 1
+        case 0x1F: return 0x13 // 2
+        case 0x20: return 0x14 // 3
+        case 0x21: return 0x15 // 4
+        case 0x22: return 0x17 // 5
+        case 0x23: return 0x16 // 6
+        case 0x24: return 0x1A // 7
+        case 0x25: return 0x1C // 8
+        case 0x26: return 0x19 // 9
+        case 0x27: return 0x1D // 0
+
+        // Functional & punctuation
+        case 0x28: return 0x24 // Return
+        case 0x29: return 0x35 // Escape
+        case 0x2A: return 0x33 // Delete (Backspace)
+        case 0x2B: return 0x30 // Tab
+        case 0x2C: return 0x31 // Space
+        case 0x2D: return 0x1B // Hyphen / Minus
+        case 0x2E: return 0x18 // Equal
+        case 0x2F: return 0x21 // Left Bracket
+        case 0x30: return 0x1E // Right Bracket
+        case 0x31: return 0x2A // Backslash
+        case 0x33: return 0x29 // Semicolon
+        case 0x34: return 0x27 // Quote
+        case 0x35: return 0x32 // Grave / Tilde
+        case 0x36: return 0x2B // Comma
+        case 0x37: return 0x2F // Period
+        case 0x38: return 0x2C // Slash
+        case 0x39: return 0x39 // Caps Lock
+
+        // Arrow navigation
+        case 0x4F: return 0x7C // Right Arrow
+        case 0x50: return 0x7B // Left Arrow
+        case 0x51: return 0x7D // Down Arrow
+        case 0x52: return 0x7E // Up Arrow
+
+        // Modifiers
+        case 0xE0: return 0x3B // Left Control
+        case 0xE1: return 0x38 // Left Shift
+        case 0xE2: return 0x3A // Left Option
+        case 0xE3: return 0x37 // Left Command
+        case 0xE4: return 0x3E // Right Control
+        case 0xE5: return 0x3C // Right Shift
+        case 0xE6: return 0x3D // Right Option
+        case 0xE7: return 0x36 // Right Command
+
+        default: return nil
+        }
     }
 
     private func screenPoint(nx: Double, ny: Double) -> CGPoint {

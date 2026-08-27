@@ -86,6 +86,10 @@ struct ReceiverScreen: View {
                         }
                         .allowsHitTesting(false)   // never block touch input
                     }
+                    HStack {
+                        ModifierSidebarView(receiver: model.receiver)
+                        Spacer()
+                    }
                 } else {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
@@ -1098,7 +1102,10 @@ struct VideoLayerView: UIViewRepresentable {
             }
         }
 
+        override var canBecomeFirstResponder: Bool { true }
+
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            if !isFirstResponder { becomeFirstResponder() }
             routeTouches("began", touches, event, ended: false)
         }
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -1109,6 +1116,43 @@ struct VideoLayerView: UIViewRepresentable {
         }
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
             routeTouches("cancelled", touches, event, ended: true)
+        }
+
+        override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            guard let receiver else { super.pressesBegan(presses, with: event); return }
+            var handled = false
+            for press in presses {
+                if let key = press.key {
+                    receiver.sendKey(code: Int(key.keyCode.rawValue), down: true,
+                                     mod: UInt(key.modifierFlags.rawValue), char: key.characters)
+                    handled = true
+                }
+            }
+            if !handled { super.pressesBegan(presses, with: event) }
+        }
+
+        override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            guard let receiver else { super.pressesEnded(presses, with: event); return }
+            var handled = false
+            for press in presses {
+                if let key = press.key {
+                    receiver.sendKey(code: Int(key.keyCode.rawValue), down: false,
+                                     mod: UInt(key.modifierFlags.rawValue), char: key.characters)
+                    handled = true
+                }
+            }
+            if !handled { super.pressesEnded(presses, with: event) }
+        }
+
+        override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            guard let receiver else { super.pressesCancelled(presses, with: event); return }
+            for press in presses {
+                if let key = press.key {
+                    receiver.sendKey(code: Int(key.keyCode.rawValue), down: false,
+                                     mod: UInt(key.modifierFlags.rawValue), char: key.characters)
+                }
+            }
+            super.pressesCancelled(presses, with: event)
         }
     }
 }
@@ -1221,5 +1265,66 @@ final class InputCaptureEngine: NSObject {
     private func emitPencil(_ phase: String, x: Double, y: Double,
                             pressure: Double, azimuth: Double, altitude: Double) {
         onPencil?(phase, x, y, pressure, azimuth, altitude)
+    }
+}
+
+// MARK: - On-Screen Modifier Key Sidebar (issue #7)
+
+struct ModifierSidebarView: View {
+    @ObservedObject var receiver: PhoneReceiver
+    @State private var command = false
+    @State private var option = false
+    @State private var control = false
+    @State private var shift = false
+    @State private var collapsed = true
+
+    private func updateFlags() {
+        var flags: UInt = 0
+        if shift { flags |= (1 << 17) }
+        if control { flags |= (1 << 18) }
+        if option { flags |= (1 << 19) }
+        if command { flags |= (1 << 20) }
+        receiver.sendStickyModifiers(flags)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if !collapsed {
+                VStack(spacing: 8) {
+                    modButton(label: "⌘", active: $command)
+                    modButton(label: "⌥", active: $option)
+                    modButton(label: "⌃", active: $control)
+                    modButton(label: "⇧", active: $shift)
+                }
+                .padding(6)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .shadow(radius: 4)
+            }
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    collapsed.toggle()
+                }
+            } label: {
+                Image(systemName: collapsed ? "command.circle.fill" : "chevron.left.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(.white.opacity(0.85))
+                    .padding(6)
+            }
+        }
+        .padding(.leading, 6)
+    }
+
+    private func modButton(label: String, active: Binding<Bool>) -> some View {
+        Button {
+            active.wrappedValue.toggle()
+            updateFlags()
+        } label: {
+            Text(label)
+                .font(.system(size: 18, weight: .bold))
+                .frame(width: 38, height: 38)
+                .background(active.wrappedValue ? Color.blue : Color.white.opacity(0.15))
+                .foregroundColor(.white)
+                .cornerRadius(8)
+        }
     }
 }

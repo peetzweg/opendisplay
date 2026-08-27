@@ -542,6 +542,18 @@ final class PhoneReceiver: ObservableObject {
         sendControl(["type": "proximity", "entering": entering, "x": x, "y": y])
     }
 
+    /// Hardware keyboard key events (issue #6).
+    func sendKey(code: Int, down: Bool, mod: UInt, char: String? = nil) {
+        var msg: [String: Any] = ["type": "key", "code": code, "down": down, "mod": mod]
+        if let char, !char.isEmpty { msg["char"] = char }
+        sendControl(msg)
+    }
+
+    /// Sticky modifier flags from on-screen sidebar (issue #7).
+    func sendStickyModifiers(_ flags: UInt) {
+        sendControl(["type": "modSidebar", "flags": flags])
+    }
+
     private func sendControl(_ message: [String: Any], on conn: NWConnection? = nil,
                              completion: (() -> Void)? = nil) {
         guard let conn = conn ?? connection,

@@ -1291,6 +1291,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                let y = obj["y"] as? Double {
                 inputInjector?.handleProximity(entering: entering, x: x, y: y)
             }
+        case "key":
+            if let code = obj["code"] as? Int,
+               let down = obj["down"] as? Bool {
+                let mod = obj["mod"] as? UInt ?? 0
+                let char = obj["char"] as? String
+                inputInjector?.handleKey(hidUsage: UInt16(code), down: down, rawModifiers: mod, characters: char)
+            }
+        case "modSidebar":
+            if let flags = obj["flags"] as? UInt {
+                inputInjector?.setStickyModifiers(flags)
+            }
         case "kf":
             // The phone's decoder lost sync (e.g. it attached mid-GOP and
             // periodic keyframes are off) — force an IDR on the next frame.
