@@ -91,6 +91,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Status surfaced to the UI (updated on main thread).
     @MainActor var onStatus: ((String) -> Void)?
     @MainActor var onStats: ((Int, Double) -> Void)?   // framesSent, mbps
+    @MainActor var onBatteryStatus: ((Double, String, Bool) -> Void)? // level, state, lowPower
     // Fired when a previously connected device stays gone past the grace
     // period — the controller ends the session (capture, virtual display,
     // recording indicator all torn down) instead of dialing forever or
@@ -1217,6 +1218,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 Log.info("PHONE-STATS \(line) | mac enc↓=\(dropsEncThisWindow) net↓=\(dropsNetThisWindow) pending=\(pendingSends)")
                 dropsEncThisWindow = 0
                 dropsNetThisWindow = 0
+            }
+        case "battery":
+            if let level = obj["level"] as? Double {
+                let state = obj["state"] as? String ?? "unknown"
+                let lowPower = obj["lowPower"] as? Bool ?? false
+                Task { @MainActor in
+                    self.onBatteryStatus?(level, state, lowPower)
+                }
             }
         case "hello":
             if let info = try? JSONDecoder().decode(PhoneInfo.self, from: payload) {

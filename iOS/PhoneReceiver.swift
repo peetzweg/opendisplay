@@ -215,6 +215,52 @@ final class PhoneReceiver: ObservableObject {
     init(displayLayer: AVSampleBufferDisplayLayer) {
         self.displayLayer = displayLayer
         displayLayer.videoGravity = .resizeAspect
+        setupBatteryMonitoring()
+    }
+
+    private func setupBatteryMonitoring() {
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(batteryStateChanged),
+            name: UIDevice.batteryLevelDidChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(batteryStateChanged),
+            name: UIDevice.batteryStateDidChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(batteryStateChanged),
+            name: NSNotification.Name.NSProcessInfoPowerStateDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func batteryStateChanged() {
+        sendBatteryStatus()
+    }
+
+    func sendBatteryStatus() {
+        let level = Double(UIDevice.current.batteryLevel)
+        let rawState = UIDevice.current.batteryState
+        let state: String
+        switch rawState {
+        case .charging: state = "charging"
+        case .full: state = "full"
+        case .unplugged: state = "unplugged"
+        default: state = "unknown"
+        }
+        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        sendControl([
+            "type": "battery",
+            "level": level,
+            "state": state,
+            "lowPower": lowPower
+        ])
     }
 
     func start(port: UInt16 = 9000) {
@@ -354,6 +400,7 @@ final class PhoneReceiver: ObservableObject {
                     self?.lastDataReceived = Date()
                     self?.setConnected(true)
                     self?.sendHello(on: conn)
+                    self?.sendBatteryStatus()
                 case .failed, .cancelled:
                     self?.setConnected(false)
                 default: break
