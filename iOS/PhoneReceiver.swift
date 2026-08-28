@@ -554,6 +554,27 @@ final class PhoneReceiver: ObservableObject {
         sendControl(["type": "modSidebar", "flags": flags])
     }
 
+    /// Latched (sticky) modifier flags currently sent to the Mac. The single
+    /// source of truth shared by the on-screen keyboard (Caps) and the modifier
+    /// sidebar (⌘/⌥/⌃/⇧), so toggling one never clears the other.
+    @Published private(set) var latchedModifierFlags: UInt = 0
+
+    /// Toggles one sticky modifier bit and re-sends the full set.
+    /// Bits: shift = 1<<17, control = 1<<18, option = 1<<19,
+    /// command = 1<<20, caps/alphaShift = 1<<16.
+    @discardableResult
+    func toggleLatchedModifier(_ bit: UInt) -> Bool {
+        latchedModifierFlags ^= bit
+        sendStickyModifiers(latchedModifierFlags)
+        return latchedModifierFlags & bit != 0
+    }
+
+    /// Replaces the full latched flag set (sidecar sidebar path).
+    func setLatchedModifiers(_ flags: UInt) {
+        latchedModifierFlags = flags
+        sendStickyModifiers(latchedModifierFlags)
+    }
+
     private func sendControl(_ message: [String: Any], on conn: NWConnection? = nil,
                              completion: (() -> Void)? = nil) {
         guard let conn = conn ?? connection,

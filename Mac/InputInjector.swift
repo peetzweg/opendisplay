@@ -66,6 +66,7 @@ final class InputInjector {
     /// Sets sticky modifier flags sent from on-screen modifier sidebar (issue #7).
     func setStickyModifiers(_ rawFlags: UInt) {
         stickyModifiers = Self.eventFlags(for: rawFlags)
+        Log.info("SIDEBAR MODIFIER RECEIVED raw=\(rawFlags) mapped=\(stickyModifiers)")
     }
 
     /// Injects keyboard key down/up events from connected hardware keyboards (issue #6).
@@ -83,9 +84,13 @@ final class InputInjector {
             }
         }
         event.flags = flags
-        if let chars = characters, !chars.isEmpty, down {
+        Log.info("KEY EVENT vk=\(vk) down=\(down) flags=\(flags.rawValue) sticky=\(stickyModifiers.rawValue)")
+        if let chars = characters, !chars.isEmpty, down, flags.isEmpty {
             let utf16 = Array(chars.utf16)
-            event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+            event.keyboardSetUnicodeString(
+                stringLength: utf16.count,
+                unicodeString: utf16
+            )
         }
         event.post(tap: .cghidEventTap)
     }

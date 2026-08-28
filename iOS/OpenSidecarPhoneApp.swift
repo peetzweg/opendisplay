@@ -41,6 +41,7 @@ struct ReceiverScreen: View {
     @State private var showSettings = false
     @State private var showOnboarding = false
     @State private var nagDismissed = false
+    @State private var showKeyboard = false
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
@@ -88,6 +89,37 @@ struct ReceiverScreen: View {
                     }
                     HStack {
                         ModifierSidebarView(receiver: model.receiver)
+                        Spacer()
+                    }
+                    if showKeyboard {
+                        VStack {
+                            Spacer()
+
+                            OnScreenKeyboard(receiver: model.receiver)
+                                .padding(.horizontal, 8)
+                                .padding(.bottom, 8)
+                        }
+                    }
+                    VStack {
+                        HStack {
+                            Spacer()
+
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showKeyboard.toggle()
+                                }
+                            } label: {
+                                Image(systemName: showKeyboard ? "keyboard.chevron.compact.down" : "keyboard")
+                                    .font(.title2)
+                                    .foregroundStyle(.white)
+                                    .padding(12)
+                                    .background(.black.opacity(0.7))
+                                    .clipShape(Circle())
+                            }
+                            .padding(.trailing, 12)
+                            .padding(.top, 12)
+                        }
+
                         Spacer()
                     }
                 } else {
@@ -1278,13 +1310,17 @@ struct ModifierSidebarView: View {
     @State private var shift = false
     @State private var collapsed = true
 
+    /// Bits this sidebar owns — caps (1<<16) lives on the keyboard and must be
+    /// preserved when we re-send, so we mask it out and OR our own back in.
+    private let sidebarModifierMask: UInt = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20)
+
     private func updateFlags() {
-        var flags: UInt = 0
+        var flags = receiver.latchedModifierFlags & ~sidebarModifierMask
         if shift { flags |= (1 << 17) }
         if control { flags |= (1 << 18) }
         if option { flags |= (1 << 19) }
         if command { flags |= (1 << 20) }
-        receiver.sendStickyModifiers(flags)
+        receiver.setLatchedModifiers(flags)
     }
 
     var body: some View {
@@ -1312,6 +1348,12 @@ struct ModifierSidebarView: View {
             }
         }
         .padding(.leading, 6)
+        // Re-assert latched modifiers whenever the connection (re)establishes:
+        // each new Mac session starts with cleared sticky state, so without this
+        // the sidebar can show a modifier latched while the Mac ignores it.
+        .onChange(of: receiver.connected) { _ in
+            updateFlags()
+        }
     }
 
     private func modButton(label: String, active: Binding<Bool>) -> some View {

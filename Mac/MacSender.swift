@@ -1299,8 +1299,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 inputInjector?.handleKey(hidUsage: UInt16(code), down: down, rawModifiers: mod, characters: char)
             }
         case "modSidebar":
-            if let flags = obj["flags"] as? UInt {
-                inputInjector?.setStickyModifiers(flags)
+            if let flags = obj["flags"] as? NSNumber {
+                inputInjector?.setStickyModifiers(flags.uintValue)
             }
         case "kf":
             // The phone's decoder lost sync (e.g. it attached mid-GOP and
