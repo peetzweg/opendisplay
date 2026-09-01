@@ -283,6 +283,9 @@ nothing before it arrives.
   The receiver SHOULD re-send `hello` when this set changes (a cable
   plugged mid-session creates the interface the sender must probe).
   Additive at `pv` 3, no bump.
+* `maxEncodeWide` / `maxEncodeHigh` (int, optional): the receiver's decode
+  ceiling in pixels (section 6.5) — the largest stream it can sustain,
+  independent of the panel size it announced. Additive at `pv` 3, no bump.
 
 A receiver MUST re-send `hello` on the live connection whenever its
 announced dimensions change (rotation). The sender rebuilds the display in
@@ -479,6 +482,27 @@ block its own UI. At `pv` 3 this is only sent when
 `hello.pv < welcome.min`, which never happens while `min` is 1; the
 machinery exists so a future floor raise degrades into a clear message
 instead of a silent failure.
+
+### 6.5 Decode ceiling (`hello.maxEncodeWide` / `maxEncodeHigh`)
+
+`hello.pixelsWide/High` sets the desktop size, and without further
+information it also sets the stream size — but a big panel says nothing
+about the decoder behind it. Measured end to end, H.264 hardware decode
+stops below 5120 pixels wide on every Mac tested, current models
+included: a 5K panel asking for a 5K H.264 stream gets a session the
+receiver cannot sustain, which degrades confusingly instead of failing
+cleanly.
+
+Both fields are optional and additive (no `pv` bump). A receiver MAY
+advertise the largest stream, in pixels, it can actually decode at
+frame rate; a sender that understands the fields SHOULD keep the
+desktop at the announced panel size and, when the stream it would
+encode exceeds the ceiling, scale the stream down to fit inside it,
+preserving aspect. A ceiling the stream already fits inside changes
+nothing, and a receiver that omits the fields gets the previous
+behavior (stream size follows the announced pixels and the sender's
+quality setting). Derive advertised ceilings from measured playback: a
+decode session that merely creates successfully proves nothing.
 
 ## 7. Coordinate spaces and units
 

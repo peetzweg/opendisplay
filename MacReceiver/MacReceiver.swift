@@ -40,9 +40,15 @@ final class ReceiverController: ObservableObject {
 
     func start() {
         guard receiver == nil else { return }
+        // 4096x2304 is H.264's practical hardware-decode ceiling: end-to-end
+        // playback stops below 5120 wide on every Mac measured, including an
+        // M4 Pro — a format limit, not an age one. A 5K/6K panel still gets
+        // its full desktop; the stream is capped and upscaled. Revisit when
+        // an HEVC path lands (HEVC decodes 5K fine even on a 2017 iMac).
         let receiver = StreamReceiver(displayLayer: AVSampleBufferDisplayLayer(),
                                       deviceKind: "Mac",
-                                      fallbackServiceName: fallbackName)
+                                      fallbackServiceName: fallbackName,
+                                      maxEncodeWide: 4096, maxEncodeHigh: 2304)
         let saved = UserDefaults.standard.string(forKey: "receiverName")
         receiver.serviceName = (saved?.isEmpty == false) ? saved! : fallbackName
         announcePanel(to: receiver)

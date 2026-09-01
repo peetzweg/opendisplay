@@ -77,6 +77,8 @@ struct PhoneInfo: Decodable {
                           // 6.3); absent = cursor stays on TCP
     let addrs: [String]?  // every address the receiver is reachable on
                           // (PROTOCOL.md 6.4); probed for a cable upgrade
+    let maxEncodeWide: Int?  // receiver's decode ceiling in pixels (PROTOCOL.md
+    let maxEncodeHigh: Int?  //  6.5): cap the stream, keep the desktop size
 
     var kind: String { device ?? "device" }
     var protocolVersion: Int { pv ?? WireProtocol.assumedWhenAbsent }
@@ -382,9 +384,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 throw NSError(domain: "MacSender", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "no displays found"])
             }
-            // SCDisplay reports points; capture at point resolution for M1.
-            let captureW = (Int(Double(display.width) * quality.scale)) & ~1
-            let captureH = (Int(Double(display.height) * quality.scale)) & ~1
+            // SCDisplay.width/height are POINTS. Capturing at points on a
+            // Retina panel discards half the raster before the encoder ever
+            // sees it, and no quality setting can bring it back — read the
+            // true pixel size from the active display mode.
+            let displayMode = CGDisplayCopyDisplayMode(display.displayID)
+            let pixelsW = displayMode?.pixelWidth ?? display.width
+            let pixelsH = displayMode?.pixelHeight ?? display.height
+            let captureW = (Int(Double(pixelsW) * quality.scale)) & ~1
+            let captureH = (Int(Double(pixelsH) * quality.scale)) & ~1
             try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
 
         case .extend:
@@ -539,8 +547,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         inputInjector = InputInjector(displayID: vd.displayID)
         // Quality scaling: capture/encode below native when requested — the
         // display itself stays native so window layout is unaffected.
-        let captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
-        let captureH = (Int(Double(pointsHigh * 2) * quality.scale)) & ~1
+        var captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
+        var captureH = (Int(Double(pointsHigh * 2) * quality.scale)) & ~1
+        // hello.maxEncodeWide/High (PROTOCOL.md 6.5): a big panel does not
+        // imply a big decoder. Cap the stream at the receiver's advertised
+        // decode ceiling — SCK scales the capture — while the desktop keeps
+        // its announced size.
+        if let maxW = info.maxEncodeWide, let maxH = info.maxEncodeHigh,
+           maxW > 0, maxH > 0, captureW > maxW || captureH > maxH {
+            let s = min(Double(maxW) / Double(captureW), Double(maxH) / Double(captureH))
+            captureW = (Int(Double(captureW) * s)) & ~1
+            captureH = (Int(Double(captureH) * s)) & ~1
+            Log.info("stream capped at \(captureW)x\(captureH) by the receiver's decode ceiling \(maxW)x\(maxH)")
+        }
         try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
 
         // Debug aid (`defaults write sh.peet.opensidecar.mac testPattern -bool true`):

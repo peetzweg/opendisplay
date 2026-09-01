@@ -220,6 +220,11 @@ final class StreamReceiver: ObservableObject {
     /// "iPhone" / "iPad" / "Mac" — announced in the hello (the sender names
     /// the virtual display after it) and used in peer-update copy.
     private let deviceKind: String
+    // Decode ceiling advertised in hello (PROTOCOL.md 6.5): the largest
+    // stream this machine can actually sustain, which a big panel says
+    // nothing about. nil = advertise nothing (sender streams full size).
+    private let maxEncodeWide: Int?
+    private let maxEncodeHigh: Int?
     /// What to advertise when the user-set service name is empty.
     private let fallbackServiceName: String
 
@@ -290,10 +295,13 @@ final class StreamReceiver: ObservableObject {
     }
 
     init(displayLayer: AVSampleBufferDisplayLayer, deviceKind: String,
-         fallbackServiceName: String) {
+         fallbackServiceName: String,
+         maxEncodeWide: Int? = nil, maxEncodeHigh: Int? = nil) {
         self.displayLayer = displayLayer
         self.deviceKind = deviceKind
         self.fallbackServiceName = fallbackServiceName
+        self.maxEncodeWide = maxEncodeWide
+        self.maxEncodeHigh = maxEncodeHigh
         displayLayer.videoGravity = .resizeAspect
     }
 
@@ -832,6 +840,12 @@ final class StreamReceiver: ObservableObject {
         // Additive capability: only offered while the UDP listener is bound,
         // so a sender never dials a port nobody answers on.
         if cursorListenerReady { hello["cursorPort"] = Int(cursorPort) }
+        // Additive: decode ceiling (PROTOCOL.md 6.5) — ask for the full
+        // desktop but a stream no larger than this machine can decode.
+        if let maxEncodeWide, let maxEncodeHigh {
+            hello["maxEncodeWide"] = maxEncodeWide
+            hello["maxEncodeHigh"] = maxEncodeHigh
+        }
         // Additive: the addresses this receiver can be reached on, so the
         // sender can probe for a better (cabled) path and migrate a WiFi
         // session onto it — mDNS resolution under an interface-restricted
