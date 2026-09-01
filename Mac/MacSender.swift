@@ -248,8 +248,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // iPhone's WiFi→USB transport switch. All confined to `queue`.
     private var upgradeTimer: DispatchSourceTimer?
     private var upgradeProbes: [NWConnection] = []
-    private var probeRoundLogged = false
+    private var probeRoundGeneration = 0
+    private var lastLoggedCandidates: [String] = []
     private var peerAddrs: [String] = []
+    // The Mac-to-Mac USB link takes ~25-30s to negotiate, and either side
+    // can finish last. Peer-side lateness arrives as a re-hello; this
+    // monitor catches OUR side coming up, so a probe fires the moment the
+    // local interface is routable instead of up to 10s later.
+    private var wiredPathMonitor: NWPathMonitor?
     // Probing is gated on this, not on wired-ness: the upgrade exists to get
     // OFF WiFi, and any non-WiFi path (bridge, USB-C link, even loopback)
     // is already as good as a probe could find — re-probing there would
@@ -957,18 +963,35 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Arm the periodic probe. Cheap when there is nothing to find: with no
     /// advertised addresses, or on the USB transport, it never fires a dial.
     private func startUpgradeProbing() {
-        probeRoundLogged = false
+        lastLoggedCandidates = []
         upgradeTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 2.0, repeating: 10.0)
         timer.setEventHandler { [weak self] in self?.probeForCablePath() }
         timer.resume()
         upgradeTimer = timer
+        wiredPathMonitor?.cancel()
+        let monitor = NWPathMonitor(requiredInterfaceType: .wiredEthernet)
+        // The handler also fires once at start with the current state; only
+        // a transition to satisfied means a cable was just plugged.
+        var wasSatisfied: Bool? = nil
+        monitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            defer { wasSatisfied = satisfied }
+            guard let self, satisfied, wasSatisfied == false else { return }
+            Log.info("local wired path appeared — probing cable paths now")
+            self.probeForCablePath(force: true)
+        }
+        monitor.start(queue: queue)
+        wiredPathMonitor = monitor
     }
 
     private func stopUpgradeProbing() {
         upgradeTimer?.cancel()
         upgradeTimer = nil
+        wiredPathMonitor?.cancel()
+        wiredPathMonitor = nil
+        probeRoundGeneration += 1   // orphan any pending sweep
         upgradeProbes.forEach { $0.cancel() }
         upgradeProbes.removeAll()
     }
@@ -976,11 +999,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// One probe round: dial every candidate (receiver address × local
     /// interface for link-local IPv6) with WiFi forbidden. mDNS resolution
     /// stalls under interface restrictions; literal addresses do not.
-    private func probeForCablePath() {
+    private func probeForCablePath(force: Bool = false) {
         guard !stopped, connectionReady,
               currentPathUsesWiFi || UserDefaults.standard.bool(forKey: "forceUpgradeProbe"),
               case .tcp = transport, !peerAddrs.isEmpty else { return }
-        guard upgradeProbes.isEmpty else { return }   // a round is still in flight
+        if force {
+            // Something changed (peer re-hello, local interface up): a round
+            // of stale candidates still in flight must not swallow this one.
+            upgradeProbes.forEach { $0.cancel() }
+            upgradeProbes.removeAll()
+        } else {
+            guard upgradeProbes.isEmpty else { return }   // a round is still in flight
+        }
 
         // Directly-dialable addresses first (IPv4, routable IPv6): they are
         // one candidate each and usually enough. Link-local IPv6 needs a
@@ -1001,13 +1031,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         candidates.append(contentsOf: linkLocal)
         guard !candidates.isEmpty else { return }
-        // Once per session: rounds repeat every 10s for as long as the
-        // session stays on WiFi, and a cable that never appears should not
-        // fill the log.
-        if !probeRoundLogged {
-            probeRoundLogged = true
-            Log.info("probing \(min(candidates.count, 16)) candidate cable paths (round repeats every 10s)")
+        // Log a round only when its candidate set differs from the last
+        // logged one: the first round of a session and every cable-plug
+        // transition show up, an unchanged set repeating every 10s does not.
+        let candidateNames = candidates.prefix(16).map { "\($0)" }
+        if candidateNames != lastLoggedCandidates {
+            lastLoggedCandidates = candidateNames
+            Log.info("probing \(candidateNames.count) candidate cable paths"
+                     + " (direct \(candidates.count - linkLocal.count),"
+                     + " fe80 scopes \(scopes.joined(separator: ","))) — repeats every 10s")
         }
+        probeRoundGeneration += 1
+        let round = probeRoundGeneration
 
         for host in candidates.prefix(16) {
             let tcp = NWProtocolTCP.Options()
@@ -1034,9 +1069,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }
             probe.start(queue: queue)
         }
-        // Sweep stragglers so the next round starts clean.
+        // Sweep stragglers so the next round starts clean. Generation-gated:
+        // a forced round may have replaced this one, and the old sweep must
+        // not cancel the new round's probes mid-dial.
         queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            guard let self else { return }
+            guard let self, self.probeRoundGeneration == round else { return }
             self.upgradeProbes.forEach { $0.cancel() }
             self.upgradeProbes.removeAll()
         }
@@ -1558,10 +1595,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
                 let addrs = info.addrs ?? []
                 if addrs != peerAddrs {
+                    let firstHello = peerAddrs.isEmpty
                     peerAddrs = addrs
                     // A re-hello with a changed address set usually means a
-                    // cable was just plugged — probe now, not in up to 10s.
-                    if upgradeTimer != nil { probeForCablePath() }
+                    // cable was just plugged — probe now, not in up to 10s,
+                    // and cancel any stale round still in flight.
+                    if upgradeTimer != nil, !firstHello {
+                        Log.info("receiver addrs changed (\(addrs.count)) — probing cable paths now")
+                        probeForCablePath(force: true)
+                    }
                 }
                 // Version handshake (issue #132). Reply with our identity, and
                 // if the receiver is below the version we support, tell it to
