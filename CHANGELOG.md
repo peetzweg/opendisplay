@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.0](https://github.com/peetzweg/opendisplay/compare/v1.18.0...v1.19.0) (2026-09-01)
+
+
+### Features
+
+* **mac:** full-pixel mirror capture and a receiver decode ceiling ([#258](https://github.com/peetzweg/opendisplay/issues/258)) ([f1f3ec5](https://github.com/peetzweg/opendisplay/commit/f1f3ec57540cb42325fc57d0f79b6a8d740744a5))
+
 ## [1.18.0](https://github.com/peetzweg/opendisplay/compare/v1.17.0...v1.18.0) (2026-09-01)
 
 
