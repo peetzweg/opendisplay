@@ -442,9 +442,9 @@ export default function App() {
               from around 2015 onward qualify. It appears on the sending Mac like a phone would and
               becomes a real extended Retina display. WiFi works out of the box. For a cable, use a
               <em>Thunderbolt or USB4</em> cable (macOS sets up a Thunderbolt Bridge network between
-              the two) or Ethernet — the sender picks the wired path automatically. A plain USB-C cable
-              does not work between two Macs: USB is host-to-device and both Macs are hosts, which is
-              exactly what makes it work with an iPhone or iPad but not Mac-to-Mac. Keyboard and mouse
+              the two), Ethernet, or — on recent macOS on both Macs — a plain USB-C data cable (approve
+              the "allow accessory" prompt on each Mac). The sender moves the session onto the cable
+              automatically, even one plugged in mid-session. Keyboard and mouse
               input from the receiving Mac is a follow-up.</p>
             </details>
             <details>

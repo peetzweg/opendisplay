@@ -114,13 +114,14 @@ roadmap.
 though the sending Mac needs macOS 14. The receiver shows up on the sending Mac
 like a phone does and becomes a real extended Retina display. Over WiFi it works out of the box. For a cable, connect the two
 Macs with a **Thunderbolt or USB4 cable** (macOS creates a *Thunderbolt Bridge*
-network between them) or with an **Ethernet** cable or adapters; the sender
-prefers that wired path automatically and the device row says *Cable*. A plain
-USB-C data cable does **not** work between two Macs: USB is host-to-device, and
-both Macs are hosts. That is different from iPhone/iPad, where the device side
-is what makes USB work. Older Macs with a Mini DisplayPort-shaped Thunderbolt 1
-or 2 port work with a Thunderbolt 3 to 2 adapter and a Thunderbolt 2 cable; the
-12-inch MacBook (2015 to 2017) has no Thunderbolt and needs Ethernet or WiFi.
+network between them), with an **Ethernet** cable or adapters, or — on recent
+macOS on both Macs — a plain **USB-C data cable** (macOS runs a small network
+link over it; approve the *allow accessory to connect* prompt on each Mac,
+which appears depending on which Mac is plugged into which). The sender moves
+the session onto the cable automatically, even one plugged in mid-session, and
+the device row says *Cable*. Older Macs with a Mini DisplayPort-shaped
+Thunderbolt 1 or 2 port work with a Thunderbolt 3 to 2 adapter and a
+Thunderbolt 2 cable.
 Input from the receiving Mac's keyboard and mouse is a follow-up
 ([#147](https://github.com/peetzweg/opendisplay/issues/147)).
 
