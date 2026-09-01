@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.18.0](https://github.com/peetzweg/opendisplay/compare/v1.17.0...v1.18.0) (2026-09-01)
+
+
+### Features
+
+* **mac:** standalone OpenDisplay Receiver app, a spare Mac as a display ([#145](https://github.com/peetzweg/opendisplay/issues/145)) ([23b62b3](https://github.com/peetzweg/opendisplay/commit/23b62b3da59fbb3ce2836a29aec34c7f7bf71a1d))
+* **web:** add coverage showcase ([#239](https://github.com/peetzweg/opendisplay/issues/239)) ([89d9902](https://github.com/peetzweg/opendisplay/commit/89d9902857e23c67c77b7e845ddbd7b8e99d4aea))
+
 ## [1.17.0](https://github.com/peetzweg/opendisplay/compare/v1.16.1...v1.17.0) (2026-08-20)
 
 
