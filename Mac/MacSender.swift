@@ -261,6 +261,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // is already as good as a probe could find — re-probing there would
     // migrate in a circle.
     private var currentPathUsesWiFi = false
+    // Set when the live session rides a cable (Ethernet, USB-C link, dock).
+    // Losing that link is treated as intent — see linkDied().
+    private var currentPathWired = false
     private var lastCursorSent: (x: Double, y: Double, visible: Bool) = (-1, -1, false)
     private var lastCursorPNGHash = 0
     // Cursor side channel (UDP, WiFi only): positions queue behind video
@@ -766,6 +769,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { @MainActor in self.onDisconnected?() }
     }
 
+    /// A live connection just died (must be called on `queue`). On a cable
+    /// the death is almost always someone pulling the plug, and unplugging
+    /// is how people intentionally end a session — falling back to WiFi
+    /// would resurrect what they just killed. WiFi sessions (and the dev
+    /// loopback) keep the redial loop: radio drops are never intent.
+    private func linkDied(_ detail: String) {
+        if currentPathWired, case .tcp = transport {
+            reportGone("cable link lost (\(detail)) — unplugging means disconnect, ending session")
+        } else {
+            scheduleReconnect()
+        }
+    }
+
     /// A dial was actively refused (must be called on `queue`). On a session
     /// that has streamed before, enough refusals in a row prove the receiver
     /// app is gone — end now instead of waiting out the grace.
@@ -944,6 +960,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let wired = !path.usesInterfaceType(.wifi) && !path.usesInterfaceType(.loopback)
                 && !path.usesInterfaceType(.cellular)
             currentPathUsesWiFi = path.usesInterfaceType(.wifi)
+            currentPathWired = wired
             let names = path.availableInterfaces.map(\.name).joined(separator: ",")
             Log.info("connection path to \(endpointName): \(names) wired=\(wired)")
             Task { @MainActor in self.onTransportPath?(wired) }
@@ -1103,11 +1120,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             case .failed(let error):
                 Log.info("connection failed: \(error)")
                 self.connectionReady = false
-                self.scheduleReconnect()
+                self.linkDied("failed: \(error)")
             case .waiting(let error):
                 Log.info("connection waiting: \(error) — will retry")
                 self.connectionReady = false
-                self.scheduleReconnect()
+                self.linkDied("waiting: \(error)")
             case .cancelled:
                 self.connectionReady = false
             default: break
@@ -1182,7 +1199,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 if case .posix(let code) = error, code == .ECONNREFUSED {
                     self.dialRefused()
                 }
-                self.scheduleReconnect()
+                self.linkDied("failed: \(error)")
             case .waiting(let error):
                 // On loopback there is no "path change" to wake us up again
                 // (e.g. a manual -host tunnel not started yet) — treat
@@ -1195,7 +1212,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     ? "\(self.endpointName) is asleep — reconnects when it wakes…"
                     : "Waiting for receiver at \(self.endpointName)…"
                 Task { await self.status(text) }
-                self.scheduleReconnect()
+                self.linkDied("waiting: \(error)")
             case .cancelled:
                 self.connectionReady = false
             default:

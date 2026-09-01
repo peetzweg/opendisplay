@@ -375,6 +375,7 @@ a PNG (kept under 24000 bytes pre-encoding, see section 4); `nw`, `nh` are
 the sprite's width/height **normalized to the display size**, so the
 receiver can scale it without knowing the sender's HiDPI factor; `ax`, `ay`
 are the hotspot **normalized within the sprite** (0..1 of its own size).
+Sent when the sprite changes and re-sent after reconnects.
 
 ### 6.3 Cursor side channel (UDP)
 
@@ -442,7 +443,12 @@ newcomer handling (a newcomer proves itself with bytes before it may
 replace a live session) swaps it in cleanly. The abandoned WiFi socket is closed
 by the sender. A sender already on a wired path, or on the USB (usbmuxd)
 binding, does not probe.
-Sent when the sprite changes and re-sent after reconnects.
+
+The upgrade is one-way by design. When a session riding a cable loses its
+link, the sender SHOULD end the session rather than redial over WiFi:
+pulling the cable is how a person deliberately ends a session, and a WiFi
+fallback would resurrect what they just closed. (WiFi sessions keep their
+reconnect loop — a radio drop is never intent.)
 
 **`welcome`**: the sender's `pv` and `min` (the oldest receiver `pv` it
 still supports). Sent in response to every `hello`. A receiver whose own
