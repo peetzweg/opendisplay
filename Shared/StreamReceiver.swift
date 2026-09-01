@@ -90,6 +90,11 @@ final class StreamReceiver: ObservableObject {
     private var cursorListenerReady = false
     private var cursorConnection: NWConnection?
     private var cursorPortAnnounced = false
+    // Newcomer connections still proving themselves against a live session
+    // (see the listener). Tracked so stop() and adoption can cancel them —
+    // an untracked silent socket would sit parked forever and could even
+    // adopt into a receiver that was stopped in the meantime.
+    private var pendingConnections: [NWConnection] = []
     private var lastCursorSeq: UInt64 = 0
     // Cursor channel health for the HUD/stats: how many positions landed and
     // how many datagrams never did (sequence gaps + reordered drops). A
@@ -300,6 +305,8 @@ final class StreamReceiver: ObservableObject {
         queue.async {
             self.pingTimer?.cancel(); self.pingTimer = nil
             self.watchdogTimer?.cancel(); self.watchdogTimer = nil
+            self.pendingConnections.forEach { $0.cancel() }
+            self.pendingConnections.removeAll()
         }
         closeSession(announcing: WireMessage.closing, status: "Stopped",
                      completion: completion)
@@ -445,7 +452,13 @@ final class StreamReceiver: ObservableObject {
                 }
             case .failed(let error):
                 Log.info("cursor listener failed: \(error) (cursor stays on TCP)")
+                let wasAnnounced = self.cursorPortAnnounced
                 self.stopCursorListener()
+                // Withdraw the offer: a hello without cursorPort makes the
+                // sender close its channel and return to TCP.
+                if wasAnnounced, let connection = self.connection, connection.state == .ready {
+                    self.sendHello(on: connection)
+                }
             case .cancelled:
                 self.cursorListenerReady = false
             default: break
@@ -482,11 +495,19 @@ final class StreamReceiver: ObservableObject {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               obj["type"] as? String == "cursor",
               let seq = (obj["s"] as? NSNumber)?.uint64Value else { return }
+        // Loss accounting only; the floor itself is enforced in applyCursor,
+        // shared with TCP. Counts run slightly hot during the brief window
+        // where the sender still mirrors to TCP (duplicates read as drops).
         guard seq > lastCursorSeq else { cursorLostThisWindow += 1; return }
-        // One line per flow so a field log shows the side channel is live.
-        if lastCursorSeq == 0 { Log.info("cursor channel: receiving datagrams") }
-        if lastCursorSeq != 0 { cursorLostThisWindow += Int(seq - lastCursorSeq - 1) }
-        lastCursorSeq = seq
+        if lastCursorSeq == 0 {
+            // First datagram of this flow: tell the sender the channel truly
+            // delivers (UDP .ready proves only a local route — a firewalled
+            // port would otherwise eat the cursor forever, PROTOCOL.md 6.3).
+            Log.info("cursor channel: receiving datagrams")
+            sendControl(["type": "cursorAck"])
+        } else {
+            cursorLostThisWindow += Int(seq - lastCursorSeq - 1)
+        }
         applyCursor(obj)
     }
 
@@ -528,12 +549,22 @@ final class StreamReceiver: ObservableObject {
             // or errors first is discarded and the session stays put.
             if let current = self.connection, current.state != .cancelled,
                !Self.isFailed(current.state) {
+                self.pendingConnections.append(conn)
                 conn.stateUpdateHandler = { [weak self] state in
                     guard let self, case .ready = state else { return }
                     self.sendHello(on: conn)
                     conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 18) {
                         [weak self] data, _, isComplete, error in
                         guard let self else { return }
+                        // Only a still-tracked candidate may adopt: adoption
+                        // of a rival and stop() both clear the list, so a
+                        // late callback can't evict a session or resurrect a
+                        // stopped receiver.
+                        guard self.pendingConnections.contains(where: { $0 === conn }) else {
+                            conn.cancel()
+                            return
+                        }
+                        self.pendingConnections.removeAll { $0 === conn }
                         if let data, !data.isEmpty {
                             self.adopt(conn, greeted: true, initialData: data)
                         } else {
@@ -576,9 +607,20 @@ final class StreamReceiver: ObservableObject {
     private func adopt(_ conn: NWConnection, greeted: Bool = false, initialData: Data? = nil) {
         connection?.cancel()
         connection = conn
+        // The race is decided: rival candidates die here.
+        for pending in pendingConnections where pending !== conn { pending.cancel() }
+        pendingConnections.removeAll()
         resetStreamState()
         lastCursorSeq = 0   // the sender restarts its cursor sequence per session
         cursorPortAnnounced = false
+        // Hide the previous sender's cursor: replayed into a fresh video view
+        // it would ghost over a new sender that never sends one (mirror mode
+        // hides no local cursor and streams no sprite).
+        DispatchQueue.main.async {
+            self.cursorState = (0.5, 0.5, false)
+            self.cursorSprite = nil
+            self.onCursor?(0.5, 0.5, false)
+        }
         let onReady: () -> Void = { [weak self] in
             guard let self else { return }
             self.lastDataReceived = Date()
@@ -710,8 +752,16 @@ final class StreamReceiver: ObservableObject {
     }
 
     /// Shared by the TCP control path and the UDP side channel so both feed
-    /// the same cursorState buffering and onCursor callback.
+    /// the same cursorState buffering and onCursor callback. The sequence
+    /// floor lives here so the two paths can't reorder each other: around a
+    /// channel switch a TCP frame queued behind video would otherwise land
+    /// after (and override) a newer UDP position. Old senders put no `s` on
+    /// TCP frames; those apply unconditionally, as before.
     private func applyCursor(_ obj: [String: Any]) {
+        if let seq = (obj["s"] as? NSNumber)?.uint64Value {
+            guard seq > lastCursorSeq else { return }
+            lastCursorSeq = seq
+        }
         let visible = (obj["v"] as? Int ?? 0) == 1
         let x = obj["x"] as? Double ?? 0
         let y = obj["y"] as? Double ?? 0

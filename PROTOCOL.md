@@ -394,15 +394,25 @@ UDP where a lost or late datagram costs nothing: the next one supersedes it.
   Nothing but `cursor` messages travel here; `cursorImg` stays on TCP
   because a sprite must arrive intact.
 * **Sequence semantics.** The receiver keeps the highest `s` seen and MUST
-  drop any datagram whose `s` is not greater than it (UDP reorders). The
-  sequence is per sender socket: it restarts whenever the sender opens a
-  new UDP flow, and the sender does so whenever its TCP connection is
-  re-established. The receiver therefore resets its tracker on every new
+  drop any `cursor` message — datagram or TCP frame — whose `s` is not
+  greater than it (UDP reorders, and around a path switch a TCP frame
+  queued behind video can arrive after a newer datagram). The sequence is
+  per TCP session: it restarts when the TCP connection is (re-)established
+  and runs across both paths. The receiver resets its tracker on every new
   TCP connection and on every new UDP flow, and accepts datagrams only
-  from the most recently seen flow.
+  from the most recently seen flow. A TCP `cursor` frame without `s` (an
+  older sender) applies unconditionally.
+* **Delivery confirmation.** `.ready` on a UDP socket proves only a local
+  route — a firewalled port would swallow the cursor silently. On the
+  first accepted datagram of a flow the receiver sends `cursorAck` (a
+  control message with no other fields) over TCP. Until it arrives the
+  sender MUST keep mirroring every position onto TCP (same `s`, so the
+  receiver deduplicates); if no ack arrives within a few seconds the
+  sender SHOULD drop the UDP flow and stay on TCP. A receiver that stops
+  listening mid-session SHOULD re-send `hello` without `cursorPort` to
+  withdraw the offer.
 * **Mixing.** A sender MAY switch between UDP and TCP for `cursor` at any
-  time (for example while the UDP connection is still being set up). Both
-  deliver into the same cursor state on the receiver.
+  time. Both deliver into the same cursor state on the receiver.
 * **Firewall note.** A receiver offering the channel now also listens on
   UDP (port + 1 for the official receiver). The official Mac receiver
   therefore needs UDP 9001 open in addition to TCP 9000.

@@ -20,9 +20,13 @@ import Sparkle
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static func main() {
         let app = NSApplication.shared
+        // NSApplication.delegate is weak, and ARC may free a local after its
+        // last use — an optimized build could drop the delegate before the
+        // launch callbacks ever fire. run() never returns, so this pins it
+        // for the app's lifetime.
         let delegate = AppDelegate()
         app.delegate = delegate
-        app.run()
+        withExtendedLifetime(delegate) { app.run() }
     }
 
     let updater = SPUStandardUpdaterController(

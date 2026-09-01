@@ -249,6 +249,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // 24 KB, must arrive intact). All state lives on `queue`.
     private var cursorConnection: NWConnection?
     private var cursorChannelPort: NWEndpoint.Port?
+    // True once the receiver acked a datagram (cursorAck). Until then every
+    // position also rides TCP: UDP .ready proves only a local route, and a
+    // silently firewalled port must not eat the cursor. Duplicates are
+    // harmless — both paths carry the same sequence and the receiver drops
+    // whatever is not newer.
+    private var cursorChannelConfirmed = false
     private var cursorConnectionReady = false
     private var cursorSeq: UInt64 = 0
     private var captureDisplayID: CGDirectDisplayID = 0
@@ -677,7 +683,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         stream = nil
         connection?.cancel()
         connection = nil
-        closeCursorChannel()
+        // Cursor-channel state is confined to `queue` (the 120Hz poll and the
+        // UDP callbacks run there); tearing it down from the main actor races
+        // them.
+        queue.async { [weak self] in self?.closeCursorChannel() }
         if let encoder { VTCompressionSessionInvalidate(encoder) }
         encoder = nil
         virtualDisplay = nil   // releasing it removes the display
@@ -888,6 +897,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func becomeReady(_ conn: NWConnection) {
         Log.info("connection ready to \(endpointName)")
         connectionReady = true
+        cursorSeq = 0   // per-session; the receiver rewound its floor with the connection
         everConnected = true
         awaitingWake = false
         consecutiveRefusals = 0
@@ -1177,13 +1187,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// the TCP frame is byte-identical to the pre-side-channel wire. Never
     /// blocks: a send on a dead UDP socket just fails in its completion.
     private func sendCursor(_ fields: String) {
+        cursorSeq &+= 1
+        let message = "{\"type\":\"cursor\",\(fields),\"s\":\(cursorSeq)}"
         if let cursorConnection, cursorConnectionReady {
-            cursorSeq &+= 1
-            let datagram = Data("{\"type\":\"cursor\",\(fields),\"s\":\(cursorSeq)}".utf8)
-            cursorConnection.send(content: datagram, completion: .contentProcessed { _ in })
-        } else {
-            sendJSONFrame("{\"type\":\"cursor\",\(fields)}")
+            cursorConnection.send(content: Data(message.utf8),
+                                  completion: .contentProcessed { _ in })
+            if cursorChannelConfirmed { return }
         }
+        sendJSONFrame(message)
     }
 
     /// Dial the receiver's UDP cursor port (must be called on `queue`). WiFi
@@ -1215,13 +1226,32 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let udp = NWConnection(host: host, port: udpPort, using: params)
         cursorConnection = udp
         cursorChannelPort = udpPort
-        cursorSeq = 0
+        // cursorSeq is session-scoped (reset in becomeReady), not per flow:
+        // TCP frames carry the same sequence, and a flow-local restart would
+        // read as stale against a floor the TCP path already advanced.
         udp.stateUpdateHandler = { [weak self] state in
             guard let self, self.cursorConnection === udp else { return }
             switch state {
             case .ready:
                 self.cursorConnectionReady = true
                 Log.info("cursor channel ready: udp \(host):\(udpPort)")
+                // Probe immediately: positions only flow while the cursor is
+                // on the captured display, which can be minutes away — the
+                // ack round-trip must not wait for that.
+                if self.lastCursorSent.visible {
+                    self.sendCursor(String(format: "\"x\":%.4f,\"y\":%.4f,\"v\":1",
+                                           self.lastCursorSent.x, self.lastCursorSent.y))
+                } else {
+                    self.sendCursor("\"v\":0")
+                }
+                // No ack = nobody is listening (firewall, dead listener):
+                // drop the channel and let the TCP fallback carry on.
+                self.queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                    guard let self, self.cursorConnection === udp,
+                          !self.cursorChannelConfirmed else { return }
+                    Log.info("cursor channel: no ack after 3s — staying on TCP")
+                    self.closeCursorChannel()
+                }
             case .failed(let error):
                 Log.info("cursor channel failed: \(error), cursor stays on TCP")
                 self.closeCursorChannel()
@@ -1238,6 +1268,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func closeCursorChannel() {
+        cursorChannelConfirmed = false
         cursorConnectionReady = false
         cursorConnection?.cancel()
         cursorConnection = nil
@@ -1319,6 +1350,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 Log.info("PHONE-STATS \(line) | mac enc↓=\(dropsEncThisWindow) net↓=\(dropsNetThisWindow) pending=\(pendingSends)")
                 dropsEncThisWindow = 0
                 dropsNetThisWindow = 0
+            }
+        case "cursorAck":
+            // The receiver saw our first datagram: the side channel delivers,
+            // stop mirroring positions onto TCP (PROTOCOL.md 6.3).
+            if cursorConnection != nil, !cursorChannelConfirmed {
+                cursorChannelConfirmed = true
+                Log.info("cursor channel confirmed by the receiver")
             }
         case "hello":
             if let info = try? JSONDecoder().decode(PhoneInfo.self, from: payload) {
@@ -1808,14 +1846,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         sendJSONFrame("{\"type\":\"\(WireMessage.welcome)\",\"pv\":\(WireProtocol.version),\"min\":\(WireProtocol.minSupportedPeer)}")
     }
 
-    /// Ask the receiver to update from the App Store (built via JSONSerialization
-    /// because the message text is user-facing prose).
+    /// Ask the receiver to update (built via JSONSerialization because the
+    /// message text is user-facing prose). Dormant while minSupportedPeer is
+    /// 1, but the copy must fit the platform the day a floor is raised: a
+    /// Mac receiver updates via Sparkle/the site, not the App Store.
     private func sendUpdateRequired(kind: String) {
+        let isMac = kind == "Mac"
         let dict: [String: Any] = [
             "type": WireMessage.updateRequired,
-            "target": "ios",
-            "store": AppStore.updateURL.absoluteString,
-            "message": "This \(kind) app is too old for this Mac. Update OpenDisplay from the App Store to reconnect.",
+            "target": isMac ? "mac" : "ios",
+            "store": isMac ? "https://opendisplay.app" : AppStore.updateURL.absoluteString,
+            "message": isMac
+                ? "The OpenDisplay Receiver app on that Mac is too old for this Mac. Use Check for Updates… there to reconnect."
+                : "This \(kind) app is too old for this Mac. Update OpenDisplay from the App Store to reconnect.",
         ]
         if let data = try? JSONSerialization.data(withJSONObject: dict),
            let json = String(data: data, encoding: .utf8) {
