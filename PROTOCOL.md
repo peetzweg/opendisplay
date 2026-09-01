@@ -280,6 +280,8 @@ nothing before it arrives.
   TCP only. Additive at `pv` 3, no bump.
 * `addrs` (array of strings, optional): every IP address the receiver is
   reachable on (section 6.4). Link-local IPv6 entries carry no zone id.
+  The receiver SHOULD re-send `hello` when this set changes (a cable
+  plugged mid-session creates the interface the sender must probe).
   Additive at `pv` 3, no bump.
 
 A receiver MUST re-send `hello` on the live connection whenever its

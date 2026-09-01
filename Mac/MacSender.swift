@@ -1095,8 +1095,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0,
                   let sa = ifa.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET6) else { continue }
             let name = String(cString: ifa.ifa_name)
+            // anpi* completes TCP handshakes but cannot carry the stream —
+            // see the matching exclusion in StreamReceiver.
             if name.hasPrefix("awdl") || name.hasPrefix("llw") || name.hasPrefix("utun")
-                || name.hasPrefix("gif") || name.hasPrefix("stf") { continue }
+                || name.hasPrefix("gif") || name.hasPrefix("stf")
+                || name.hasPrefix("anpi") { continue }
             let isLinkLocal = sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
                 var a = $0.pointee.sin6_addr
                 return withUnsafeBytes(of: &a) { $0[0] == 0xfe && ($0[1] & 0xc0) == 0x80 }
@@ -1553,7 +1556,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 } else {
                     closeCursorChannel()
                 }
-                peerAddrs = info.addrs ?? []
+                let addrs = info.addrs ?? []
+                if addrs != peerAddrs {
+                    peerAddrs = addrs
+                    // A re-hello with a changed address set usually means a
+                    // cable was just plugged — probe now, not in up to 10s.
+                    if upgradeTimer != nil { probeForCablePath() }
+                }
                 // Version handshake (issue #132). Reply with our identity, and
                 // if the receiver is below the version we support, tell it to
                 // update. Both are additive: older receivers ignore unknown

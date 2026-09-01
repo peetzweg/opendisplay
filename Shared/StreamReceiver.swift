@@ -95,6 +95,11 @@ final class StreamReceiver: ObservableObject {
     // an untracked silent socket would sit parked forever and could even
     // adopt into a receiver that was stopped in the meantime.
     private var pendingConnections: [NWConnection] = []
+    // What the last hello advertised, to notice a cable appearing
+    // mid-session: plugging one creates new interfaces, and a sender can
+    // only probe addresses it has been told about.
+    private var lastAdvertisedAddrs: [String] = []
+    private var addrWatchTimer: DispatchSourceTimer?
     private var lastCursorSeq: UInt64 = 0
     // Cursor channel health for the HUD/stats: how many positions landed and
     // how many datagrams never did (sequence gaps + reordered drops). A
@@ -305,6 +310,7 @@ final class StreamReceiver: ObservableObject {
         queue.async {
             self.pingTimer?.cancel(); self.pingTimer = nil
             self.watchdogTimer?.cancel(); self.watchdogTimer = nil
+            self.addrWatchTimer?.cancel(); self.addrWatchTimer = nil
             self.pendingConnections.forEach { $0.cancel() }
             self.pendingConnections.removeAll()
         }
@@ -668,6 +674,21 @@ final class StreamReceiver: ObservableObject {
         ping.resume()
         pingTimer = ping
 
+        addrWatchTimer?.cancel()
+        let addrWatch = DispatchSource.makeTimerSource(queue: queue)
+        addrWatch.schedule(deadline: .now() + 5.0, repeating: 5.0)
+        addrWatch.setEventHandler { [weak self] in
+            guard let self, let conn = self.connection, conn.state == .ready else { return }
+            let now = Self.reachableAddresses()
+            guard now != self.lastAdvertisedAddrs else { return }
+            // A cable was plugged (or pulled) mid-session: tell the sender,
+            // it re-probes on the fresh list (PROTOCOL.md 6.4).
+            Log.info("reachable addresses changed — re-sending hello")
+            self.sendHello(on: conn)
+        }
+        addrWatch.resume()
+        addrWatchTimer = addrWatch
+
         watchdogTimer?.cancel()
         let watchdog = DispatchSource.makeTimerSource(queue: queue)
         watchdog.schedule(deadline: .now() + 2.0, repeating: 2.0)
@@ -811,6 +832,7 @@ final class StreamReceiver: ObservableObject {
         // dial stalls, a literal address does not (PROTOCOL.md 6.4).
         let addrs = Self.reachableAddresses()
         if !addrs.isEmpty { hello["addrs"] = addrs }
+        lastAdvertisedAddrs = addrs
         cursorPortAnnounced = cursorListenerReady
         sendControl(hello, on: conn)
         Log.info("hello sent\(cursorListenerReady ? " (cursorPort \(cursorPort))" : "")")
@@ -833,8 +855,12 @@ final class StreamReceiver: ObservableObject {
             guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0,
                   let sa = ifa.ifa_addr else { continue }
             let name = String(cString: ifa.ifa_name)
+            // anpi* is Apple's internal peripheral/debug interface: TCP
+            // handshakes complete over it but it cannot carry the stream —
+            // a session migrated onto it stalls within seconds (field log
+            // 18:59). The user-facing USB-C host-to-host link is a plain en.
             if name.hasPrefix("awdl") || name.hasPrefix("llw") || name.hasPrefix("utun")
-                || name.hasPrefix("pdp_ip") { continue }
+                || name.hasPrefix("pdp_ip") || name.hasPrefix("anpi") { continue }
             let family = sa.pointee.sa_family
             guard family == UInt8(AF_INET) || family == UInt8(AF_INET6) else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
