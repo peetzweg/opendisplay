@@ -261,9 +261,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // is already as good as a probe could find — re-probing there would
     // migrate in a circle.
     private var currentPathUsesWiFi = false
-    // Set when the live session rides a cable (Ethernet, USB-C link, dock).
-    // Losing that link is treated as intent — see linkDied().
-    private var currentPathWired = false
+    // Set while the live session rides the direct cable link (USB-C /
+    // Thunderbolt host-to-host to a Mac receiver, link-local addressed).
+    // Losing that link is treated as intent — see linkDied(). A merely-
+    // wired path (a docked Mac on Ethernet streaming to a phone on WiFi)
+    // must NOT count: silence there is a backgrounded receiver or the
+    // phone's radio, and undocking should fall back to WiFi like it always
+    // has. Computed by refreshDirectLinkClassification, cleared the moment
+    // the session decides to redial (scheduleReconnect/switchTransport):
+    // dial-phase failures take the grace/refusal rules, never this exit.
+    private var currentPathDirectLink = false
     private var lastCursorSent: (x: Double, y: Double, visible: Bool) = (-1, -1, false)
     private var lastCursorPNGHash = 0
     // Cursor side channel (UDP, WiFi only): positions queue behind video
@@ -743,6 +750,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // a dead transport forever.
             self.disconnectedSince = Date()
             self.connectionReady = false
+            self.currentPathDirectLink = false   // the new transport re-classifies
             self.dialGeneration += 1   // a dial still in flight must not adopt
             self.connection?.cancel()
             self.connection = nil
@@ -769,16 +777,55 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { @MainActor in self.onDisconnected?() }
     }
 
-    /// A live connection just died (must be called on `queue`). On a cable
-    /// the death is almost always someone pulling the plug, and unplugging
-    /// is how people intentionally end a session — falling back to WiFi
-    /// would resurrect what they just killed. WiFi sessions (and the dev
-    /// loopback) keep the redial loop: radio drops are never intent.
+    /// A live connection just died (must be called on `queue`). On the
+    /// direct cable link the death is almost always someone pulling the
+    /// plug, and unplugging is how people intentionally end a session —
+    /// falling back to WiFi would resurrect what they just killed. Every
+    /// other path (WiFi, routed Ethernet, the dev loopback) keeps the
+    /// redial loop: a drop there is never intent.
     private func linkDied(_ detail: String) {
-        if currentPathWired, case .tcp = transport {
+        if currentPathDirectLink, case .tcp = transport {
             reportGone("cable link lost (\(detail)) — unplugging means disconnect, ending session")
         } else {
             scheduleReconnect()
+        }
+    }
+
+    /// (Re)decide whether the live session rides the direct host-to-host
+    /// cable (must be called on `queue`). Address shape alone is not
+    /// enough: on a bridged LAN a phone's Bonjour record can resolve to
+    /// its fe80, and a DHCP-less switch hands out 169.254 to everyone —
+    /// so the peer must also be a Mac receiver, the only receiver a TCP
+    /// cable session can exist with (phones ride usbmuxd). Runs again when
+    /// hello arrives: a fresh dial reaches ready before the first hello
+    /// names the device.
+    private func refreshDirectLinkClassification(for conn: NWConnection) {
+        guard connection === conn, case .tcp = transport,
+              lastHello?.device == "Mac",
+              let path = conn.currentPath else {
+            currentPathDirectLink = false
+            return
+        }
+        let wired = !path.usesInterfaceType(.wifi) && !path.usesInterfaceType(.loopback)
+            && !path.usesInterfaceType(.cellular)
+        currentPathDirectLink = wired
+            && Self.endpointIsLinkLocal(path.remoteEndpoint ?? conn.endpoint)
+    }
+
+    /// True when the far end of a connection is a link-local address
+    /// (fe80::/10 or 169.254/16). The USB-C/Thunderbolt host-to-host link
+    /// hands out nothing else — necessary for "riding the direct cable",
+    /// but not sufficient: see refreshDirectLinkClassification.
+    private static func endpointIsLinkLocal(_ endpoint: NWEndpoint?) -> Bool {
+        guard case .hostPort(let host, _)? = endpoint else { return false }
+        switch host {
+        case .ipv4(let addr): return addr.isLinkLocal
+        case .ipv6(let addr): return addr.isLinkLocal
+        case .name(let name, _):
+            // Literal probe targets dial as names ("fe80::1%en5").
+            let bare = name.lowercased()
+            return bare.hasPrefix("169.254.") || bare.hasPrefix("fe80:")
+        @unknown default: return false
         }
     }
 
@@ -959,21 +1006,23 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // .failed/.waiting state update — NW keeps it and flags it non-viable
         // (field-tested: pulling the USB-C cable left the state handler
         // silent and only the 5s watchdog noticed). Viability is the prompt
-        // unplug signal. Only wired paths act on it: WiFi blips go non-viable
-        // routinely and NW rides them out on its own.
+        // unplug signal. Only the direct cable link acts on it: WiFi blips
+        // go non-viable routinely and NW rides them out on its own, and a
+        // docked Mac losing its Ethernet (undock) should fall back to WiFi,
+        // not end the session.
         conn.viabilityUpdateHandler = { [weak self] viable in
             guard let self, self.connection === conn, !viable,
-                  self.currentPathWired else { return }
+                  self.currentPathDirectLink else { return }
             self.linkDied("path no longer viable")
         }
         receiveControl(on: conn)
+        refreshDirectLinkClassification(for: conn)
         if let path = conn.currentPath {
             let wired = !path.usesInterfaceType(.wifi) && !path.usesInterfaceType(.loopback)
                 && !path.usesInterfaceType(.cellular)
             currentPathUsesWiFi = path.usesInterfaceType(.wifi)
-            currentPathWired = wired
             let names = path.availableInterfaces.map(\.name).joined(separator: ",")
-            Log.info("connection path to \(endpointName): \(names) wired=\(wired)")
+            Log.info("connection path to \(endpointName): \(names) wired=\(wired) direct=\(currentPathDirectLink)")
             Task { @MainActor in self.onTransportPath?(wired) }
         }
         // -forceUpgradeProbe YES: dev knob — loopback runs never look like
@@ -1211,7 +1260,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 if case .posix(let code) = error, code == .ECONNREFUSED {
                     self.dialRefused()
                 }
-                self.linkDied("failed: \(error)")
+                // Dial-phase state: this connection never carried the
+                // session, so its failure says nothing about a cable —
+                // plain reconnect, under the grace/refusal rules.
+                self.scheduleReconnect()
             case .waiting(let error):
                 // On loopback there is no "path change" to wake us up again
                 // (e.g. a manual -host tunnel not started yet) — treat
@@ -1224,7 +1276,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     ? "\(self.endpointName) is asleep — reconnects when it wakes…"
                     : "Waiting for receiver at \(self.endpointName)…"
                 Task { await self.status(text) }
-                self.linkDied("waiting: \(error)")
+                self.scheduleReconnect()
             case .cancelled:
                 self.connectionReady = false
             default:
@@ -1303,6 +1355,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
         connectionReady = false
+        // Whatever this session rode is gone; deciding to redial means it is
+        // an ordinary reconnecting session now. A stale direct-link flag here
+        // would let the first dial hiccup end the session via linkDied.
+        currentPathDirectLink = false
         dialGeneration += 1   // a USB dial still in flight must not adopt
         let generation = dialGeneration
         connection?.cancel()
@@ -1352,9 +1408,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // session and display are kept on purpose so the user's
                 // window arrangement survives until they come back. Genuine
                 // network loss fails the redials and ends via the grace.
-                if self.currentPathWired, case .tcp = self.transport {
-                    // Backstop for the viability handler: silence on a cable
-                    // is an unplug (or a dead peer) — never redial onto WiFi.
+                if self.currentPathDirectLink, case .tcp = self.transport {
+                    // Backstop for the viability handler: silence on the
+                    // direct cable is an unplug (or a dead peer) — never
+                    // redial onto WiFi.
                     self.linkDied("silent for >5s")
                 } else {
                     Log.info("watchdog: nothing from the phone for >5s — reconnecting")
@@ -1634,6 +1691,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let info = try? JSONDecoder().decode(PhoneInfo.self, from: payload) {
                 let previous = lastHello
                 lastHello = info
+                // A fresh dial classifies before the hello names the device —
+                // now that it has, decide again (see the comment on the func).
+                if let conn = connection { refreshDirectLinkClassification(for: conn) }
                 Task { @MainActor in self.onHello?(info) }
                 if let port = info.cursorPort {
                     openCursorChannel(port: port)

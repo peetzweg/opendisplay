@@ -433,8 +433,11 @@ lands on it: mDNS resolution under an interface-restricted dial can stall,
 and an unrestricted dial races all resolved addresses and often keeps
 WiFi.
 
-`hello.addrs` closes the gap. The receiver lists every address it is
-reachable on; a sender whose live TCP session runs over WiFi SHOULD
+`hello.addrs` closes the gap. A receiver that can carry a session over a
+host-to-host cable (today: a Mac — a cabled phone reaches the sender over
+usbmuxd instead, and a phone's advertised WiFi address would only invite
+a false "upgrade" onto a path that still crosses its radio) lists the
+addresses it is reachable on; a sender whose live TCP session runs over WiFi SHOULD
 periodically probe those addresses (link-local IPv6 re-scoped to each of
 its own plausible interfaces) with WiFi forbidden, and on the first probe
 that connects over a non-WiFi path, move the session onto it: the probe
@@ -444,11 +447,20 @@ replace a live session) swaps it in cleanly. The abandoned WiFi socket is closed
 by the sender. A sender already on a wired path, or on the USB (usbmuxd)
 binding, does not probe.
 
-The upgrade is one-way by design. When a session riding a cable loses its
-link, the sender SHOULD end the session rather than redial over WiFi:
-pulling the cable is how a person deliberately ends a session, and a WiFi
-fallback would resurrect what they just closed. (WiFi sessions keep their
-reconnect loop — a radio drop is never intent.)
+The upgrade is one-way by design. When the sender judges that a session
+rides the direct host-to-host cable — a wired path, to a link-local peer
+address (fe80::/10 or 169.254/16), on a receiver class that can be cabled
+(today: a Mac; all three conditions, since link-local peers also occur on
+bridged or DHCP-less LANs where no cable joins the two machines) — it
+SHOULD treat the death of that connection as intent and end the session
+rather than redial over WiFi: pulling the cable is how a person
+deliberately ends a session, and a WiFi fallback would resurrect what
+they just closed. Every other session death keeps the reconnect loop: a
+radio drop is never intent, and a routed wired path (a docked sender
+streaming to a receiver on WiFi) going quiet says nothing about a cable.
+Once a sender decides to redial, the dial's own failures follow the
+normal reconnect rules — only the death of the live cable connection
+itself is intent.
 
 **`welcome`**: the sender's `pv` and `min` (the oldest receiver `pv` it
 still supports). Sent in response to every `hello`. A receiver whose own

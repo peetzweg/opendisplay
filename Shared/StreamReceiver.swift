@@ -100,6 +100,10 @@ final class StreamReceiver: ObservableObject {
     // only probe addresses it has been told about.
     private var lastAdvertisedAddrs: [String] = []
     private var addrWatchTimer: DispatchSourceTimer?
+    // The cable upgrade (PROTOCOL.md 6.4) is Mac-to-Mac: only Mac
+    // receivers put addrs in their hello — see sendHello for why phones
+    // must not.
+    private var advertisesAddresses: Bool { deviceKind == "Mac" }
     private var lastCursorSeq: UInt64 = 0
     // Cursor channel health for the HUD/stats: how many positions landed and
     // how many datagrams never did (sequence gaps + reordered drops). A
@@ -675,19 +679,21 @@ final class StreamReceiver: ObservableObject {
         pingTimer = ping
 
         addrWatchTimer?.cancel()
-        let addrWatch = DispatchSource.makeTimerSource(queue: queue)
-        addrWatch.schedule(deadline: .now() + 5.0, repeating: 5.0)
-        addrWatch.setEventHandler { [weak self] in
-            guard let self, let conn = self.connection, conn.state == .ready else { return }
-            let now = Self.reachableAddresses()
-            guard now != self.lastAdvertisedAddrs else { return }
-            // A cable was plugged (or pulled) mid-session: tell the sender,
-            // it re-probes on the fresh list (PROTOCOL.md 6.4).
-            Log.info("reachable addresses changed — re-sending hello")
-            self.sendHello(on: conn)
+        if advertisesAddresses {
+            let addrWatch = DispatchSource.makeTimerSource(queue: queue)
+            addrWatch.schedule(deadline: .now() + 5.0, repeating: 5.0)
+            addrWatch.setEventHandler { [weak self] in
+                guard let self, let conn = self.connection, conn.state == .ready else { return }
+                let now = Self.reachableAddresses()
+                guard now != self.lastAdvertisedAddrs else { return }
+                // A cable was plugged (or pulled) mid-session: tell the sender,
+                // it re-probes on the fresh list (PROTOCOL.md 6.4).
+                Log.info("reachable addresses changed — re-sending hello")
+                self.sendHello(on: conn)
+            }
+            addrWatch.resume()
+            addrWatchTimer = addrWatch
         }
-        addrWatch.resume()
-        addrWatchTimer = addrWatch
 
         watchdogTimer?.cancel()
         let watchdog = DispatchSource.makeTimerSource(queue: queue)
@@ -826,11 +832,16 @@ final class StreamReceiver: ObservableObject {
         // Additive capability: only offered while the UDP listener is bound,
         // so a sender never dials a port nobody answers on.
         if cursorListenerReady { hello["cursorPort"] = Int(cursorPort) }
-        // Additive: every address this receiver can be reached on, so the
+        // Additive: the addresses this receiver can be reached on, so the
         // sender can probe for a better (cabled) path and migrate a WiFi
         // session onto it — mDNS resolution under an interface-restricted
         // dial stalls, a literal address does not (PROTOCOL.md 6.4).
-        let addrs = Self.reachableAddresses()
+        // Mac receivers only: a cabled phone reaches the sender over
+        // usbmuxd, and advertising a phone's WiFi fe80 would invite a
+        // false "upgrade" onto a bridged-LAN path that still crosses the
+        // phone's radio — and then have the session classified as a cable
+        // whose loss must end it instead of reconnecting.
+        let addrs = advertisesAddresses ? Self.reachableAddresses() : []
         if !addrs.isEmpty { hello["addrs"] = addrs }
         lastAdvertisedAddrs = addrs
         cursorPortAnnounced = cursorListenerReady
