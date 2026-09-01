@@ -278,6 +278,9 @@ nothing before it arrives.
   cursor datagrams (section 6.3). Present only while that listener is
   actually bound. Absent means the receiver takes cursor positions over
   TCP only. Additive at `pv` 3, no bump.
+* `addrs` (array of strings, optional): every IP address the receiver is
+  reachable on (section 6.4). Link-local IPv6 entries carry no zone id.
+  Additive at `pv` 3, no bump.
 
 A receiver MUST re-send `hello` on the live connection whenever its
 announced dimensions change (rotation). The sender rebuilds the display in
@@ -416,6 +419,27 @@ UDP where a lost or late datagram costs nothing: the next one supersedes it.
 * **Firewall note.** A receiver offering the channel now also listens on
   UDP (port + 1 for the official receiver). The official Mac receiver
   therefore needs UDP 9001 open in addition to TCP 9000.
+
+### 6.4 Cable upgrade (`hello.addrs`)
+
+A Mac-to-Mac cable — Thunderbolt/USB4 (Thunderbolt Bridge) or plain USB-C
+on recent macOS (host-to-host networking, gated by the "allow accessory"
+consent on each Mac) — appears as a network interface on both ends. It is
+always the better path than WiFi, but nothing guarantees a Bonjour dial
+lands on it: mDNS resolution under an interface-restricted dial can stall,
+and an unrestricted dial races all resolved addresses and often keeps
+WiFi.
+
+`hello.addrs` closes the gap. The receiver lists every address it is
+reachable on; a sender whose live TCP session runs over WiFi SHOULD
+periodically probe those addresses (link-local IPv6 re-scoped to each of
+its own plausible interfaces) with WiFi forbidden, and on the first probe
+that connects over a non-WiFi path, move the session onto it: the probe
+connection simply becomes the session connection, and the receiver's
+newcomer handling (a newcomer proves itself with bytes before it may
+replace a live session) swaps it in cleanly. The abandoned WiFi socket is closed
+by the sender. A sender already on a wired path, or on the USB (usbmuxd)
+binding, does not probe.
 Sent when the sprite changes and re-sent after reconnects.
 
 **`welcome`**: the sender's `pv` and `min` (the oldest receiver `pv` it

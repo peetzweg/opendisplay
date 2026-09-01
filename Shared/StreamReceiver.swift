@@ -605,6 +605,7 @@ final class StreamReceiver: ObservableObject {
     /// while it proved itself (see the listener), with the bytes it sent
     /// back in `initialData`; a second hello would make the sender rebuild.
     private func adopt(_ conn: NWConnection, greeted: Bool = false, initialData: Data? = nil) {
+        if greeted { Log.info("newcomer proved itself — adopting it as the session") }
         connection?.cancel()
         connection = conn
         // The race is decided: rival candidates die here.
@@ -804,9 +805,52 @@ final class StreamReceiver: ObservableObject {
         // Additive capability: only offered while the UDP listener is bound,
         // so a sender never dials a port nobody answers on.
         if cursorListenerReady { hello["cursorPort"] = Int(cursorPort) }
+        // Additive: every address this receiver can be reached on, so the
+        // sender can probe for a better (cabled) path and migrate a WiFi
+        // session onto it — mDNS resolution under an interface-restricted
+        // dial stalls, a literal address does not (PROTOCOL.md 6.4).
+        let addrs = Self.reachableAddresses()
+        if !addrs.isEmpty { hello["addrs"] = addrs }
         cursorPortAnnounced = cursorListenerReady
         sendControl(hello, on: conn)
         Log.info("hello sent\(cursorListenerReady ? " (cursorPort \(cursorPort))" : "")")
+    }
+
+    /// Every IP address of an up, non-loopback interface, for hello.addrs.
+    /// Link-local IPv6 is sent bare (no scope): the zone id only means
+    /// something on the machine holding the interface, so the sender scopes
+    /// it to each of its own candidate interfaces when probing. Virtual and
+    /// peer-to-peer interfaces (awdl/llw/utun) never carry this traffic and
+    /// are skipped.
+    private static func reachableAddresses() -> [String] {
+        var result: [String] = []
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return result }
+        defer { freeifaddrs(list) }
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let ifa = ptr.pointee
+            let flags = Int32(ifa.ifa_flags)
+            guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0,
+                  let sa = ifa.ifa_addr else { continue }
+            let name = String(cString: ifa.ifa_name)
+            if name.hasPrefix("awdl") || name.hasPrefix("llw") || name.hasPrefix("utun")
+                || name.hasPrefix("pdp_ip") { continue }
+            let family = sa.pointee.sa_family
+            guard family == UInt8(AF_INET) || family == UInt8(AF_INET6) else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let len = family == UInt8(AF_INET)
+                ? socklen_t(MemoryLayout<sockaddr_in>.size)
+                : socklen_t(MemoryLayout<sockaddr_in6>.size)
+            guard getnameinfo(sa, len, &host, socklen_t(host.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            var addr = String(cString: host)
+            // getnameinfo appends %scope to link-local IPv6 — strip it, the
+            // receiver-side zone id is meaningless to the sender.
+            if let percent = addr.firstIndex(of: "%") { addr = String(addr[..<percent]) }
+            if !result.contains(addr) { result.append(addr) }
+            if result.count >= 12 { break }
+        }
+        return result
     }
 
     /// Touch events: x/y normalized [0,1] in video space, origin top-left.
