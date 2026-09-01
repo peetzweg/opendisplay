@@ -955,6 +955,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastCursorPNGHash = 0
         lastCursorSent = (-1, -1, false)
         lastReceived = Date()  // fresh grace period for the watchdog
+        // An established connection whose interface vanishes does NOT get a
+        // .failed/.waiting state update — NW keeps it and flags it non-viable
+        // (field-tested: pulling the USB-C cable left the state handler
+        // silent and only the 5s watchdog noticed). Viability is the prompt
+        // unplug signal. Only wired paths act on it: WiFi blips go non-viable
+        // routinely and NW rides them out on its own.
+        conn.viabilityUpdateHandler = { [weak self] viable in
+            guard let self, self.connection === conn, !viable,
+                  self.currentPathWired else { return }
+            self.linkDied("path no longer viable")
+        }
         receiveControl(on: conn)
         if let path = conn.currentPath {
             let wired = !path.usesInterfaceType(.wifi) && !path.usesInterfaceType(.loopback)
@@ -1112,6 +1123,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // reset connectionReady, silently blackholing every send on the
         // migrated connection.
         connection?.stateUpdateHandler = nil
+        connection?.viabilityUpdateHandler = nil
         connection?.cancel()
         connection = conn
         conn.stateUpdateHandler = { [weak self] state in
@@ -1340,11 +1352,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // session and display are kept on purpose so the user's
                 // window arrangement survives until they come back. Genuine
                 // network loss fails the redials and ends via the grace.
-                Log.info("watchdog: nothing from the phone for >5s — reconnecting")
-                // Can't tell a backgrounded receiver from a brief stall here
-                // (both go silent while redials still succeed) — hedge.
-                Task { await self.status("\(self.endpointName) is silent — keeping the display (app in background or brief stall)") }
-                self.scheduleReconnect()
+                if self.currentPathWired, case .tcp = self.transport {
+                    // Backstop for the viability handler: silence on a cable
+                    // is an unplug (or a dead peer) — never redial onto WiFi.
+                    self.linkDied("silent for >5s")
+                } else {
+                    Log.info("watchdog: nothing from the phone for >5s — reconnecting")
+                    // Can't tell a backgrounded receiver from a brief stall here
+                    // (both go silent while redials still succeed) — hedge.
+                    Task { await self.status("\(self.endpointName) is silent — keeping the display (app in background or brief stall)") }
+                    self.scheduleReconnect()
+                }
             }
             // The disconnect grace is otherwise only evaluated when a dial
             // changes state — a dial stuck in .preparing (withdrawn Bonjour
@@ -1551,7 +1569,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func receiveControl(on conn: NWConnection) {
         conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, error in
             guard let self, error == nil, let data, data.count == 4 else {
-                if let error { Log.info("control receive ended: \(error)") }
+                if let error {
+                    Log.info("control receive ended: \(error)")
+                    // A receive error on the live connection is fatal to it.
+                    // Route through linkDied so a cable session ends instead
+                    // of silently waiting for the watchdog to redial. Skip
+                    // ECANCELED: that is our own cancel (stop, migrate,
+                    // redial), not the link dying.
+                    var isOwnCancel = false
+                    if case .posix(let code) = error, code == .ECANCELED { isOwnCancel = true }
+                    if let self, self.connection === conn, !isOwnCancel {
+                        self.linkDied("receive failed: \(error)")
+                    }
+                }
                 return
             }
             let len = Int(UInt32(bigEndian: data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }))
