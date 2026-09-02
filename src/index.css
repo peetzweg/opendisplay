@@ -8,6 +8,9 @@
   --accent: #0090fc;        /* logo blue */
   --maxw: 1040px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --download-control-height: 44px;
+  --download-control-radius: 7px;
+  --download-control-border: #a6a6a6;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
@@ -112,29 +115,51 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 /* ---- download blocks ---- */
 .needs-both { margin-top: 44px; color: var(--muted); font-size: 0.98rem; }
 .needs-both strong { color: var(--fg); }
-.downloads { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
-  margin-top: 18px; border: 1px solid var(--line); }
-.downloads > div { padding: 28px; }
-.downloads > div + div { border-left: 1px solid var(--line); }
+.download-group { margin-top: 54px; }
+.download-role { font-size: clamp(2rem, 4vw, 2.7rem); }
+.download-group-intro { color: var(--muted); font-size: 0.98rem; margin-top: 8px; }
+.download-options { display: grid; gap: 36px; margin-top: 28px; }
+.sender-download { justify-content: center; grid-template-columns: minmax(0, 440px); }
+.receiver-downloads { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.download-option { text-align: center; }
 @media (max-width: 720px) {
-  .downloads { grid-template-columns: 1fr; }
-  /* On mobile the phone install takes priority — surface Step 2 first. */
-  .downloads > div:nth-child(2) { order: -1; }
-  .downloads > div + div { border-left: 0; border-top: 0; }
-  /* Divider now sits above the (visually second) Mac card. */
-  .downloads > div:first-child { border-top: 1px solid var(--line); }
+  .receiver-downloads { grid-template-columns: 1fr; gap: 48px; }
 }
-.dl-head { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--faint); margin-bottom: 6px;
-  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.dl-head .step { color: var(--fg); border: 1px solid var(--line-strong);
-  padding: 2px 7px; letter-spacing: 0.06em; }
-.dl-head .ver { color: var(--fg); text-transform: none; letter-spacing: 0; }
+.platform { font-size: clamp(2rem, 4vw, 2.7rem); line-height: 1.1; letter-spacing: -0.02em;
+  font-weight: 500; margin-bottom: 10px; }
+.platform-name { font-weight: 600; }
+.platform-separator { color: var(--faint); font-size: 0.55em; font-weight: 400;
+  margin-inline: 0.24em; vertical-align: 0.12em; }
+.platform .ver { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em;
+  color: var(--faint); vertical-align: middle; }
 .dl-sub { color: var(--muted); font-size: 0.86rem; margin-bottom: 18px; }
 
 .btn { display: inline-flex; align-items: center; gap: 8px; font: inherit;
-  font-weight: 600; font-size: 0.95rem; padding: 12px 22px;
-  text-decoration: none; border: 1px solid var(--line-strong); cursor: pointer; }
+  font-weight: 600; font-size: 0.95rem; padding: 10px 18px; height: var(--download-control-height);
+  border-radius: var(--download-control-radius);
+  text-decoration: none; border: 1px solid var(--download-control-border); cursor: pointer; }
+.download-option .btn { display: flex; width: fit-content; margin-inline: auto; }
+.download-option .btn, .app-store-button {
+  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+  box-shadow: 0 1px 1px rgb(0 0 0 / 12%);
+}
+.download-option .btn:hover, .app-store-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 7px rgb(0 0 0 / 16%);
+  filter: brightness(1.04);
+}
+.download-option .btn:active, .app-store-button:active {
+  transform: translateY(1px) scale(0.98);
+  box-shadow: 0 1px 1px rgb(0 0 0 / 10%);
+  transition-duration: 70ms;
+}
+.download-option .btn:focus-visible, .app-store-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .download-option .btn, .app-store-button { transition: none; }
+}
 .btn.primary { background: var(--fg); color: var(--bg); }
 .btn.primary:hover { background: #000; }
 .btn.ghost { background: transparent; color: var(--fg); }
@@ -143,9 +168,16 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 .sub { display: block; font-size: 0.84rem; color: var(--muted); margin-top: 12px; }
 /* Secondary links under the download buttons share one subtle treatment
    (they had drifted — the iOS ones were inheriting the darker default link). */
-.note a, .downloads .sub a { color: var(--muted); text-decoration-color: var(--line); }
-.note a:hover, .downloads .sub a:hover { color: var(--fg); text-decoration-color: var(--line-strong); }
+.note a, .download-option .sub a { color: var(--muted); text-decoration-color: var(--line); }
+.note a:hover, .download-option .sub a:hover { color: var(--fg); text-decoration-color: var(--line-strong); }
 .btn-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+
+/* Apple's original badge is transparent around the pill. Its wrapper has the
+   same radius and clips its contents, so the interactive shadow follows the
+   pill rather than the SVG's rectangular viewbox. */
+.app-store-button { display: block; width: 132px; height: var(--download-control-height);
+  margin-inline: auto; border-radius: var(--download-control-radius); overflow: hidden; line-height: 0; }
+.app-store-button img { display: block; width: auto; height: 100%; }
 
 /* Demo video: responsive 16:9 embed matching the bordered, squared aesthetic. */
 .video-embed { position: relative; aspect-ratio: 16 / 9;
@@ -211,13 +243,6 @@ a.showcase-item.is-post .coverage-body { min-height: 52px; padding: 0; }
 .showcase-nav button:hover:not(:disabled) { background: var(--fg); color: var(--bg); }
 .showcase-nav button:disabled { color: var(--faint); border-color: var(--line); cursor: default; }
 
-/* App Store / TestFlight cluster */
-.ios-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
-.badge-wrap { display: inline-flex; flex-direction: column; gap: 4px; }
-.appstore-badge { height: 44px; width: auto; display: block; }
-.badge-wrap.disabled .appstore-badge { opacity: 0.32; filter: grayscale(1); }
-.badge-wrap .cap { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--faint); }
 .btn.disabled { opacity: 0.5; cursor: not-allowed; border-style: dashed; }
 
 /* ---- feature grid ---- */
@@ -364,6 +389,5 @@ footer .fine { color: var(--faint); font-size: 0.84rem; }
   .sec { padding-top: 56px; padding-bottom: 56px; }
   .hero { padding-top: 56px; padding-bottom: 60px; }
   .hero h1 .l1 { white-space: normal; }   /* let the long words wrap on small screens */
-  .downloads > div { padding: 22px; }
   .fcell { padding: 20px; }
 }

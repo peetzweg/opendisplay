@@ -11,6 +11,11 @@ const ITEMS: ShowcaseItem[] = [
     id: "wyEUkMgH3zw",
     title: "OpenDisplay demo — use your iPad as a second monitor for your Mac",
   },
+  {
+    kind: "youtube",
+    id: "W3dGq8yXOcA",
+    title: "OpenDisplay demo",
+  },
   ...COVERAGE,
 ]
 
