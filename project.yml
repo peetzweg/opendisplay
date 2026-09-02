@@ -86,10 +86,12 @@ targets:
         # grants by bundle ID + code signature, so a Debug build sharing
         # the release bundle ID knocks out the release app's Screen
         # Recording/Accessibility grants every time the binary changes.
-        # The distinct display name keeps the two telling apart in the
-        # System Settings permission lists.
+        # PRODUCT_NAME (not BUNDLE_DISPLAY_NAME) is what the permission
+        # lists show, so the Debug build must override it to appear as its
+        # own row instead of a second, indistinguishable "OpenDisplay".
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac.debug
+          PRODUCT_NAME: OpenDisplay Dev
           BUNDLE_DISPLAY_NAME: OpenDisplay Dev
   # The standalone receiver app (issues #82/#17/#241): a spare Mac as a
   # display. Deliberately its own bundle with a much lower deployment target
@@ -136,6 +138,7 @@ targets:
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac.receiver.debug
+          PRODUCT_NAME: OpenDisplay Receiver Dev
           BUNDLE_DISPLAY_NAME: OpenDisplay Receiver Dev
   OpenSidecarMacTests:
     type: bundle.unit-test
