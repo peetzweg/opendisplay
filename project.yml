@@ -93,6 +93,9 @@ targets:
           PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac.debug
           PRODUCT_NAME: OpenDisplay Dev
           BUNDLE_DISPLAY_NAME: OpenDisplay Dev
+          # Colour-inverted icon so the dev build is obvious in the Dock,
+          # cmd-tab and permission lists.
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Dev
   # The standalone receiver app (issues #82/#17/#241): a spare Mac as a
   # display. Deliberately its own bundle with a much lower deployment target
   # than the sender, which is pinned to 14 by its capture stack. Everything
@@ -140,6 +143,7 @@ targets:
           PRODUCT_BUNDLE_IDENTIFIER: com.peetzweg.opensidecar.mac.receiver.debug
           PRODUCT_NAME: OpenDisplay Receiver Dev
           BUNDLE_DISPLAY_NAME: OpenDisplay Receiver Dev
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Dev
   OpenSidecarMacTests:
     type: bundle.unit-test
     platform: macOS
