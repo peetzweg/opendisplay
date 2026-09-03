@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.20.0](https://github.com/peetzweg/opendisplay/compare/v1.19.0...v1.20.0) (2026-09-03)
+
+
+### Features
+
+* **web:** redesign sender and receiver downloads ([#264](https://github.com/peetzweg/opendisplay/issues/264)) ([d0ee974](https://github.com/peetzweg/opendisplay/commit/d0ee9745c94bf056f8b644d15cf1fc20e6eaf821))
+
+
+### Bug Fixes
+
+* **dev:** grayscale Debug icon instead of inverted ([#263](https://github.com/peetzweg/opendisplay/issues/263)) ([4a23a16](https://github.com/peetzweg/opendisplay/commit/4a23a16d8ef41518618839db937aa292af6043a4))
+* **dev:** make Debug builds distinct (name + inverted icon) ([#261](https://github.com/peetzweg/opendisplay/issues/261)) ([238b0ff](https://github.com/peetzweg/opendisplay/commit/238b0ffa4b0475eecaccd4e01f9517df5e2eb632))
+
 ## [1.19.0](https://github.com/peetzweg/opendisplay/compare/v1.18.0...v1.19.0) (2026-09-01)
 
 
