@@ -16,7 +16,10 @@ scroll input.
 <br />
 
 <a href="https://ko-fi.com/peetzweg">
-  <img src="assets/support_me_on_kofi_beige.png" width="256px" alt="Support me on Ko-fi" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/support_me_on_kofi_beige.png" />
+    <img src="assets/support_me_on_kofi_dark.png" width="256px" alt="Support me on Ko-fi" />
+  </picture>
 </a>
 
 </div>
