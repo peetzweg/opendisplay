@@ -151,6 +151,7 @@ targets:
     sources:
       - MacTests
       - Mac/DisplayArrangement.swift
+      - Mac/StreamNegotiation.swift
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/LogSnapshot.swift

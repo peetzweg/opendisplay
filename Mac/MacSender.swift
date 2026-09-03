@@ -79,6 +79,10 @@ struct PhoneInfo: Decodable {
                           // (PROTOCOL.md 6.4); probed for a cable upgrade
     let maxEncodeWide: Int?  // receiver's decode ceiling in pixels (PROTOCOL.md
     let maxEncodeHigh: Int?  //  6.5): cap the stream, keep the desktop size
+    let codecs: [String]? // video codecs the receiver decodes, e.g.
+                          // ["h264", "hevc"]; absent = H.264 only (PROTOCOL.md 6.6)
+    let hevcMaxEncodeWide: Int?  // decode ceiling under HEVC (PROTOCOL.md 6.6);
+    let hevcMaxEncodeHigh: Int?  //  sent only alongside "hevc" in codecs
 
     var kind: String { device ?? "device" }
     var protocolVersion: Int { pv ?? WireProtocol.assumedWhenAbsent }
@@ -131,6 +135,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private var stream: SCStream?
     private var encoder: VTCompressionSession?
+    // Chosen by negotiateStream whenever a capture size is decided
+    // (PROTOCOL.md 6.6): H.264 unless the requested stream cannot fit
+    // through the receiver's H.264 decode ceiling and both ends do HEVC.
+    private var useHEVC = false
     private var connection: NWConnection?
     private var virtualDisplay: VirtualDisplay?
     private let queue = DispatchQueue(label: "sender.video")
@@ -391,8 +399,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let displayMode = CGDisplayCopyDisplayMode(display.displayID)
             let pixelsW = displayMode?.pixelWidth ?? display.width
             let pixelsH = displayMode?.pixelHeight ?? display.height
-            let captureW = (Int(Double(pixelsW) * quality.scale)) & ~1
-            let captureH = (Int(Double(pixelsH) * quality.scale)) & ~1
+            var captureW = (Int(Double(pixelsW) * quality.scale)) & ~1
+            var captureH = (Int(Double(pixelsH) * quality.scale)) & ~1
+            // A receiver that already said hello gets the same ceiling/codec
+            // negotiation as extend — a full-pixel 5K mirror overruns a 4K
+            // decoder just as surely. Before any hello there is nothing to
+            // negotiate against and the stream goes out full size.
+            (captureW, captureH) = negotiateStream(width: captureW, height: captureH, info: lastHello)
             try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
 
         case .extend:
@@ -552,14 +565,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // hello.maxEncodeWide/High (PROTOCOL.md 6.5): a big panel does not
         // imply a big decoder. Cap the stream at the receiver's advertised
         // decode ceiling — SCK scales the capture — while the desktop keeps
-        // its announced size.
-        if let maxW = info.maxEncodeWide, let maxH = info.maxEncodeHigh,
-           maxW > 0, maxH > 0, captureW > maxW || captureH > maxH {
-            let s = min(Double(maxW) / Double(captureW), Double(maxH) / Double(captureH))
-            captureW = (Int(Double(captureW) * s)) & ~1
-            captureH = (Int(Double(captureH) * s)) & ~1
-            Log.info("stream capped at \(captureW)x\(captureH) by the receiver's decode ceiling \(maxW)x\(maxH)")
-        }
+        // its announced size. When the stream only fits through HEVC and
+        // both ends support it, 6.6 switches the codec instead of capping.
+        (captureW, captureH) = negotiateStream(width: captureW, height: captureH, info: info)
         try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
 
         // Debug aid (`defaults write sh.peet.opensidecar.mac testPattern -bool true`):
@@ -633,8 +641,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard didResize else { return false }
 
         let display = try await findSCDisplay(id: vd.displayID, expectedSize: size)
-        let captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
-        let captureH = (Int(Double(pointsHigh * 2) * quality.scale)) & ~1
+        var captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
+        var captureH = (Int(Double(pointsHigh * 2) * quality.scale)) & ~1
+        // Rotation rebuilds the capture, so it renegotiates too — without
+        // this a capped stream comes back uncapped after the first rotation.
+        (captureW, captureH) = negotiateStream(width: captureW, height: captureH, info: info)
         try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
         inputInjector = InputInjector(displayID: vd.displayID)
 
@@ -1850,14 +1861,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Create the compression session into `encoder`, optionally requiring an
     /// encoder that supports low-latency rate control.
-    private func createCompressionSession(width: Int, height: Int, lowLatency: Bool) -> OSStatus {
+    private func createCompressionSession(width: Int, height: Int, codecType: CMVideoCodecType, lowLatency: Bool) -> OSStatus {
         let spec: CFDictionary? = lowLatency
             ? [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: kCFBooleanTrue] as CFDictionary
             : nil
         return VTCompressionSessionCreate(
             allocator: nil,
             width: Int32(width), height: Int32(height),
-            codecType: kCMVideoCodecType_H264,
+            codecType: codecType,
             encoderSpecification: spec,
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
@@ -1867,11 +1878,59 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         )
     }
 
+    /// Pick the stream size for a desired capture size against the
+    /// receiver's decode ceilings (PROTOCOL.md 6.5/6.6), and remember the
+    /// codec that decision landed on for setupEncoder. `-hevc YES` forces
+    /// the HEVC path for testing, still gated on the receiver decoding it.
+    private func negotiateStream(width: Int, height: Int, info: PhoneInfo?) -> (width: Int, height: Int) {
+        let choice = StreamNegotiation.choose(
+            desiredWidth: width, desiredHeight: height,
+            h264Ceiling: Self.ceiling(info?.maxEncodeWide, info?.maxEncodeHigh),
+            hevcCeiling: Self.ceiling(info?.hevcMaxEncodeWide, info?.hevcMaxEncodeHigh),
+            receiverDecodesHEVC: info?.codecs?.contains("hevc") ?? false,
+            forceHEVC: UserDefaults.standard.bool(forKey: "hevc"),
+            senderEncodesHEVC: Self.canEncodeHEVC)
+        useHEVC = choice.useHEVC
+        if choice.width != width || choice.height != height || choice.useHEVC {
+            Log.info("stream negotiated: \(choice.width)x\(choice.height) "
+                + "\(choice.useHEVC ? "HEVC" : "H.264") (desired \(width)x\(height), "
+                + "H.264 ceiling \(info?.maxEncodeWide ?? 0)x\(info?.maxEncodeHigh ?? 0))")
+        }
+        return (choice.width, choice.height)
+    }
+
+    private static func ceiling(_ w: Int?, _ h: Int?) -> (wide: Int, high: Int)? {
+        guard let w, let h, w > 0, h > 0 else { return nil }
+        return (w, h)
+    }
+
+    /// VTCopyVideoEncoderList says what encoders exist, not whether session
+    /// creation will accept this size — probe with a real, discarded session.
+    private static func canEncodeHEVC(width: Int, height: Int) -> Bool {
+        var session: VTCompressionSession?
+        let status = VTCompressionSessionCreate(
+            allocator: nil,
+            width: Int32(width), height: Int32(height),
+            codecType: kCMVideoCodecType_HEVC,
+            encoderSpecification: nil,
+            imageBufferAttributes: nil,
+            compressedDataAllocator: nil,
+            outputCallback: nil,
+            refcon: nil,
+            compressionSessionOut: &session)
+        if let session { VTCompressionSessionInvalidate(session) }
+        if status != noErr {
+            Log.info("no HEVC encoder at \(width)x\(height) (status \(status)) — staying on H.264")
+        }
+        return status == noErr && session != nil
+    }
+
     private func setupEncoder(width: Int, height: Int) throws {
         // Low-latency rate control: the hardware encoder emits every frame
         // immediately instead of pipelining. (`-lowlatency NO` for A/B.)
         let lowLatency = UserDefaults.standard.object(forKey: "lowlatency") == nil
             || UserDefaults.standard.bool(forKey: "lowlatency")
+        var codecType = useHEVC ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
         // The spec filters which encoder VideoToolbox is allowed to pick, so an
         // unsupported key fails creation outright rather than being ignored the
         // way the properties below are: this key *requires* an encoder that
@@ -1883,12 +1942,26 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // prevents. Measured on Apple silicon at a paced 60fps: 5.3ms mean
         // submit→emit without the spec vs 6.1ms with it, 1 frame held either
         // way. (Overfeeding it at ~320fps does queue ~8 frames, hence the cap.)
-        var status = createCompressionSession(width: width, height: height, lowLatency: lowLatency)
+        var status = createCompressionSession(width: width, height: height, codecType: codecType, lowLatency: lowLatency)
         var usedFallback = false
         if encoder == nil, lowLatency {
             Log.info("VTCompressionSessionCreate failed with low-latency rate control (status \(status)) — retrying without an encoder specification")
-            status = createCompressionSession(width: width, height: height, lowLatency: false)
+            status = createCompressionSession(width: width, height: height, codecType: codecType, lowLatency: false)
             usedFallback = true
+        }
+        if encoder == nil, codecType == kCMVideoCodecType_HEVC {
+            // negotiateStream probed for this encoder, so failing here is
+            // unexpected — but a session that starts beats none, even if an
+            // H.264 stream this size may overrun the receiver's ceiling.
+            Log.info("HEVC session refused (status \(status)) — falling back to H.264")
+            codecType = kCMVideoCodecType_H264
+            useHEVC = false
+            usedFallback = false
+            status = createCompressionSession(width: width, height: height, codecType: codecType, lowLatency: lowLatency)
+            if encoder == nil, lowLatency {
+                status = createCompressionSession(width: width, height: height, codecType: codecType, lowLatency: false)
+                usedFallback = true
+            }
         }
         guard let encoder else {
             // Returning here used to leave the session "connected, all green"
@@ -1903,7 +1976,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // Low-latency settings: real-time, no B-frames, periodic keyframes.
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
+        if codecType == kCMVideoCodecType_H264 {
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
+        }
         // No periodic IDRs: each one is a bitrate spike → transmit-time hiccup.
         // TCP never loses data, and we force a keyframe on reconnect/drop.
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 3600 as CFNumber)
@@ -1913,7 +1988,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 60 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         VTCompressionSessionPrepareToEncodeFrames(encoder)
-        Log.info("encoder ready: \(width)x\(height) H.264 \(quality.bitrate / 1_000_000)Mbps quality=\(quality.rawValue) lowLatencyRC=\(lowLatency && !usedFallback)\(usedFallback ? " (fallback)" : "")")
+        let codecName = codecType == kCMVideoCodecType_HEVC ? "HEVC (H.265)" : "H.264"
+        Log.info("encoder ready: \(width)x\(height) \(codecName) \(quality.bitrate / 1_000_000)Mbps quality=\(quality.rawValue) lowLatencyRC=\(lowLatency && !usedFallback)\(usedFallback ? " (fallback)" : "")")
     }
 
     // MARK: - Capture callback
@@ -2159,19 +2235,41 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 dataPointerOut: &ptr) == noErr, let ptr else { return nil }
 
         var out = Data(capacity: total + 128)
-        // On keyframes, prepend SPS/PPS (they live in the format description).
+        // On keyframes, prepend parameter sets (VPS/SPS/PPS for HEVC, SPS/PPS for H.264).
         if isKeyframe(sample), let fmt = CMSampleBufferGetFormatDescription(sample) {
-            for i in 0..<2 {           // index 0 = SPS, 1 = PPS
-                var psPtr: UnsafePointer<UInt8>?
-                var psLen = 0
-                if CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                        fmt, parameterSetIndex: i,
-                        parameterSetPointerOut: &psPtr,
-                        parameterSetSizeOut: &psLen,
-                        parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr,
-                   let psPtr {
-                    out.append(contentsOf: startCode)
-                    out.append(Data(bytes: psPtr, count: psLen))
+            let codec = CMFormatDescriptionGetMediaSubType(fmt)
+            if codec == kCMVideoCodecType_HEVC {
+                var count = 0
+                if CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                    fmt, parameterSetIndex: 0,
+                    parameterSetPointerOut: nil, parameterSetSizeOut: nil,
+                    parameterSetCountOut: &count, nalUnitHeaderLengthOut: nil) == noErr {
+                    for i in 0..<count {
+                        var psPtr: UnsafePointer<UInt8>?
+                        var psLen = 0
+                        if CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                            fmt, parameterSetIndex: i,
+                            parameterSetPointerOut: &psPtr, parameterSetSizeOut: &psLen,
+                            parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr,
+                           let psPtr {
+                            out.append(contentsOf: startCode)
+                            out.append(Data(bytes: psPtr, count: psLen))
+                        }
+                    }
+                }
+            } else {
+                for i in 0..<2 {           // index 0 = SPS, 1 = PPS
+                    var psPtr: UnsafePointer<UInt8>?
+                    var psLen = 0
+                    if CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                            fmt, parameterSetIndex: i,
+                            parameterSetPointerOut: &psPtr,
+                            parameterSetSizeOut: &psLen,
+                            parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr,
+                       let psPtr {
+                        out.append(contentsOf: startCode)
+                        out.append(Data(bytes: psPtr, count: psLen))
+                    }
                 }
             }
         }
