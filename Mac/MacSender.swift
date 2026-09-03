@@ -443,10 +443,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let displayName = endpointName.hasPrefix("iPhone / iPad")
             ? "OpenDisplay — \(info.kind)"
             : "OpenDisplay — \(endpointName)"
-        // Keep one stable identity across rotations. Reconfiguration below
-        // applies a new mode to the existing virtual monitor, so macOS keeps
-        // its windows and arrangement attached to this physical device.
-        let serial = displaySerial
+        // Transport and display identity are separate concerns. New receivers
+        // identify the physical install in `info.id`, so USB/WiFi must use the
+        // same virtual-monitor serial. Older receivers retain the historical
+        // session-derived fallback.
+        let serial = info.id.map { DisplayIdentity.serial(for: $0) } ?? displaySerial
         // Arrangement memory (#116): keyed on the device's install id so the
         // display returns to its spot across transports and orientations —
         // the serial-keyed memory macOS keeps starts from scratch whenever
