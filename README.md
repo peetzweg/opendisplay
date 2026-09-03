@@ -16,7 +16,7 @@ scroll input.
 <br />
 
 <a href="https://ko-fi.com/peetzweg">
-  <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Buy Me a Coffee on ko-fi.com" />
+  <img src="assets/support_me_on_kofi_beige.png" width="256px" alt="Support me on Ko-fi" />
 </a>
 
 </div>
