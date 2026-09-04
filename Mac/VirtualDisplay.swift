@@ -224,7 +224,10 @@ final class VirtualDisplay {
     /// VirtualDisplay in a mirror set is always wrong — safe to always undo.
     private func ensureNotMirrored() {
         let id = display.displayID
-        guard CGDisplayIsInMirrorSet(id) != 0 else { return }
+        // boolean_t is Int32: CoreGraphics returns 1 for mirrored, 0 for not mirrored,
+        // and -1 for unknown/unregistered display IDs. Checking `!= 0` treats missing
+        // displays as mirrored (issue #142) — compare explicitly against 1.
+        guard CGDisplayIsInMirrorSet(id) == 1 else { return }
 
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success else { return }
