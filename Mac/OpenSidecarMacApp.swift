@@ -198,6 +198,7 @@ final class SenderController: ObservableObject {
 
     private var browser: NWBrowser?
     private var usbWatcher: UsbmuxDeviceWatcher?
+    private var androidWatcher: AndroidAdbWatcher?
 
     // Connection policy — one session per physical device, and the cable
     // wins whenever it's available (lower, steadier latency than WiFi):
@@ -246,6 +247,19 @@ final class SenderController: ObservableObject {
             let detached = Set(self.usbDevices.map(\.udid)).subtracting(devices.map(\.udid))
             self.usbDevices = devices
             self.failover(detachedUDIDs: detached)
+            self.autoConnect()
+        }
+        androidWatcher = AndroidAdbWatcher { [weak self] connected in
+            guard let self else { return }
+            if connected {
+                self.host = "127.0.0.1"
+                self.port = "9000"
+                UserDefaults.standard.set(self.host, forKey: "host")
+                UserDefaults.standard.set(self.port, forKey: "port")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "host")
+                UserDefaults.standard.removeObject(forKey: "port")
+            }
             self.autoConnect()
         }
         Task { @MainActor in
