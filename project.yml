@@ -154,6 +154,10 @@ targets:
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/LogSnapshot.swift
+      - Shared/Protocol.swift
+      - Shared/FrameCodec.swift
+      - Shared/AudioPacket.swift
+      - Shared/AudioJitterBuffer.swift
     settings:
       base:
         # A hostless test bundle: the sources under test are compiled straight

@@ -163,11 +163,21 @@ the floor once a force-capable build has spread.
 - **Silent breaking changes.** Never change framing or field semantics without
   the two-phase dance — the failure mode is an invisible reconnect loop, not a
   message.
-- **Control frames ≥ 32 KB or containing a NUL byte on the video channel.** The
-  phone disambiguates JSON control vs. H.264 frames heuristically (`< 32 KB,
-  starts with '{', no NUL`). A large or binary control message would be fed to
-  the video decoder. A typed frame header is a future protocol item, unlocked
-  only because this handshake exists.
+- **Control frames ≥ 32 KB or containing a NUL byte on the video channel, when
+  talking to a `pv <= 3` peer.** Those peers disambiguate JSON control vs. H.264
+  frames heuristically (`< 32 KB, starts with '{', no NUL`), so a large or
+  binary control message would be fed to the video decoder. `pv` 4 replaces the
+  heuristic with a typed frame header (PROTOCOL.md 4.1) — the change this
+  handshake existed to unlock — and lifts the constraint for tagged frames only.
+  Phase one: the heuristic is still spoken to every peer below 4, so the limit
+  remains real for as long as those peers are supported.
+- **Tagging a frame before the peer's `pv` is known.** `hello` and `welcome`
+  carry the versions, so they necessarily precede knowing them and must go out
+  untagged; the switch happens only after reading the peer's version, and resets
+  per connection because a reconnect may be a different device. Getting this
+  ordering wrong fails in the least visible way available — it can work on the
+  first connection and break on the reconnect, or work only when the handshake
+  arrives in a single TCP segment.
 - **Forcing the pre-handshake tail via the app.** Installs older than the first
   force-capable build have no lever — they are reachable only by the Mac's
   in-session `updateRequired` (if they connect to a new-enough Mac) or they

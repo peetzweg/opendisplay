@@ -51,6 +51,18 @@ struct PerfStats: Equatable {
     var decodeP50 = 0.0          // VTDecompressionSession decode, ms
     var photonP50 = 0.0          // Mac capture → frame actually on glass, ms
     var photonP95 = 0.0
+    // Audio, measured on the same clock as e2eP50 above (Mac capture →
+    // arrival here, via the ping/pong offset), so the two are comparable.
+    var audioE2eP50 = 0.0
+    // Audio latency minus video latency. Positive = audio is behind the
+    // picture, negative = ahead. This is the number that says whether the two
+    // are in sync; the individual latencies only say how far behind live
+    // everything is.
+    var avSkewMs = 0.0
+    var audioDepth = 0           // jitter buffer occupancy, packets
+    var audioTarget = 0          // pre-roll depth; grows if the link underruns
+    var audioUnderruns = 0       // buffer ran dry (this report)
+    var audioDrops = 0           // packets dropped at capacity (this report)
 }
 
 // MARK: - Peer-driven update signals (issue #132)
@@ -81,6 +93,34 @@ final class StreamReceiver: ObservableObject {
     private var listener: NWListener?
     private var listenerHealthy = false
     private var connection: NWConnection?
+    /// Whether this connection's sender tags its frames (protocol 4+).
+    ///
+    /// Per-connection, and false until `welcome` says otherwise: our own
+    /// `hello` goes out before we know what the sender speaks, and its
+    /// `welcome` arrives as a legacy frame for the same reason. Reset when a
+    /// connection is adopted, so a session inherits nothing from the last one.
+    private var senderSpeaksTaggedFrames = false
+    /// Log-once guards: an unreadable frame kind repeats at frame rate, and a
+    /// per-frame log would bury the rest of the session's diagnostics.
+    private var loggedUnknownFrameType = false
+    private var loggedAudioFormat = false
+    private var loggedAudioMalformed = false
+    /// Audio arrival counters, reported alongside the video stats so the
+    /// audio path is visible in the same place as the rest of the pipeline.
+    private var audioPacketsThisWindow = 0
+    private var audioBytesThisWindow = 0
+    /// Per-packet audio latencies, same units and clock as `e2eWindow`.
+    private var audioE2eWindow: [Double] = []
+    /// Decode and playback for the audio channel. Created eagerly but idle
+    /// until packets arrive, so a session that never carries audio pays only
+    /// the allocation.
+    private let audioPlayer = AudioPlayer()
+
+    /// Silence audio without interrupting the stream. Published so the UI can
+    /// bind a toggle to it.
+    @Published var audioMuted = false {
+        didSet { audioPlayer.isMuted = audioMuted }
+    }
     // Cursor side channel: UDP on port+1. Cursor positions ride TCP behind
     // multi-hundred-KB video frames, so over WiFi one late frame stalls the
     // cursor with it (head-of-line blocking). UDP datagrams skip that queue.
@@ -354,6 +394,16 @@ final class StreamReceiver: ObservableObject {
             guard paused != self.renderingPaused else { return }
             self.renderingPaused = paused
             Log.info(paused ? "rendering paused (backgrounded)" : "rendering resumed")
+            // Audio follows video: this build claims no background audio mode,
+            // so continuing to play while backgrounded is not available to us
+            // anyway. Flushing on resume drops what buffered while hidden
+            // rather than replaying it late against a fresh picture.
+            if paused {
+                self.audioPlayer.stop()
+            } else {
+                self.audioPlayer.flush()
+                self.audioPlayer.start()
+            }
             if !paused {
                 self.displayLayer.flush()
                 if self.connection?.state == .ready {
@@ -396,6 +446,7 @@ final class StreamReceiver: ObservableObject {
                 self.listener = nil
                 self.listenerHealthy = false
                 self.stopCursorListener()
+                self.audioPlayer.stop()
                 self.setConnected(false)
                 self.setStatus(status)
                 completion?()
@@ -632,6 +683,19 @@ final class StreamReceiver: ObservableObject {
         resetStreamState()
         lastCursorSeq = 0   // the sender restarts its cursor sequence per session
         cursorPortAnnounced = false
+        // Assume legacy framing until this session's sender identifies itself;
+        // a new session may be a different, older Mac than the last one.
+        senderSpeaksTaggedFrames = false
+        loggedUnknownFrameType = false
+        loggedAudioFormat = false
+        loggedAudioMalformed = false
+        audioPacketsThisWindow = 0
+        audioBytesThisWindow = 0
+        // Any audio still buffered belongs to the previous sender; playing it
+        // would be an audible blip of the old session over the new one. A new
+        // peer also gets a fresh buffer target — it may be on a different
+        // network than the one the last target was grown for.
+        audioPlayer.startNewSession()
         // Hide the previous sender's cursor: replayed into a fresh video view
         // it would ghost over a new sender that never sends one (mirror mode
         // hides no local cursor and streams no sprite).
@@ -771,6 +835,15 @@ final class StreamReceiver: ObservableObject {
             let macPV = obj["pv"] as? Int ?? WireProtocol.assumedWhenAbsent
             DispatchQueue.main.async {
                 self.macProtocolVersion = macPV
+            }
+            // This message itself arrived untagged — the sender could not know
+            // what we speak until it read our `hello`. Every frame after it may
+            // be tagged, so the switch happens here, on the connection's queue,
+            // before the next frame is drained.
+            let tagged = macPV >= WireProtocol.taggedFrameVersion
+            if tagged != senderSpeaksTaggedFrames {
+                senderSpeaksTaggedFrames = tagged
+                Log.info("framing: \(tagged ? "tagged" : "legacy") (sender pv \(macPV))")
             }
             if macPV < WireProtocol.minSupportedPeer {
                 let msg = "The OpenDisplay app on your Mac is too old for this \(deviceKind) app. Update OpenDisplay on your Mac to reconnect."
@@ -946,9 +1019,12 @@ final class StreamReceiver: ObservableObject {
             completion?()
             return
         }
-        var header = UInt32(payload.count).bigEndian
-        var frame = Data(bytes: &header, count: 4)
-        frame.append(payload)
+        // Deliberately untagged, at every protocol version: receiver-to-sender
+        // frames are all JSON control messages (PROTOCOL.md 4 — "the sender
+        // needs no demux"), so there is nothing for a type byte to
+        // disambiguate. Tagging this direction would be a wire change with no
+        // reader, and would break every sender below pv 4.
+        let frame = FrameCodec.encode(payload, type: .json, tagged: false)
         conn.send(content: frame, completion: .contentProcessed { error in
             if let error { Log.info("control send error: \(error)") }
             completion?()
@@ -991,24 +1067,85 @@ final class StreamReceiver: ObservableObject {
             guard buffer.distance(from: cursor, to: buffer.endIndex) >= 4 + len else { break }
             let start = buffer.index(cursor, offsetBy: 4)
             let end = buffer.index(start, offsetBy: len)
-            handleAnnexB(Data(buffer[start..<end]))
+            route(body: Data(buffer[start..<end]))
             cursor = end
         }
         buffer.removeSubrange(buffer.startIndex..<cursor)
     }
 
+    /// Send one deframed body to whatever handles its kind.
+    ///
+    /// How the kind is determined depends on the sender: a protocol-4 sender
+    /// tags it explicitly, an older one leaves it to be inferred. Which of the
+    /// two applies is `senderSpeaksTaggedFrames`, latched from `welcome` — it
+    /// is never guessed from the bytes, because the whole reason for the tag
+    /// is that guessing stops working once audio shares the wire.
+    private func route(body: Data) {
+        guard let frame = FrameCodec.decode(body: body, tagged: senderSpeaksTaggedFrames) else {
+            Log.info("dropping malformed empty tagged frame")
+            return
+        }
+        switch frame.type {
+        case .json:
+            handleVideoChannelJSON(frame.payload)
+        case .video:
+            handleAnnexB(frame.payload)
+        case .audio:
+            handleAudioPacket(frame.payload)
+        case nil:
+            // A type this build does not know: skip it. This is what makes a
+            // future frame type additive rather than a breaking change.
+            if !loggedUnknownFrameType {
+                loggedUnknownFrameType = true
+                Log.info("ignoring frame of unknown type (sender speaks a newer protocol)")
+            }
+        }
+    }
+
+    // MARK: - Audio
+
+    /// Parse an audio packet and account for it.
+    ///
+    /// Phase 2 verifies the whole path — capture, encode, frame, deframe,
+    /// parse — with nothing audible to get wrong; phase 3 adds the decoder and
+    /// playback. Counting packets and logging the format once is what makes
+    /// the path observable in the meantime.
+    private func handleAudioPacket(_ data: Data) {
+        guard let packet = AudioPacket.decode(data) else {
+            if !loggedAudioMalformed {
+                loggedAudioMalformed = true
+                Log.info("audio: undecodable packet (\(data.count) bytes) — ignoring")
+            }
+            return
+        }
+        audioPacketsThisWindow += 1
+        audioBytesThisWindow += packet.payload.count
+
+        // Audio's own end-to-end latency, computed exactly as video's is
+        // (StreamReceiver.enqueueFrame) so the two are directly comparable:
+        // the packet's sender-clock capture time against our clock, mapped
+        // through the ping/pong offset. Comparing them is what turns two
+        // latencies into an A/V sync measurement.
+        if let offset = clockOffsetMs {
+            let e2e = (nowMs + offset) - packet.ptsMs
+            // Same sanity window as the video path: a wild value means the
+            // offset is not settled yet, not that audio is 4 seconds late.
+            if e2e > -50, e2e < 5000 {
+                audioE2eWindow.append(e2e)
+                if audioE2eWindow.count > maxSamples { audioE2eWindow.removeFirst() }
+            }
+        }
+        if !loggedAudioFormat {
+            loggedAudioFormat = true
+            Log.info("audio: receiving \(packet.sampleRate)Hz \(packet.channels)ch, "
+                     + "\(packet.payload.count)B packets")
+        }
+        audioPlayer.enqueue(packet)
+    }
+
     // MARK: - Annex B -> CMSampleBuffer
 
     private func handleAnnexB(_ data: Data) {
-        // Pure JSON payload = control message (pong, cursor sprite etc.).
-        // Video frames also begin with '{' (telemetry prefix) but always
-        // contain start codes — the null bytes make them unambiguous even
-        // against multi-KB JSON (cursor sprites are base64, NUL-free).
-        if data.count < 32_768, data.first == UInt8(ascii: "{"), !data.contains(0x00) {
-            handleVideoChannelJSON(data)
-            return
-        }
-
         // Split on 4-byte start codes (our sender only emits 00 00 00 01).
         // Bytes before the FIRST start code are the telemetry prefix
         // ({"cap":…,"snd":…} stamped by the Mac).
@@ -1225,6 +1362,19 @@ final class StreamReceiver: ObservableObject {
             stats.decodeP50 = percentile(decodeWindow, 0.5)
             stats.photonP50 = percentile(photonWindow, 0.5)
             stats.photonP95 = percentile(photonWindow, 0.95)
+            stats.audioE2eP50 = percentile(audioE2eWindow, 0.5)
+            // Peek, not drain: the 5s wire report owns the consuming read.
+            let audioLive = audioPlayer.peekStats()
+            stats.audioDepth = audioLive.depth
+            stats.audioTarget = audioLive.target
+            stats.audioUnderruns = audioLive.underruns
+            stats.audioDrops = audioLive.dropped
+            // Skew only means something when both halves were actually
+            // measured; with no audio (or before the clock offset settles) a
+            // difference against zero would read as a huge false skew.
+            stats.avSkewMs = (stats.audioE2eP50 > 0 && stats.e2eP50 > 0)
+                ? stats.audioE2eP50 - stats.e2eP50
+                : 0
             framesThisWindow = 0
             bytesThisWindow = 0
             stallsThisWindow = 0
@@ -1237,6 +1387,9 @@ final class StreamReceiver: ObservableObject {
             statsReportCounter += 1
             if statsReportCounter >= 5 {
                 statsReportCounter = 0
+                // Safe from this queue: the player serialises on its own
+                // ("receiver.audio"), so this is a hop, not reentrancy.
+                let audioStats = audioPlayer.drainStats()
                 sendControl([
                     "type": "stats",
                     "transport": transport,
@@ -1255,7 +1408,29 @@ final class StreamReceiver: ObservableObject {
                     "ph50": stats.photonP50.rounded(),
                     "ph95": stats.photonP95.rounded(),
                     "offsetKnown": clockOffsetMs != nil,
+                    // Audio arrivals over the same 5s the rest of this report
+                    // covers, so a silent channel is visible in the Mac's log
+                    // as a zero rather than as an absent field.
+                    "aPkt": audioPacketsThisWindow,
+                    "aKB": audioBytesThisWindow / 1024,
+                    // Buffer health: packets arriving is not the same as
+                    // packets heard, and these are what tell the two apart.
+                    "aDepth": audioStats.depth,
+                    "aUnder": audioStats.underruns,
+                    "aDrop": audioStats.dropped,
+                    "aReord": audioStats.reordered,
+                    // Target and adaptation count together say whether the
+                    // starting guess of 3 packets was right for this link.
+                    "aTgt": audioStats.target,
+                    "aAdapt": audioStats.adaptations,
+                    // The sync measurement itself: audio latency, and how far
+                    // it sits from video's. Both on the Mac's clock.
+                    "aE2e50": stats.audioE2eP50.rounded(),
+                    "avSkew": stats.avSkewMs.rounded(),
                 ])
+                audioE2eWindow.removeAll(keepingCapacity: true)
+                audioPacketsThisWindow = 0
+                audioBytesThisWindow = 0
                 e2eWindow.removeAll(keepingCapacity: true)
                 encodeWindow.removeAll(keepingCapacity: true)
                 decodeWindow.removeAll(keepingCapacity: true)

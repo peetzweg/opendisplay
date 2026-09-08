@@ -344,6 +344,14 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("Mute audio", isOn: $receiver.audioMuted)
+                } header: {
+                    Text("Audio")
+                } footer: {
+                    Text("Your Mac can send its audio along with the picture — switch it on in the Mac app. Muting here silences it without interrupting the stream, and audio from other apps keeps playing either way.")
+                }
+
+                Section {
                     Toggle("Performance overlay", isOn: $showAnalytics)
                     Toggle("Metal renderer (experimental)", isOn: $metalRenderer)
                 } header: {
@@ -497,8 +505,29 @@ final class ReceiverModel: ObservableObject {
 
     func sceneDidActivate() {
         endBackgroundAssertion()
+        configureAudioSession()
         receiver.setRenderingPaused(false)
         receiver.ensureListening()
+    }
+
+    /// Put the audio session in a state where streamed desktop audio can play.
+    ///
+    /// `.mixWithOthers` is deliberate: using this as a second display should
+    /// not stop whatever the user already had playing. Someone who wants the
+    /// Mac's audio to take over can pause the other app; the reverse — being
+    /// silently interrupted by plugging in a display — is not recoverable by
+    /// the user at all.
+    ///
+    /// Failure is non-fatal. Audio is an optional addition to a display, and
+    /// the picture must keep working on a device that refuses the session.
+    private func configureAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true)
+        } catch {
+            Log.info("audio session unavailable (\(error)) — video only")
+        }
     }
 
     func deviceWillLock() {

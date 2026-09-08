@@ -193,6 +193,12 @@ final class SenderController: ObservableObject {
     @Published var quality = StreamQuality(rawValue: UserDefaults.standard.string(forKey: "quality") ?? "") ?? .best {
         didSet { UserDefaults.standard.set(quality.rawValue, forKey: "quality") }
     }
+    /// Stream system audio alongside the picture. Off by default: an update
+    /// should never start sending sound to someone's iPad unasked. Changing it
+    /// restarts capture, because `capturesAudio` is fixed at stream creation.
+    @Published var audioEnabled = UserDefaults.standard.bool(forKey: "audioEnabled") {
+        didSet { UserDefaults.standard.set(audioEnabled, forKey: "audioEnabled") }
+    }
 
     var running: Bool { !sessions.isEmpty }
 
@@ -896,6 +902,14 @@ struct ContentView: View {
                     }
                     .onChange(of: controller.quality) { controller.restartAll() }
                     Text(controller.quality.explanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Stream audio", isOn: $controller.audioEnabled)
+                        .onChange(of: controller.audioEnabled) { controller.restartAll() }
+                    Text("Sends this Mac's audio to the connected device. Needs OpenDisplay 4 or newer on the receiving end; older devices keep showing the picture only.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

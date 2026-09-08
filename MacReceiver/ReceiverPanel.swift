@@ -29,6 +29,10 @@ struct ReceiverSections: View {
             Text("FPS, bitrate, frame timing, and latency graphs at the bottom of the video window while streaming — the same HUD the iPhone app has.")
         }
 
+        if let receiver = controller.receiver {
+            ReceiverAudioSection(receiver: receiver)
+        }
+
         Section("How to connect") {
             Label("Install and open OpenDisplay on the Mac whose screen you want to extend.",
                   systemImage: "macbook.and.macbook")
@@ -38,6 +42,23 @@ struct ReceiverSections: View {
                   systemImage: "arrow.up.left.and.arrow.down.right")
         }
         .font(.subheadline)
+    }
+}
+
+/// Mute for streamed desktop audio.
+///
+/// Its own subview for the same reason as the status section: a nested
+/// ObservableObject does not republish through its parent, so the toggle would
+/// not follow the receiver's state otherwise.
+struct ReceiverAudioSection: View {
+    @ObservedObject var receiver: StreamReceiver
+
+    var body: some View {
+        Section {
+            Toggle("Mute audio", isOn: $receiver.audioMuted)
+        } footer: {
+            Text("Silences audio sent from the other Mac. The stream keeps running, so unmuting resumes in sync. Audio arrives only if the sending Mac has it switched on.")
+        }
     }
 }
 
