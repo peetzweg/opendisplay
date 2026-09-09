@@ -1,4 +1,4 @@
-# Experimental workaround for Best quality on a 5K Mac receiver
+# Proposed fix for Best quality on a 5K Mac receiver
 
 This branch proposes a sender-side workaround for [issue #271](https://github.com/peetzweg/opendisplay/issues/271). It preserves a 4096×2304 stream and reduces the nominal encoder frame rate to 55 fps. It does **not** enable native 5120×2880 streaming or guarantee 55 delivered fps.
 
@@ -70,7 +70,9 @@ To revert, quit OpenDisplay Dev and open your normal OpenDisplay sender. Balance
 
 - The initial prototype was built on an M4 MacBook Pro running macOS 26.3 with Xcode 26.6 and used with a 2015 5K iMac over Wi-Fi. It established a 4096×2304 extended stream, sustained approximately 35–40 delivered fps in the observed intervals, and reconnected successfully.
 - The prototype still logged isolated `nil buffer despite noErr` events at startup/reconnect. The sustained near-every-frame rejection pattern did not recur during the short observed sessions. This is not a claim of zero dropped frames or a long-duration soak test.
-- This public revision additionally routes replay/reconnect frames through the limiter and schedules delivery of a deferred final update. It has been built and has passed all 44 macOS unit tests, including ten new rate-policy tests. The completed public revision has **not yet had a fresh end-to-end receiver test**; the above hardware measurements belong to the initial prototype.
+- The completed public revision was independently tested by the issue reporter using an M2 Pro Mac mini on macOS 26.5.2 and a 2015 5K iMac on macOS Monterey 12.7.6 over wired Ethernet. Best quality at 4096×2304 remained connected for several minutes without a drop. Two isolated nil-buffer events occurred during encoder startup and none persisted afterward. Delivered frame rate varied from roughly 15–57 fps, with occasional brief stalls.
+- In that everyday-productivity test, the reporter found the image noticeably sharper than Balanced quality and did not perceive added latency. The workload covered terminal windows and web browsing rather than video playback or another stress test.
+- The public revision routes replay/reconnect frames through the limiter and schedules delivery of a deferred final update. It has been built and has passed all 44 macOS unit tests, including ten new rate-policy tests.
 - Unit tests cover rate selection, macroblock rounding, a 60 Hz source paced to 55 fps, deferred-frame eligibility, long idle gaps, reset, invalid timestamps, early admission, and duplicate prevention near a later slot. They do not emulate VideoToolbox or prove actual timer delivery to a physical receiver.
 - The workaround does not change receiver decode limits, codec, bitrate, or network handling. Lowering a nominal frame rate does not guarantee compatibility with every encoder, display, or transport.
 
@@ -87,4 +89,4 @@ xcodebuild test \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-Feedback is welcome on issue #271 and the linked draft PR. Please include sender/receiver models, macOS versions, transport, selected quality, encoded resolution, target fps, and whether repeated nil-buffer errors persist. Remove device names, network addresses, and other personal information before sharing logs.
+Feedback is welcome on issue #271 and the linked pull request. Please include sender/receiver models, macOS versions, transport, selected quality, encoded resolution, target fps, and whether repeated nil-buffer errors persist. Remove device names, network addresses, and other personal information before sharing logs.
