@@ -2,6 +2,7 @@ import SwiftUI
 import Network
 import Combine
 import Sparkle
+import ServiceManagement
 
 /// How the app presents itself. One bundle, switched at runtime via the
 /// activation policy — like Raycast/Hammerspoon style background agents.
@@ -149,6 +150,18 @@ final class DeviceSession: ObservableObject, Identifiable {
     // The live TCP path runs over a cable (Thunderbolt Bridge / Ethernet)
     // rather than WiFi — reported by the sender once connected.
     @Published var wired = false
+
+    // Battery & power awareness (issue #13)
+    @Published var batteryLevel: Double?
+    @Published var isCharging = false
+    @Published var isLowPower = false
+
+    var batteryLabel: String? {
+        guard let level = batteryLevel, level >= 0 else { return nil }
+        let pct = Int(round(level * 100))
+        let icon = isCharging ? "⚡" : (isLowPower ? "🪫" : "🔋")
+        return "\(pct)% \(icon)"
+    }
 
     var transportLabel: String { onUSB ? "USB" : wired ? "Cable" : "WiFi" }
 
@@ -571,6 +584,11 @@ final class SenderController: ObservableObject {
             session?.framesSent = frames
             session?.mbps = mbps
         }
+        sender.onBatteryStatus = { [weak session] level, state, lowPower in
+            session?.batteryLevel = level
+            session?.isCharging = (state == "charging" || state == "full")
+            session?.isLowPower = lowPower
+        }
         sender.onDisconnected = { [weak self, weak session] in
             // Device unplugged / left the network and stayed gone: end this
             // session fully (virtual display + capture + indicator). No
@@ -913,6 +931,11 @@ struct ContentView: View {
                     }
                 }
 
+                Toggle("Launch at Login", isOn: Binding(
+                    get: { LaunchAtLogin.isEnabled },
+                    set: { LaunchAtLogin.setEnabled($0) }
+                ))
+
                 LabeledContent("Display layout") {
                     Button("Arrange Displays…") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.Displays-Settings.extension") {
@@ -1048,6 +1071,11 @@ struct SessionRow: View {
                     .lineLimit(2)
             }
             Spacer()
+            if let battery = session.batteryLabel {
+                Text(battery)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
             if session.mbps > 0 {
                 Text("\(String(format: "%.1f", session.mbps)) Mbit/s")
                     .font(.system(.caption, design: .monospaced))
