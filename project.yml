@@ -153,6 +153,7 @@ targets:
       - Mac/DisplayArrangement.swift
       - Mac/Log.swift
       - Mac/LogPolicies.swift
+      - Mac/VirtualDisplay.swift
       - Shared/LogSnapshot.swift
     settings:
       base:
