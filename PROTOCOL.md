@@ -192,8 +192,12 @@ picture) per wire frame.
   only. (A receiver that also handles 3-byte codes works today by accident;
   do not rely on it in either direction.)
 * **Keyframes carry their parameter sets.** Every IDR frame MUST be
-  prefixed with the current SPS and PPS NALUs. Non-keyframes carry only
-  slice data (plus optional SEI, which receivers MAY skip).
+  prefixed with the current SPS and PPS NALUs — VPS, SPS and PPS when the
+  stream is HEVC (section 6.6). Non-keyframes carry only slice data, plus
+  whatever non-VCL units the encoder emits (SEI; HEVC hardware encoders
+  also emit access unit delimiters). Receivers MUST NOT hand non-VCL units
+  to the decoder as slice data — an AUD fed as a slice corrupts every
+  frame — so skip everything that is not a parameter set or a VCL NALU.
 * All slices of one picture MUST travel in one wire frame; receivers SHOULD
   decode each wire frame as one sample.
 * **No presentation timestamps** cross the wire. The stream is low-latency
@@ -210,7 +214,9 @@ never from `hello`.
 When the stream changes size (device rotation, quality change), the sender
 simply starts sending frames with new SPS/PPS. Receivers MUST detect the
 parameter-set change, rebuild their decoder, and discard buffered frames
-from the old format.
+from the old format. A codec switch (section 6.6) is the same event: no
+codec tag crosses the wire, the new stream simply opens with the new
+codec's parameter sets on a keyframe.
 
 ### 5.3 Keyframe recovery
 
@@ -286,6 +292,13 @@ nothing before it arrives.
 * `maxEncodeWide` / `maxEncodeHigh` (int, optional): the receiver's decode
   ceiling in pixels (section 6.5) — the largest stream it can sustain,
   independent of the panel size it announced. Additive at `pv` 3, no bump.
+* `codecs` (array of strings, optional): every video codec the receiver
+  decodes, lowercase (`"h264"`, `"hevc"`). Absent means H.264 only, which
+  every receiver MUST decode regardless (section 6.6). Additive at `pv` 3,
+  no bump.
+* `hevcMaxEncodeWide` / `hevcMaxEncodeHigh` (int, optional): the decode
+  ceiling that applies while the stream is HEVC (section 6.6). Sent only
+  alongside `"hevc"` in `codecs`. Additive at `pv` 3, no bump.
 
 A receiver MUST re-send `hello` on the live connection whenever its
 announced dimensions change (rotation). The sender rebuilds the display in
@@ -504,6 +517,33 @@ behavior (stream size follows the announced pixels and the sender's
 quality setting). Derive advertised ceilings from measured playback: a
 decode session that merely creates successfully proves nothing.
 
+### 6.6 Codec negotiation (`hello.codecs`, `hevcMaxEncodeWide` / `hevcMaxEncodeHigh`)
+
+H.264 is the wire's baseline codec and stays the default: it is the
+cheapest to encode and the only codec every receiver decodes. But its
+decode ceiling (section 6.5) is a format limit, not a hardware one —
+no Mac measured sustains H.264 playback at 5K, while HEVC decodes 5K at
+frame rate even on 2017 hardware. HEVC exists on this wire solely to
+lift that ceiling, never as a general preference.
+
+* A receiver that sustains HEVC playback MAY advertise
+  `codecs: ["h264", "hevc"]` in its `hello`, together with
+  `hevcMaxEncodeWide/High` — the section 6.5 ceiling that applies while
+  the stream is HEVC. As with 6.5, advertise measured playback, not
+  session creation; hardware without HEVC hardware decode should not
+  advertise it at all.
+* A sender SHOULD switch to HEVC only when all three hold: the stream it
+  wants to send exceeds the receiver's H.264 ceiling, the receiver
+  advertised `"hevc"`, and its own encoder handles that size. A stream
+  at or below the H.264 ceiling SHOULD stay H.264 even when both ends
+  could do HEVC: at those sizes HEVC buys nothing and costs encode time.
+* An HEVC stream uses the identical framing (section 5.1); keyframes are
+  prefixed with VPS, SPS and PPS, and a codec switch mid-connection is
+  an ordinary stream change (section 5.2).
+
+Every field is optional and additive (no `pv` bump): any mix of old and
+new sender and receiver degrades to H.264 under the 6.5 rules.
+
 ## 7. Coordinate spaces and units
 
 The most common third-party bug is a unit mismatch, so here is every space
@@ -641,6 +681,8 @@ Mechanics at a glance (the policy behind them lives in COMPATIBILITY.md):
 | 2 | Version handshake: `pv` in `hello` and TXT, `welcome`, `updateRequired`, `sleeping`, `closing` |
 | 3 | `pencil`, `proximity`; below pv 3 the receiver degrades stylus to `touch` |
 | 3 (additive) | `hello.cursorPort` and the UDP cursor side channel (6.3); optional, no bump |
+| 3 (additive) | `hello.addrs` and the cable upgrade (6.4); `hello.maxEncodeWide/High` decode ceiling (6.5); optional, no bump |
+| 3 (additive) | `hello.codecs` and the HEVC path with its `hello.hevcMaxEncodeWide/High` ceiling (6.6); optional, no bump |
 | 4 (reserved) | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
 
 ---
