@@ -326,6 +326,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // tell "Mac rendered 45fps" from "frames got lost" — count deliveries here.
     private var capFrames = 0
     private var capWindowStart = Date()
+    private var encodeFrameRate = H264FrameRatePolicy(width: 1, height: 1)
 
     private var framesSent = 0
     private var bytesSent = 0
@@ -1900,6 +1901,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     "This Mac's video encoder could not be started (VideoToolbox error \(status))"
             ])
         }
+        encodeFrameRate = H264FrameRatePolicy(width: width, height: height)
+        if encodeFrameRate.framesPerSecond < 60 {
+            Log.info("H.264 L5.2 rate cap: \(width)x\(height) -> \(encodeFrameRate.framesPerSecond)fps")
+        }
+
         // Low-latency settings: real-time, no B-frames, periodic keyframes.
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
@@ -1910,10 +1916,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 60 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: quality.bitrate as CFNumber)
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 60 as CFNumber)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate,
+                             value: encodeFrameRate.framesPerSecond as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         VTCompressionSessionPrepareToEncodeFrames(encoder)
-        Log.info("encoder ready: \(width)x\(height) H.264 \(quality.bitrate / 1_000_000)Mbps quality=\(quality.rawValue) lowLatencyRC=\(lowLatency && !usedFallback)\(usedFallback ? " (fallback)" : "")")
+        Log.info("encoder ready: \(width)x\(height) H.264 \(quality.bitrate / 1_000_000)Mbps fps=\(encodeFrameRate.framesPerSecond) quality=\(quality.rawValue) lowLatencyRC=\(lowLatency && !usedFallback)\(usedFallback ? " (fallback)" : "")")
     }
 
     // MARK: - Capture callback
@@ -2010,6 +2017,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime, generation: UInt64) {
         guard generation == captureGenerationNow, let encoder else { return }
+        // Gate every submission, including reconnect and backpressure replays.
+        // Reuse the existing latest-frame replay so a rate-limited final screen
+        // update is eventually delivered even if ScreenCaptureKit goes idle.
+        guard encodeFrameRate.shouldSubmit(at: CMTimeGetSeconds(pts)) else {
+            scheduleDropReplayTimer()
+            return
+        }
         pipelineLock.lock()
         pendingEncodes += 1
         pipelineLock.unlock()
