@@ -5,11 +5,13 @@
 set -e
 cd "$(dirname "$0")"
 
-APP=build/Build/Products/Debug/OpenDisplay.app
+# Debug builds are named "OpenDisplay Dev" (own bundle ID and TCC identity,
+# so they never clobber the release app's permission grants).
+APP=build/Build/Products/Debug/OpenDisplay\ Dev.app
 if [[ ! -d $APP ]]; then
-  echo "Mac app not built — run: xcodegen generate && xcodebuild -project OpenSidecar.xcodeproj -scheme OpenSidecarMac -configuration Debug -derivedDataPath build build"
+  echo "Mac app not built — run: ./generate.sh && xcodebuild -project OpenSidecar.xcodeproj -scheme OpenSidecarMac -configuration Debug -derivedDataPath build build"
   exit 1
 fi
 
 open "$APP"
-echo "OpenDisplay running — logs at ~/Library/Logs/OpenDisplay/opendisplay.log."
+echo "OpenDisplay Dev running — logs at ~/Library/Logs/OpenDisplay Dev/opendisplay.log."

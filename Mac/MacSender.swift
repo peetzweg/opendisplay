@@ -24,45 +24,6 @@ enum CaptureMode: String {
     case extend   // virtual display (Milestone 2)
 }
 
-/// Capture-resolution / bitrate trade-off. The virtual display always runs at
-/// native size — only the captured/encoded stream is scaled, so lower presets
-/// cut encode, transmit, and decode time at the cost of sharpness.
-enum StreamQuality: String, CaseIterable {
-    case best, balanced, fast
-
-    var scale: Double {
-        switch self {
-        case .best: return 1.0
-        case .balanced: return 0.75
-        case .fast: return 0.5
-        }
-    }
-
-    var bitrate: Int {
-        switch self {
-        case .best: return 18_000_000
-        case .balanced: return 10_000_000
-        case .fast: return 6_000_000
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .best: return "Best (native)"
-        case .balanced: return "Balanced (75%)"
-        case .fast: return "Fast (50%)"
-        }
-    }
-
-    var explanation: String {
-        switch self {
-        case .best: return "Pixel-perfect at the device's native resolution. Highest bandwidth and latency."
-        case .balanced: return "75% capture resolution — noticeably lower latency, slight softness."
-        case .fast: return "Half resolution — lowest latency and bandwidth, visibly softer. Good for WiFi."
-        }
-    }
-}
-
 struct PhoneInfo: Decodable {
     let pixelsWide: Int   // landscape-oriented (long edge)
     let pixelsHigh: Int
@@ -340,13 +301,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// At most one timer is active; each new drop resets the 30ms deadline.
     private var dropReplayTimer: DispatchSourceTimer?
 
+    let frameRate: FrameRate
+
     init(transport: SenderTransport, name: String, mode: CaptureMode,
-         quality: StreamQuality = .best, displaySerial: UInt32 = 0x0001,
+         quality: StreamQuality = .best, frameRate: FrameRate = .fps60,
+         displaySerial: UInt32 = 0x0001,
          identityOffset: UInt32 = 0, awaitingWake: Bool = false) {
         self.transport = transport
         self.endpointName = name
         self.mode = mode
         self.quality = quality
+        self.frameRate = frameRate
         self.displaySerial = displaySerial
         self.baseIdentityOffset = identityOffset
         self.awaitingWake = awaitingWake
@@ -500,6 +465,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     return VirtualDisplay(name: displayName,
                                           pointsWide: pointsWide, pointsHigh: pointsHigh,
                                           sizeInMillimeters: mm,
+                                          targetFPS: Double(self.frameRate.rawValue),
                                           serialNum: serial &+ totalOffset,
                                           productID: 0x4F53 &+ totalOffset,
                                           restoreOrigin: restoreOrigin,
@@ -680,10 +646,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let config = SCStreamConfiguration()
         config.width = pixelsWide
         config.height = pixelsHigh
-        // Ask for 120 even though the virtual display is 60Hz: requesting
-        // exactly 1/60 makes SCK's rate limiter skip frames that arrive a
-        // hair early (beat frequency) — measured ~51fps instead of 60.
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 120)
+        // Ask for double the target frame rate so SCK's rate limiter does not
+        // skip frames that arrive a hair early (beat frequency) — measured
+        // ~51fps instead of 60 when requested at 1/60.
+        let targetFPS = frameRate.rawValue
+        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(120, targetFPS * 2)))
         // 420v matches the encoder's native input — skips a BGRA→YUV conversion
         // inside VideoToolbox. (`-pixfmt bgra` reverts for A/B testing.)
         config.pixelFormat = UserDefaults.standard.string(forKey: "pixfmt") == "bgra"
@@ -1906,14 +1873,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
         // No periodic IDRs: each one is a bitrate spike → transmit-time hiccup.
         // TCP never loses data, and we force a keyframe on reconnect/drop.
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 3600 as CFNumber)
+        let targetFPS = frameRate.rawValue
+        let effectiveBitrate = frameRate.bitrate(for: quality)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: (targetFPS * 60) as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 60 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: quality.bitrate as CFNumber)
-        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 60 as CFNumber)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: effectiveBitrate as CFNumber)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: targetFPS as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         VTCompressionSessionPrepareToEncodeFrames(encoder)
-        Log.info("encoder ready: \(width)x\(height) H.264 \(quality.bitrate / 1_000_000)Mbps quality=\(quality.rawValue) lowLatencyRC=\(lowLatency && !usedFallback)\(usedFallback ? " (fallback)" : "")")
+        Log.info("encoder ready: \(width)x\(height) H.264 \(effectiveBitrate / 1_000_000)Mbps @\(targetFPS)fps quality=\(quality.rawValue) lowLatencyRC=\(lowLatency && !usedFallback)\(usedFallback ? " (fallback)" : "")")
     }
 
     // MARK: - Capture callback
@@ -1951,7 +1920,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func scheduleDropReplayTimer() {
         dropReplayTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + .milliseconds(30))
+        let replayDelayMs = max(15, 1000 / frameRate.rawValue)
+        timer.schedule(deadline: .now() + .milliseconds(replayDelayMs))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             self.dropReplayTimer = nil
