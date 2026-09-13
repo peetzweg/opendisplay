@@ -126,6 +126,7 @@ final class DeviceSession: ObservableObject, Identifiable {
     // error text remains. A failed session must never swallow a fresh
     // connect for its device the way a live one does.
     @Published var failed = false
+    @Published var capturePhase: CaptureLifecyclePhase = .recovering
     // Receiver's per-install identity (from hello) — the key for recognizing
     // the same physical device across USB and WiFi.
     var deviceID: String?
@@ -554,6 +555,9 @@ final class SenderController: ObservableObject {
             guard let session, session.status != text else { return }
             session.status = text
             Log.info("status[\(id)]: \(text)")
+        }
+        sender.onCaptureLifecycleChanged = { [weak session] phase in
+            session?.capturePhase = phase
         }
         sender.onHello = { [weak self, weak session] info in
             guard let self, let session else { return }
@@ -1066,9 +1070,19 @@ struct SessionRow: View {
             .help(session.failed
                 ? "Start this connection over"
                 : "Drop the connection and pair with the device again")
+            Button(session.capturePhase == .paused ? "Resume" : "Pause") {
+                if session.capturePhase == .paused {
+                    session.sender.resumeDisplay()
+                } else {
+                    session.sender.pauseDisplay()
+                }
+            }
+            .controlSize(.small)
+            .disabled(session.capturePhase != .running
+                && session.capturePhase != .recovering
+                && session.capturePhase != .paused)
             Button("Disconnect") { controller.disconnect(session) }
                 .controlSize(.small)
         }
     }
 }
-
