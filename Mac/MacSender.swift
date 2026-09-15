@@ -384,6 +384,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 throw NSError(domain: "MacSender", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "no displays found"])
             }
+            if let targetID = InputTargetResolver.displayID(
+                mode: .mirror, mirrorDisplayID: display.displayID, virtualDisplayID: nil) {
+                inputInjector = InputInjector(displayID: targetID)
+            }
             // SCDisplay.width/height are POINTS. Capturing at points on a
             // Retina panel discards half the raster before the encoder ever
             // sees it, and no quality setting can bring it back — read the
@@ -544,7 +548,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }
             throw identityError
         }
-        inputInjector = InputInjector(displayID: vd.displayID)
+        if let targetID = InputTargetResolver.displayID(
+            mode: .extend, mirrorDisplayID: 0, virtualDisplayID: vd.displayID) {
+            inputInjector = InputInjector(displayID: targetID)
+        }
         // Quality scaling: capture/encode below native when requested — the
         // display itself stays native so window layout is unaffected.
         var captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
@@ -636,7 +643,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let captureW = (Int(Double(pointsWide * 2) * quality.scale)) & ~1
         let captureH = (Int(Double(pointsHigh * 2) * quality.scale)) & ~1
         try await startCapture(display: display, pixelsWide: captureW, pixelsHigh: captureH)
-        inputInjector = InputInjector(displayID: vd.displayID)
+        if let targetID = InputTargetResolver.displayID(
+            mode: .extend, mirrorDisplayID: 0, virtualDisplayID: vd.displayID) {
+            inputInjector = InputInjector(displayID: targetID)
+        }
 
         if UserDefaults.standard.bool(forKey: "testPattern") {
             let id = vd.displayID
@@ -724,6 +734,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stop() {
         stopped = true
+        inputInjector?.cancelActiveInput()
         invalidateCapturePipeline(discardingLastFrame: true)
         cursorTimer?.cancel()
         cursorTimer = nil
@@ -749,6 +760,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self?.helloContinuation?.resume(throwing: CancellationError())
             self?.helloContinuation = nil
         }
+    }
+
+    /// Called when the preference changes so a gesture already in progress
+    /// cannot leave a synthetic mouse or tablet button held down.
+    func cancelActiveInput() {
+        inputInjector?.cancelActiveInput()
+    }
+
+    private func receiverInputIsAllowed() -> Bool {
+        guard InputPolicy.allowsInput() else {
+            inputInjector?.cancelActiveInput()
+            return false
+        }
+        return true
     }
 
     /// Migrate the live session to another transport: swap the socket under
@@ -1759,6 +1784,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
         case "touch":
+            guard receiverInputIsAllowed() else { return }
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
@@ -1772,10 +1798,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
         case "scroll":
+            guard receiverInputIsAllowed() else { return }
             if let dx = obj["dx"] as? Double, let dy = obj["dy"] as? Double {
                 inputInjector?.handleScroll(dx: dx, dy: dy)
             }
         case "pencil":
+            guard receiverInputIsAllowed() else { return }
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
@@ -1794,6 +1822,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
         case "proximity":
+            guard receiverInputIsAllowed() else { return }
             if let entering = obj["entering"] as? Bool,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
