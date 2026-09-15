@@ -11,6 +11,7 @@ final class VirtualDisplay {
     private let maxPointsPerAxis: Int
     private(set) var pointsWide: Int
     private(set) var pointsHigh: Int
+    private let targetFPS: Double
 
     private var restoreTarget: CGPoint?
     private var restoreUntil: Date
@@ -27,11 +28,13 @@ final class VirtualDisplay {
     /// `onOriginChange` reports where the display sits afterwards, so the
     /// caller can persist user drags.
     init?(name: String, pointsWide: Int, pointsHigh: Int, sizeInMillimeters: CGSize,
+          targetFPS: Double = 60,
           serialNum: UInt32 = 0x0001, productID: UInt32 = 0x4F53,
           restoreOrigin: CGPoint? = nil,
           onOriginChange: ((CGPoint, CGSize) -> Void)? = nil) {
         self.pointsWide = pointsWide
         self.pointsHigh = pointsHigh
+        self.targetFPS = targetFPS
         // Reserve the longer orientation on both axes. That lets a phone or
         // tablet change orientation by applying a new mode to this *same*
         // virtual monitor instead of removing it and stranding its windows.
@@ -60,13 +63,13 @@ final class VirtualDisplay {
         settings = CGVirtualDisplaySettings()
         settings.hiDPI = 1
         settings.modes = [
-            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
+            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: targetFPS)
         ]
         guard display.apply(settings) else {
             Log.info("CGVirtualDisplay applySettings FAILED")
             return nil
         }
-        Log.info("virtual display created: id=\(display.displayID) \(pointsWide)x\(pointsHigh)pt @2x")
+        Log.info("virtual display created: id=\(display.displayID) \(pointsWide)x\(pointsHigh)pt @2x @\(Int(targetFPS))Hz")
 
         // macOS defaults the new display to its 1x mode AND can restore a
         // stale saved mode for this serial asynchronously, seconds after the
@@ -108,7 +111,7 @@ final class VirtualDisplay {
         let newSettings = CGVirtualDisplaySettings()
         newSettings.hiDPI = 1
         newSettings.modes = [
-            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
+            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: targetFPS)
         ]
         guard display.apply(newSettings) else {
             Log.info("virtual display \(display.displayID) applySettings FAILED during resize")
@@ -153,6 +156,9 @@ final class VirtualDisplay {
         let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         guard let modes = CGDisplayCopyAllDisplayModes(display.displayID, opts) as? [CGDisplayMode],
               let hidpi = modes.first(where: {
+                  $0.width == pointsWide && $0.pixelWidth == pointsWide * 2 &&
+                  (abs($0.refreshRate - targetFPS) < 1.0 || $0.refreshRate == 0)
+              }) ?? modes.first(where: {
                   $0.width == pointsWide && $0.pixelWidth == pointsWide * 2
               }) else {
             if recover {
@@ -162,14 +168,15 @@ final class VirtualDisplay {
             return false
         }
         if let current = CGDisplayCopyDisplayMode(display.displayID),
-           current.width == hidpi.width, current.pixelWidth == hidpi.pixelWidth {
+           current.width == hidpi.width, current.pixelWidth == hidpi.pixelWidth,
+           (abs(current.refreshRate - hidpi.refreshRate) < 1.0 || hidpi.refreshRate == 0) {
             return true
         }
         var config: CGDisplayConfigRef?
         CGBeginDisplayConfiguration(&config)
         CGConfigureDisplayWithDisplayMode(config, display.displayID, hidpi, nil)
         let err = CGCompleteDisplayConfiguration(config, .permanently)
-        Log.info("HiDPI mode (re)selected: \(hidpi.width)x\(hidpi.height)@2x (result \(err.rawValue))")
+        Log.info("HiDPI mode (re)selected: \(hidpi.width)x\(hidpi.height)@2x @\(Int(hidpi.refreshRate))Hz (result \(err.rawValue))")
         return err == .success
     }
 
