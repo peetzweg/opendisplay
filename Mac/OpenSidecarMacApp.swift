@@ -193,6 +193,12 @@ final class SenderController: ObservableObject {
     @Published var quality = StreamQuality(rawValue: UserDefaults.standard.string(forKey: "quality") ?? "") ?? .best {
         didSet { UserDefaults.standard.set(quality.rawValue, forKey: "quality") }
     }
+    @Published var allowInput = InputPolicy.allowsInput() {
+        didSet {
+            UserDefaults.standard.set(allowInput, forKey: InputPolicy.defaultsKey)
+            if !allowInput { sessions.forEach { $0.sender.cancelActiveInput() } }
+        }
+    }
 
     var running: Bool { !sessions.isEmpty }
 
@@ -889,6 +895,13 @@ struct ContentView: View {
                 .onChange(of: controller.mode) { controller.restartAll() }
 
                 VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Allow Input", isOn: $controller.allowInput)
+                    Text("Allow touch, scrolling, and pointer input from the connected device.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
                     Picker("Quality", selection: $controller.quality) {
                         ForEach(StreamQuality.allCases, id: \.self) { q in
                             Text(q.label).tag(q)
@@ -1071,4 +1084,3 @@ struct SessionRow: View {
         }
     }
 }
-

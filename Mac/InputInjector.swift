@@ -25,6 +25,10 @@ private enum SystemClickMetrics {
 final class InputInjector {
 
     private let displayID: CGDirectDisplayID
+    // Preference changes arrive on the main actor; receiver messages arrive on
+    // Network's callback queue. Serialize them so cancellation cannot race a
+    // new synthetic down event.
+    private let inputLock = NSRecursiveLock()
     private var isDown = false
     private var penDown = false
     // A real event source (vs nil) plus non-zero clickState on down/up: menu
@@ -73,11 +77,11 @@ final class InputInjector {
 
     /// x/y are normalized [0,1] in video space (origin top-left).
     func handleTouch(phase: String, x: Double, y: Double) {
+        inputLock.lock()
+        defer { inputLock.unlock() }
+        guard inputIsAllowed() else { return }
         let bounds = CGDisplayBounds(displayID)   // global CG coords, y-down
-        let point = CGPoint(
-            x: bounds.origin.x + x * bounds.width,
-            y: bounds.origin.y + y * bounds.height
-        )
+        let point = InputCoordinateMapper.point(x: x, y: y, in: bounds)
 
         let type: CGEventType
         // Click count on the release. A cancel means "a second finger joined,
@@ -116,6 +120,9 @@ final class InputInjector {
     /// dx/dy in display pixels, natural-scrolling sign from the phone.
     /// Scroll events take points, so convert via the display's pixel scale.
     func handleScroll(dx: Double, dy: Double) {
+        inputLock.lock()
+        defer { inputLock.unlock() }
+        guard inputIsAllowed() else { return }
         let bounds = CGDisplayBounds(displayID)
         let scale = bounds.width > 0 ? Double(CGDisplayPixelsWide(displayID)) / bounds.width : 2
         guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
@@ -127,12 +134,48 @@ final class InputInjector {
     }
 
     func handleProximity(entering: Bool, x: Double, y: Double) {
+        inputLock.lock()
+        defer { inputLock.unlock() }
+        guard inputIsAllowed() else { return }
         setProximity(entering: entering, at: screenPoint(nx: x, ny: y))
+    }
+
+    /// Clear held synthetic state when input is disabled during a gesture.
+    func cancelActiveInput() {
+        inputLock.lock()
+        defer { inputLock.unlock() }
+        if isDown {
+            isDown = false
+            if let event = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                                   mouseCursorPosition: currentCursor(), mouseButton: .left) {
+                event.setIntegerValueField(.mouseEventClickState, value: 0)
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        if penDown {
+            postTabletPoint(phase: .up, x: nil, y: nil, pressure: 0,
+                            tiltX: 0, tiltY: 0, rotation: 0)
+            penDown = false
+        }
+        if inRange { setProximity(entering: false, at: currentCursor()) }
+    }
+
+    /// The control-message gate is duplicated here under the input lock so an
+    /// OFF transition cannot race an event that already passed its outer gate.
+    private func inputIsAllowed() -> Bool {
+        guard InputPolicy.allowsInput() else {
+            cancelActiveInput()
+            return false
+        }
+        return true
     }
 
     func handlePencil(phase: String, x: Double, y: Double,
                       pressure: Double, azimuth: Double, altitude: Double,
                       rotation: Double) {
+        inputLock.lock()
+        defer { inputLock.unlock() }
+        guard inputIsAllowed() else { return }
         // TODO: Wire Apple Pencil Pro barrel roll (UIKit rollAngle) once hardware
         // is available for testing. rotation on the wire is always 0 for now.
         _ = rotation

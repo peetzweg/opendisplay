@@ -251,6 +251,7 @@ Coordinates use the conventions of section 7.
 | `ping` | pv 1 | `t` | Liveness + clock sync probe |
 | `touch` | pv 1 | `phase`, `x`, `y`, `t`? | Finger input |
 | `scroll` | pv 1 | `dx`, `dy` | Two-finger scroll |
+| `gesture` | pv 1 | `name` | Semantic receiver gesture |
 | `pencil` | pv 3 | `phase`, `x`, `y`, `pressure`, `azimuth`, `altitude`, `rotation`, `t`? | Stylus input |
 | `proximity` | pv 3 | `entering`, `x`, `y` | Stylus hover enter/leave |
 | `kf` | pv 1 | none | Request an IDR (section 5.3) |
@@ -310,6 +311,23 @@ known).
 pixels** (section 7) with **natural-scrolling sign** (content follows the
 fingers: fingers moving down produce positive `dy` and the scrolled content
 moves down).
+
+**`gesture`** carries `name` (string), identifying a semantic gesture rather
+than a sequence of touch events. The sender MUST ignore unknown names. The
+official receiver recognizes these gestures:
+
+* `"missionControl"`: three-finger swipe up.
+* `"appExpose"`: three-finger swipe down.
+* `"nextSpace"`: three-finger swipe left.
+* `"previousSpace"`: three-finger swipe right.
+* `"showDesktop"`: four- or five-finger spread.
+* `"launchpad"`: four- or five-finger pinch.
+
+Three-finger gestures require a directional movement rather than a tap; the
+four- and five-finger gestures require a meaningful change in fingertip
+spread. These semantic messages do not replace touch or scroll messages for
+ordinary input.
+This additive message does not require a protocol-version bump.
 
 **`pencil`** (pv 3) carries `phase` (string): `"down"`, `"move"`, `"up"`,
 or `"hover"`; `x`, `y`: normalized position; `pressure` (number): 0 to 1;
@@ -677,7 +695,9 @@ recorded as hints for porters:
   Linux equivalents that third parties have used: a headless Wayland
   output; on Windows, an indirect display driver.
 * **Sender, input:** `CGEvent` for touch-as-mouse and scroll, tablet
-  events for pencil.
+  events for pencil. Semantic system gestures use macOS keyboard shortcuts
+  posted as flagged key-down/key-up events; the sender does not synthesize a
+  trackpad gesture or use private multitouch APIs.
 * **Receiver, decode/present:** VideoToolbox decode into
   `AVSampleBufferDisplayLayer` (or a Metal layer). Android ports use
   `MediaCodec` + `SurfaceView`.

@@ -918,6 +918,11 @@ final class StreamReceiver: ObservableObject {
         sendControl(["type": "scroll", "dx": dx, "dy": dy])
     }
 
+    /// Send a semantic gesture without changing the meaning of touch/scroll input.
+    func sendGesture(name: String) {
+        sendControl(["type": "gesture", "name": name])
+    }
+
     /// Apple Pencil stroke/hover. azimuth and altitude are radians.
     /// rotation is always 0 until Apple Pencil Pro barrel roll is wired up.
     func sendPencil(phase: String, x: Double, y: Double,

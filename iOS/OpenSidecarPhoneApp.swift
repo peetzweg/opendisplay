@@ -611,7 +611,25 @@ struct VideoLayerView: UIViewRepresentable {
         let pan = UIPanGestureRecognizer(target: view, action: #selector(VideoView.didTwoFingerPan(_:)))
         pan.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 2
+        pan.delegate = view
+        view.twoFingerPanRecognizer = pan
         view.addGestureRecognizer(pan)
+
+        let threeFingerPan = UIPanGestureRecognizer(
+            target: view, action: #selector(VideoView.didThreeFingerSystemPan(_:)))
+        threeFingerPan.minimumNumberOfTouches = 3
+        threeFingerPan.maximumNumberOfTouches = 3
+        threeFingerPan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        threeFingerPan.cancelsTouchesInView = false
+        threeFingerPan.delegate = view
+        view.threeFingerPanRecognizer = threeFingerPan
+        view.addGestureRecognizer(threeFingerPan)
+
+        let pinchSpreadGesture = PinchSpreadSystemGestureRecognizer(
+            target: view, action: #selector(VideoView.didPinchSpreadSystemGesture(_:)))
+        pinchSpreadGesture.delegate = view
+        view.pinchSpreadGestureRecognizer = pinchSpreadGesture
+        view.addGestureRecognizer(pinchSpreadGesture)
 
         // Local cursor echo: position updates ride the ~2ms control path
         // instead of the ~30ms video path, so the pointer feels native.
@@ -637,10 +655,13 @@ struct VideoLayerView: UIViewRepresentable {
         uiView.setNeedsLayout()
     }
 
-    final class VideoView: UIView {
+    final class VideoView: UIView, UIGestureRecognizerDelegate {
         weak var receiver: StreamReceiver?
         var metalRenderer: MetalVideoRenderer?
         let inputEngine = InputCaptureEngine()
+        fileprivate var twoFingerPanRecognizer: UIPanGestureRecognizer?
+        fileprivate var threeFingerPanRecognizer: UIPanGestureRecognizer?
+        fileprivate var pinchSpreadGestureRecognizer: PinchSpreadSystemGestureRecognizer?
 
         private let cursorLayer: CALayer = {
             let layer = CALayer()
@@ -752,6 +773,7 @@ struct VideoLayerView: UIViewRepresentable {
 
         private var twoFingerActive = false
         private var lastPan = CGPoint.zero
+        private var gestureEmissionGate = GestureEmissionGate()
         private var lastNorm: (x: Double, y: Double) = (0.5, 0.5)
 
         @objc func didTwoFingerPan(_ recognizer: UIPanGestureRecognizer) {
@@ -771,6 +793,7 @@ struct VideoLayerView: UIViewRepresentable {
                     receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
                 }
             case .changed:
+                guard twoFingerActive else { return }
                 let t = recognizer.translation(in: self)
                 let scale = min(bounds.width / video.width, bounds.height / video.height)
                 // Deltas in video pixels, natural-scrolling direction.
@@ -779,6 +802,83 @@ struct VideoLayerView: UIViewRepresentable {
                 lastPan = t
             default:
                 twoFingerActive = false
+            }
+        }
+
+        @objc func didThreeFingerSystemPan(_ recognizer: UIPanGestureRecognizer) {
+            switch recognizer.state {
+            case .began, .changed:
+                guard recognizer.numberOfTouches == 3 else { return }
+                let translation = recognizer.translation(in: self)
+                guard let gesture = ReceiverGesture.swipe(translationX: Double(translation.x),
+                                                          translationY: Double(translation.y)),
+                      gestureEmissionGate.claim() else { return }
+                takeGestureOwnershipAndSend(gesture)
+            default:
+                gestureEmissionGate.reset()
+            }
+        }
+
+        @objc func didPinchSpreadSystemGesture(_ recognizer: PinchSpreadSystemGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                guard let gesture = recognizer.recognizedGesture else { return }
+                guard gestureEmissionGate.claim() else { return }
+                takeGestureOwnershipAndSend(gesture)
+            case .ended, .cancelled, .failed:
+                gestureEmissionGate.reset()
+            default:
+                break
+            }
+        }
+
+        private func takeGestureOwnershipAndSend(_ gesture: ReceiverGesture) {
+            twoFingerActive = false
+            cancelTouchForGestureOwnership()
+            receiver?.sendGesture(name: gesture.rawValue)
+        }
+
+        override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            if gestureRecognizer === threeFingerPanRecognizer {
+                return gestureRecognizer.numberOfTouches == 3
+            }
+            if gestureRecognizer === pinchSpreadGestureRecognizer {
+                return (4...5).contains(gestureRecognizer.numberOfTouches)
+            }
+            if gestureRecognizer === twoFingerPanRecognizer {
+                return gestureRecognizer.numberOfTouches == 2
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldReceive touch: UITouch) -> Bool {
+            if gestureRecognizer === threeFingerPanRecognizer || gestureRecognizer === pinchSpreadGestureRecognizer {
+                return touch.type == .direct
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            // Let a three-finger swipe take ownership if the two-finger pan
+            // already began before the third finger landed.
+            (gestureRecognizer === twoFingerPanRecognizer
+                && otherGestureRecognizer === threeFingerPanRecognizer)
+                || (gestureRecognizer === threeFingerPanRecognizer
+                    && otherGestureRecognizer === twoFingerPanRecognizer)
+        }
+
+        /// A system gesture takes ownership from a pending or active touch press.
+        /// Release a posted down; discard one that has not reached the Mac.
+        private func cancelTouchForGestureOwnership() {
+            for action in ReceiverTouchOwnership.cancellationActions(downWasSent: downSent) {
+                switch action {
+                case .sendCancellation:
+                    receiver?.sendTouch(phase: "cancelled", x: lastNorm.x, y: lastNorm.y)
+                case .discardPendingPress:
+                    discardPendingDown()
+                }
             }
         }
 
@@ -942,6 +1042,92 @@ struct VideoLayerView: UIViewRepresentable {
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
             routeTouches("cancelled", touches, event, ended: true)
         }
+    }
+}
+
+/// Recognizes deliberate pinch/spread gestures made with four or five direct
+/// contacts. The receiver measures every active fingertip pair and preserves
+/// one gesture session when the active count changes between four and five.
+final class PinchSpreadSystemGestureRecognizer: UIGestureRecognizer {
+    private var activeTouches: [ObjectIdentifier: UITouch] = [:]
+    private var spreadSession = ReceiverGestureSpreadSession()
+    private(set) var recognizedGesture: ReceiverGesture?
+
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        cancelsTouchesInView = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard touches.allSatisfy({ $0.type == .direct }) else {
+            state = .failed
+            return
+        }
+        for touch in touches { activeTouches[ObjectIdentifier(touch)] = touch }
+        updateSpreadSession()
+        if activeTouches.count > 5 {
+            finishWithoutActionIfNeeded()
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        for touch in touches { activeTouches[ObjectIdentifier(touch)] = touch }
+        updateSpreadSession()
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        for touch in touches { activeTouches.removeValue(forKey: ObjectIdentifier(touch)) }
+        guard activeTouches.count >= 4 else {
+            updateSpreadSession()
+            finishWithoutActionIfNeeded()
+            return
+        }
+        updateSpreadSession()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        state = .cancelled
+    }
+
+    override func reset() {
+        super.reset()
+        activeTouches.removeAll()
+        spreadSession.reset()
+        recognizedGesture = nil
+    }
+
+    private func updateSpreadSession() {
+        let touchCount = activeTouches.count
+        guard let spread = currentSpread() else {
+            if touchCount < 4 { _ = spreadSession.update(touchCount: touchCount, spread: 0) }
+            if touchCount > 5 { _ = spreadSession.update(touchCount: touchCount, spread: 0) }
+            return
+        }
+        let gesture = spreadSession.update(touchCount: touchCount, spread: spread)
+        if let gesture {
+            recognizedGesture = gesture
+            state = .began
+        } else if state == .began || state == .changed {
+            state = .changed
+        }
+    }
+
+    private func finishWithoutActionIfNeeded() {
+        if state == .began || state == .changed {
+            state = .ended
+        } else {
+            state = .failed
+        }
+    }
+
+    private func currentSpread() -> Double? {
+        guard let view else { return nil }
+        let points = activeTouches.values.map { touch in
+            let point = touch.location(in: view)
+            return (x: Double(point.x), y: Double(point.y))
+        }
+        return ReceiverGestureGeometry.meanPairwiseDistance(points)
     }
 }
 
