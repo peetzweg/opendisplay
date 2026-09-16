@@ -1,6 +1,69 @@
 import Foundation
 import CoreGraphics
 
+/// Scaled HiDPI mode steps offered in System Settings → Displays (the
+/// "More Space" / "Larger Text" equivalents). Index 0 is native @2x; the rest
+/// are progressively downscaled point sizes, each still backed by a @2x
+/// framebuffer so text stays sharp. Publishing several lets the user pick a
+/// resolution that actually sticks (issue #9) instead of being forced back to
+/// the single native mode.
+let resolutionSteps: [CGFloat] = [1.0, 0.85, 0.75, 0.67]
+
+/// Build the mode list for a virtual display of the given point size.
+/// - Returns: resolutionSteps.count modes, native first. Pure (no I/O) so it is
+///   unit-testable without a real display.
+func buildDisplayModes(pointsWide: Int, pointsHigh: Int) -> [CGVirtualDisplayMode] {
+    resolutionSteps.map { s in
+        CGVirtualDisplayMode(
+            width: UInt((CGFloat(pointsWide) * s).rounded(.toNearestOrEven)),
+            height: UInt((CGFloat(pointsHigh) * s).rounded(.toNearestOrEven)),
+            refreshRate: 60
+        )
+    }
+}
+
+/// Decision for the lifetime mode-enforcement loop. The loop exists to undo
+/// macOS asynchronously restoring a *stale* saved mode (issue #26) — which
+/// shows up as a 1x/blurry relapse or a wrong-orientation mode pillarboxing
+/// the framebuffer (issue #29). But a user picking a scaled mode we published
+/// must be LEFT ALONE (#9). So we discriminate:
+///   - current is one of our published modes  → leave it (user choice stands)
+///   - current is NOT published AND not settled → re-assert (startup race)
+///   - current is NOT published AND settled    → only after it has been missing
+///     for `missingTicks` consecutive ticks (issue #29 fix-plan point 2: debounce
+///     so transient wipes during a neighbor's reconfiguration heal on their own).
+/// Pure + testable. `missingTicks` is the running count of consecutive ticks
+/// where the @2x mode was absent.
+func shouldReassertMode(currentWidth: Int, currentPixelWidth: Int,
+                         published: [CGVirtualDisplayMode],
+                         targetStep: Int = 0,
+                         settled: Bool, missingTicks: Int) -> Bool {
+    let publishedIndex = published.firstIndex {
+        $0.width == UInt(currentWidth) && $0.width * 2 == UInt(currentPixelWidth)
+    }
+    if !settled {
+        let targetIndex = published.indices.contains(targetStep) ? targetStep : 0
+        return publishedIndex != targetIndex
+    }
+    if publishedIndex != nil { return false }            // #9: user choice stands
+    return missingTicks >= 3                   // #29: debounced recovery only
+}
+
+/// Per-device resolution memory (issue #9 "persist per device"). Keyed by the
+/// same install-id used for arrangement (#116) so each physical device keeps
+/// its chosen mode across sessions and transports. Stores the chosen step index.
+enum ResolutionStore {
+    private static func key(for device: String) -> String { "resolution.\(device)" }
+
+    static func save(step: Int, device: String) {
+        UserDefaults.standard.set(step, forKey: key(for: device))
+    }
+    static func load(device: String) -> Int? {
+        guard UserDefaults.standard.object(forKey: key(for: device)) != nil else { return nil }
+        return UserDefaults.standard.integer(forKey: key(for: device))
+    }
+}
+
 /// Wraps the private CGVirtualDisplay API: makes macOS believe a real monitor
 /// is attached. Sized in points at HiDPI (@2x), so a phone with native pixels
 /// W×H gets a virtual display of (W/2)×(H/2) points backed by a W×H framebuffer.
@@ -16,6 +79,10 @@ final class VirtualDisplay {
     private var restoreUntil: Date
     private var lastReportedOrigin: CGPoint?
     private let onOriginChange: ((CGPoint, CGSize) -> Void)?
+    private let deviceKey: String?
+    /// Running count of consecutive enforcement ticks where the @2x mode was
+    /// absent. Drives the debounced recovery (issue #29 fix-plan point 2).
+    private var missingTicks = 0
 
     var displayID: CGDirectDisplayID { display.displayID }
 
@@ -26,10 +93,13 @@ final class VirtualDisplay {
     /// `restoreOrigin` overrides that saved arrangement (see manageOrigin);
     /// `onOriginChange` reports where the display sits afterwards, so the
     /// caller can persist user drags.
+    /// `deviceKey` (install id, per #116/#26) keys per-device resolution memory
+    /// so a chosen scaled mode is reapplied and persisted (issue #9).
     init?(name: String, pointsWide: Int, pointsHigh: Int, sizeInMillimeters: CGSize,
           serialNum: UInt32 = 0x0001, productID: UInt32 = 0x4F53,
           restoreOrigin: CGPoint? = nil,
-          onOriginChange: ((CGPoint, CGSize) -> Void)? = nil) {
+          onOriginChange: ((CGPoint, CGSize) -> Void)? = nil,
+          deviceKey: String? = nil) {
         self.pointsWide = pointsWide
         self.pointsHigh = pointsHigh
         // Reserve the longer orientation on both axes. That lets a phone or
@@ -39,6 +109,7 @@ final class VirtualDisplay {
         self.restoreTarget = restoreOrigin
         self.restoreUntil = restoreOrigin == nil ? .distantPast : Date().addingTimeInterval(6)
         self.onOriginChange = onOriginChange
+        self.deviceKey = deviceKey
 
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.setDispatchQueue(DispatchQueue.main)
@@ -59,9 +130,9 @@ final class VirtualDisplay {
 
         settings = CGVirtualDisplaySettings()
         settings.hiDPI = 1
-        settings.modes = [
-            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
-        ]
+        // Publish every scaled HiDPI step (issue #9) so the user can pick a
+        // resolution in System Settings → Displays that actually sticks.
+        settings.modes = buildDisplayModes(pointsWide: pointsWide, pointsHigh: pointsHigh)
         guard display.apply(settings) else {
             Log.info("CGVirtualDisplay applySettings FAILED")
             return nil
@@ -73,8 +144,11 @@ final class VirtualDisplay {
         // display appears (observed: a display checked as @2x at creation
         // sitting at 1x later, and a rotated rebuild pillarboxed by the
         // previous orientation's mode). So mode selection is enforcement,
-        // not a one-shot: keep watching for the lifetime of the display and
-        // re-assert the HiDPI mode whenever something else changes it.
+        // not a one-shot. BUT a user picking a scaled mode we published must
+        // stick (issue #9), while macOS's async 1x/wrong-orientation relapses
+        // (issue #26/#29) must still be undone. `shouldReassertMode` is the
+        // discriminator; recovery is debounced so transient wipes during a
+        // neighbor's reconfiguration heal on their own (issue #29 point 2).
         Task { @MainActor [weak self] in
             var settled = false
             while true {
@@ -83,7 +157,7 @@ final class VirtualDisplay {
                 do {
                     guard let self else { return }
                     self.ensureNotMirrored()
-                    if self.selectHiDPIMode(recover: settled) { settled = true }
+                    if self.enforceMode(settled: settled) { settled = true }
                     self.manageOrigin()
                 }
                 try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
@@ -107,9 +181,7 @@ final class VirtualDisplay {
 
         let newSettings = CGVirtualDisplaySettings()
         newSettings.hiDPI = 1
-        newSettings.modes = [
-            CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
-        ]
+        newSettings.modes = buildDisplayModes(pointsWide: pointsWide, pointsHigh: pointsHigh)
         guard display.apply(newSettings) else {
             Log.info("virtual display \(display.displayID) applySettings FAILED during resize")
             return false
@@ -142,36 +214,71 @@ final class VirtualDisplay {
         }
         return true
     }
-
-    /// Returns true when the display is (now) in its HiDPI mode. Silent when
-    /// nothing needed doing — this runs every 2s as enforcement. With
-    /// `recover`, a missing @2x mode (macOS can replace the whole mode list
-    /// when it restores saved display state) re-applies our settings to
-    /// publish it again instead of failing silently forever.
     @discardableResult
-    private func selectHiDPIMode(recover: Bool = false) -> Bool {
+    private func enforceMode(settled: Bool) -> Bool {
         let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
-        guard let modes = CGDisplayCopyAllDisplayModes(display.displayID, opts) as? [CGDisplayMode],
-              let hidpi = modes.first(where: {
-                  $0.width == pointsWide && $0.pixelWidth == pointsWide * 2
-              }) else {
-            if recover {
-                Log.info("@2x mode vanished from display \(display.displayID) — re-applying settings")
-                _ = display.apply(settings)
-            }
+        guard let runtimeModes = CGDisplayCopyAllDisplayModes(display.displayID, opts) as? [CGDisplayMode] else {
+            // Whole mode list gone — republish (mirrors old `recover` path).
+            Log.info("@2x modes vanished from display \(display.displayID) — re-applying settings")
+            _ = display.apply(settings)
+            missingTicks += 1
             return false
         }
-        if let current = CGDisplayCopyDisplayMode(display.displayID),
-           current.width == hidpi.width, current.pixelWidth == hidpi.pixelWidth {
+        guard let current = CGDisplayCopyDisplayMode(display.displayID) else { return false }
+
+        let targetStep = deviceKey.flatMap { ResolutionStore.load(device: $0) } ?? 0
+
+        let currentPublishedIndex = settings.modes.firstIndex(where: {
+            $0.width == current.width && $0.width * 2 == current.pixelWidth
+        })
+
+        if let idx = currentPublishedIndex {
+            missingTicks = 0
+            if let key = deviceKey {
+                ResolutionStore.save(step: idx, device: key)
+            }
+        } else {
+            missingTicks += 1
+        }
+
+        let reassert = shouldReassertMode(
+            currentWidth: Int(current.width),
+            currentPixelWidth: Int(current.pixelWidth),
+            published: settings.modes,
+            targetStep: targetStep,
+            settled: settled,
+            missingTicks: missingTicks
+        )
+
+        if !reassert {
             return true
+        }
+
+        // Find the runtime CGDisplayMode to restore to: prefer the persisted
+        // per-device choice (if still offered), else native @2x.
+        let step = settings.modes.indices.contains(targetStep) ? targetStep : 0
+        let targetDescriptor = settings.modes[step]
+        guard let target = runtimeModes.first(where: {
+            $0.width == targetDescriptor.width && $0.pixelWidth == targetDescriptor.width * 2
+        }) else {
+            Log.info("mode re-assert target \(targetDescriptor.width)x\(targetDescriptor.height) not in runtime list — republishing")
+            _ = display.apply(settings)
+            return false
         }
         var config: CGDisplayConfigRef?
         CGBeginDisplayConfiguration(&config)
-        CGConfigureDisplayWithDisplayMode(config, display.displayID, hidpi, nil)
+        CGConfigureDisplayWithDisplayMode(config, display.displayID, target, nil)
         let err = CGCompleteDisplayConfiguration(config, .permanently)
-        Log.info("HiDPI mode (re)selected: \(hidpi.width)x\(hidpi.height)@2x (result \(err.rawValue))")
+        if err == .success {
+            missingTicks = 0
+        }
+        Log.info("mode re-asserted to \(target.width)x\(target.height) (result \(err.rawValue))")
         return err == .success
     }
+
+    /// Legacy alias retained for callers/tests that referenced the old name.
+    @discardableResult
+    private func selectHiDPIMode(recover: Bool = false) -> Bool { enforceMode(settled: recover) }
 
     /// Arrangement restore + observation (#116). For the first few seconds,
     /// assert `restoreTarget`: macOS restores ITS saved arrangement for this
