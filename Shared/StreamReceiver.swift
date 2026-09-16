@@ -303,6 +303,56 @@ final class StreamReceiver: ObservableObject {
         self.maxEncodeWide = maxEncodeWide
         self.maxEncodeHigh = maxEncodeHigh
         displayLayer.videoGravity = .resizeAspect
+        setupBatteryMonitoring()
+    }
+
+    private func setupBatteryMonitoring() {
+        #if canImport(UIKit) && !os(watchOS)
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(batteryStateChanged),
+            name: UIDevice.batteryLevelDidChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(batteryStateChanged),
+            name: UIDevice.batteryStateDidChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(batteryStateChanged),
+            name: NSNotification.Name.NSProcessInfoPowerStateDidChange,
+            object: nil
+        )
+        #endif
+    }
+
+    @objc private func batteryStateChanged() {
+        sendBatteryStatus()
+    }
+
+    func sendBatteryStatus() {
+        #if canImport(UIKit) && !os(watchOS)
+        let level = Double(UIDevice.current.batteryLevel)
+        let rawState = UIDevice.current.batteryState
+        let state: String
+        switch rawState {
+        case .charging: state = "charging"
+        case .full: state = "full"
+        case .unplugged: state = "unplugged"
+        default: state = "unknown"
+        }
+        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        sendControl([
+            "type": "battery",
+            "level": level,
+            "state": state,
+            "lowPower": lowPower
+        ])
+        #endif
     }
 
     func start(port: UInt16 = 9000) {
@@ -555,16 +605,6 @@ final class StreamReceiver: ObservableObject {
             let peer = String(describing: conn.endpoint)
             self.transport = (peer.hasPrefix("127.0.0.1") || peer.hasPrefix("::1")
                               || peer.hasPrefix("localhost")) ? "USB" : "WiFi"
-            // A Bonjour dial races IPv6 and IPv4 and both handshakes can
-            // complete; the sender cancels its loser within milliseconds.
-            // Adopting every newcomer at once evicted the winner for a
-            // connection that was already dying (seen in the field as a
-            // reset-by-peer storm). With a connection in hand, a newcomer
-            // has to stay alive for a moment before it replaces it.
-            // A closed socket still reads as .ready until a receive hits
-            // EOF, so the proof is bytes: greet the newcomer and adopt it
-            // the moment it streams something back; a socket that closes
-            // or errors first is discarded and the session stays put.
             if let current = self.connection, current.state != .cancelled,
                !Self.isFailed(current.state) {
                 self.pendingConnections.append(conn)
@@ -645,6 +685,7 @@ final class StreamReceiver: ObservableObject {
             self.lastDataReceived = Date()
             self.setConnected(true)
             if !greeted { self.sendHello(on: conn) }
+            self.sendBatteryStatus()
         }
         conn.stateUpdateHandler = { [weak self] state in
             guard let self, conn === self.connection else { return }   // replaced: stay quiet
