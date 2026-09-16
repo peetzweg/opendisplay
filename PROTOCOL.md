@@ -1,6 +1,6 @@
 # OpenDisplay Wire Protocol
 
-**Protocol version (`pv`): 3** &nbsp;|&nbsp; Status: **normative** for `pv <= 3`
+**Protocol version (`pv`): 4** &nbsp;|&nbsp; Status: **normative** for `pv <= 4`
 
 This document specifies the wire protocol spoken between an OpenDisplay
 *sender* (the machine whose desktop is extended, the Mac app today) and an
@@ -110,15 +110,25 @@ this has no protocol significance.
 
 ## 3. Framing
 
-Every message in **both directions** is length-prefixed:
+Every message in **both directions** is length-prefixed. At `pv <= 3`:
 
 ```
-[4-byte payload length, unsigned, big-endian][payload]
+[4-byte body length, unsigned, big-endian][payload]
 ```
 
-* The length counts the payload only, not the 4 header bytes.
-* A frame is either a **video frame** (section 5) or a **control message**
-  (section 6), distinguished as described in section 4.
+At `pv >= 4` the body carries an explicit type byte (section 4.1):
+
+```
+[4-byte body length, unsigned, big-endian][1-byte frame type][payload]
+```
+
+* The length counts the **body**: the payload alone at `pv <= 3`, and the
+  type byte plus the payload at `pv >= 4`. Deframing is therefore identical
+  in both eras — read 4 bytes, take that many, repeat — and only the
+  interpretation of the body changes.
+* A frame is a **video frame** (section 5), a **control message**
+  (section 6), or, at `pv >= 4`, an **audio packet**. Which one is
+  determined as described in section 4.
 * **Receiver to sender**, the payload MUST be `1` to `2^20 - 1` bytes. The
   official sender treats a length of 0 or `>= 2^20` as a protocol error and
   stops reading control messages on that connection.
@@ -159,14 +169,79 @@ Consequences that are **normative for senders**:
 
 **Deprecation.** This heuristic is a design debt, not a feature. It is
 specified here so that `pv <= 3` implementations agree on it, and it is
-**expected to be replaced by a typed frame header in `pv` 4** (a
-discriminator between the length prefix and the payload). The change will
-follow the two-phase procedure in COMPATIBILITY.md section 6: a release
-that understands both framings, then, after adoption, a release that
-requires the new one. Implementers SHOULD isolate the demux decision in
-their code so the swap is cheap, and MUST NOT build features that depend on
-the heuristic's edge cases (for example, deliberately sending binary
-control data to route it to the video path).
+**replaced by the typed frame header of `pv` 4** (section 4.1). Per the
+two-phase procedure in COMPATIBILITY.md section 6, this is phase one: a
+`pv` 4 implementation MUST still speak the heuristic to peers below 4.
+Implementers SHOULD isolate the demux decision in their code, and MUST NOT
+build features that depend on the heuristic's edge cases (for example,
+deliberately sending binary control data to route it to the video path).
+
+### 4.1 Typed frames (`pv >= 4`)
+
+At `pv >= 4` the first byte of the body names the payload's kind:
+
+| Value | Kind | Payload |
+|------:|------|---------|
+| `0` | Video | Annex B H.264 (section 5) |
+| `1` | Control | UTF-8 JSON (section 6) |
+| `2` | Audio | Compressed audio packet |
+
+* A receiver MUST ignore a frame whose type byte it does not recognize, and
+  MUST NOT treat it as a protocol error. This is what allows new frame types
+  to be added additively.
+* A tagged body MUST be at least 1 byte (the type). An empty body is
+  malformed and the frame MUST be discarded.
+* With an explicit type, the `pv <= 3` constraints on control messages
+  (under 32768 bytes, leading `{`, NUL-free) no longer apply to tagged
+  frames, and audio payloads — which satisfy none of them reliably — become
+  expressible. Senders MUST still honour those constraints when talking to a
+  `pv <= 3` peer.
+
+**Negotiation is ordered, and the order is normative.** A frame may be
+tagged only once the peer's `pv` is known to be `>= 4`, and `pv` is learned
+from `hello` (receiver to sender) and `welcome` (sender to receiver). Those
+two messages are themselves sent **before** the sender of each knows what
+its peer speaks, so:
+
+* `hello` and `welcome` MUST be sent untagged, regardless of either party's
+  own `pv`.
+* An implementation MUST NOT tag any frame until it has read the peer's
+  version, and MUST reset to untagged framing on every new connection: a
+  reconnect may reach a different peer than the last session did.
+
+A receiver therefore parses the opening frames of every connection by the
+section 4 heuristic, and switches to typed parsing only after `welcome`.
+
+### 4.2 Audio packets (`pv >= 4`)
+
+A frame of type `2` carries one compressed audio packet: a 15-byte header,
+big-endian throughout, followed by the compressed payload.
+
+| Offset | Size | Field | Meaning |
+|-------:|-----:|-------|---------|
+| 0 | 1 | `codec` | `0` = AAC-LC. Other values reserved. |
+| 1 | 1 | `flags` | bit 0 set = this packet begins a codec configuration |
+| 2 | 4 | `sampleRate` | Hz (e.g. `48000`, `44100`) |
+| 6 | 8 | `ptsMs` | IEEE 754 double: capture time on the **sender's** clock, in milliseconds |
+| 14 | 1 | `channels` | `1` = mono, `2` = stereo |
+| 15 | … | `payload` | compressed audio |
+
+* `sampleRate` is in **Hz**, not a scaled unit. Rates such as 22050 are not a
+  whole number of kHz, and a receiver decoding at a rounded rate drifts
+  against the sender for the length of the session.
+* `ptsMs` shares its clock and units with the video telemetry prefix's `cap`
+  (section 5.1). A receiver MUST map it onto its own clock with the offset
+  from section 8.1 rather than assuming a shared epoch; that shared timebase
+  is what keeps audio aligned with video without a second mechanism.
+* A receiver MUST tolerate a packet whose `codec` it does not recognize, and
+  a truncated packet, by discarding it. Audio arrives tens of times a second
+  and a malformed packet MUST NOT end the session.
+* A sender MUST NOT emit audio frames to a peer below `pv` 4: without the
+  type byte such a frame is indistinguishable from video and would be fed to
+  the video decoder.
+* Audio is **optional in both directions**. A sender may never send it, and a
+  receiver that cannot play it discards these frames and streams video
+  normally.
 
 ## 5. Video
 
@@ -641,7 +716,7 @@ Mechanics at a glance (the policy behind them lives in COMPATIBILITY.md):
 | 2 | Version handshake: `pv` in `hello` and TXT, `welcome`, `updateRequired`, `sleeping`, `closing` |
 | 3 | `pencil`, `proximity`; below pv 3 the receiver degrades stylus to `touch` |
 | 3 (additive) | `hello.cursorPort` and the UDP cursor side channel (6.3); optional, no bump |
-| 4 (reserved) | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
+| 4 | Typed frame header (4.1) replacing the section 4 demux heuristic; audio packets (4.2). Phase one: peers below 4 keep the heuristic |
 
 ---
 

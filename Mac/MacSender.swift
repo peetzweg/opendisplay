@@ -17,6 +17,7 @@ import ScreenCaptureKit
 import VideoToolbox
 import Network
 import CoreMedia
+import AVFoundation
 import AppKit
 
 enum CaptureMode: String {
@@ -134,6 +135,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var connection: NWConnection?
     private var virtualDisplay: VirtualDisplay?
     private let queue = DispatchQueue(label: "sender.video")
+    /// Audio runs on its own queue: sharing the video queue would let an
+    /// encode hiccup on either stream stall the other, and video is the one
+    /// with a frame deadline.
+    private let audioQueue = DispatchQueue(label: "sender.audio")
     private let startCode: [UInt8] = [0, 0, 0, 1]
 
     // The dial target. Written on `queue` only (after init): the controller
@@ -188,6 +193,29 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var dropsNetTotal = 0
     private var needsKeyframe = true
     private var connectionReady = false
+    /// System-audio capture and encode. Nil until a session enables audio.
+    /// Touched only on `audioQueue`.
+    private var audioEncoder: AudioEncoder?
+    /// Whether the user wants audio streamed. Off by default: an update should
+    /// never surprise anyone with sudden sound coming out of their iPad.
+    ///
+    /// Read-only here, and read fresh at capture setup rather than cached:
+    /// SenderController owns the setting and restarts capture when it changes,
+    /// so this always sees the current value and there is only ever one writer.
+    private var audioEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "audioEnabled")
+    }
+    private var audioPacketsSent = 0
+    private var audioDropsThisWindow = 0
+    private var loggedAudioUnsupportedPeer = false
+    /// Whether this connection's receiver speaks tagged framing (protocol 4+).
+    ///
+    /// Per-connection, and false until the receiver's `hello` proves otherwise:
+    /// the handshake itself cannot be tagged, because at the moment we send it
+    /// we do not yet know what the peer understands. Reset on every new
+    /// connection — a reconnect may reach a different device, and a stale true
+    /// here would tag frames at a receiver that cannot read them.
+    private var peerSpeaksTaggedFrames = false
     private var stopped = false
     // The liveness monitors are self-rescheduling chains guarded only by
     // `stopped`; arm them at most once per instance so a double start() can't
@@ -693,6 +721,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // the encoder for ~13ms — headroom prevents SCK starvation drops.
         config.queueDepth = 8
         config.showsCursor = !localCursor
+        // System audio on the SAME stream as video, so both arrive stamped by
+        // one capture clock and stay in sync without a second mechanism.
+        // Excluding our own process keeps a Mac receiver's playback from being
+        // captured and sent back to itself.
+        let wantsAudio = audioEnabled
+        config.capturesAudio = wantsAudio
+        config.excludesCurrentProcessAudio = true
 
         invalidateCapturePipeline(discardingLastFrame: true)
         let generation = captureGenerationNow
@@ -700,6 +735,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        if wantsAudio {
+            // A failure here must not cost the user their display: log it and
+            // stream video alone.
+            do {
+                try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
+                audioQueue.sync { audioEncoder = AudioEncoder() }
+            } catch {
+                Log.info("audio: stream output unavailable (\(error)) — video only")
+            }
+        } else {
+            audioQueue.sync { audioEncoder = nil }
+        }
         self.stream = stream
         do {
             try await stream.startCapture()
@@ -1005,6 +1052,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         Log.info("connection ready to \(endpointName)")
         connectionReady = true
         cursorSeq = 0   // per-session; the receiver rewound its floor with the connection
+        // Back to legacy framing until this connection's receiver identifies
+        // itself: a reconnect can land on a different device than the last one.
+        peerSpeaksTaggedFrames = false
+        loggedAudioUnsupportedPeer = false
+        // A new receiver has no codec config, so the next packet must carry it.
+        audioQueue.async { [weak self] in self?.audioEncoder?.reset() }
         everConnected = true
         awaitingWake = false
         consecutiveRefusals = 0
@@ -1695,9 +1748,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // so one file holds both ends of the story.
             if let json = try? JSONSerialization.data(withJSONObject: obj),
                let line = String(data: json, encoding: .utf8) {
-                Log.info("PHONE-STATS \(line) | mac enc↓=\(dropsEncThisWindow) net↓=\(dropsNetThisWindow) pending=\(pendingSends)")
+                // The receiver's own audio counters ride in `line` (aPkt/aKB);
+                // ours are appended so a discrepancy between sent and arrived
+                // is visible on one line.
+                Log.info("PHONE-STATS \(line) | mac enc↓=\(dropsEncThisWindow) net↓=\(dropsNetThisWindow) pending=\(pendingSends)"
+                         + " aSent=\(audioPacketsSent) a↓=\(audioDropsThisWindow)")
                 dropsEncThisWindow = 0
                 dropsNetThisWindow = 0
+                audioPacketsSent = 0
+                audioDropsThisWindow = 0
             }
         case "cursorAck":
             // The receiver saw our first datagram: the side channel delivers,
@@ -1737,6 +1796,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // message types. Sending on every hello is idempotent — the
                 // phone dedupes by content.
                 sendWelcome()
+                // Only now, with `welcome` already handed to the connection
+                // untagged, may we start tagging. The receiver cannot know our
+                // protocol version until it reads that message, so a frame
+                // tagged before this point would arrive at a peer still
+                // deframing by the legacy rules and be misread as video.
+                // Ordering, not just the value, is what makes this correct.
+                let tagged = info.protocolVersion >= WireProtocol.taggedFrameVersion
+                if tagged != peerSpeaksTaggedFrames {
+                    peerSpeaksTaggedFrames = tagged
+                    Log.info("framing: \(tagged ? "tagged" : "legacy") (receiver pv \(info.protocolVersion))")
+                }
                 if info.protocolVersion < WireProtocol.minSupportedPeer {
                     Log.info("receiver protocol \(info.protocolVersion) below supported \(WireProtocol.minSupportedPeer) — requesting update")
                     sendUpdateRequired(kind: info.kind)
@@ -1921,6 +1991,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream,
                 didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
+        // Audio arrives on audioQueue, video on queue — dispatched by SCK to
+        // whichever queue the output was registered with, so this method runs
+        // on both and must route before touching any video state.
+        if type == .audio {
+            guard stream === self.stream, CMSampleBufferIsValid(sampleBuffer) else { return }
+            handleAudio(sampleBuffer)
+            return
+        }
         guard stream === self.stream,
               type == .screen,
               CMSampleBufferIsValid(sampleBuffer),
@@ -1939,6 +2017,90 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if shouldDropFrame(reason: "pending_sends") { return }   // TCP send queue full
 
         encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), generation: generation)
+    }
+
+    // MARK: - Audio capture (runs on audioQueue)
+
+    /// Encode one captured audio buffer and put it on the wire.
+    ///
+    /// Everything here is best-effort by design: audio must never be able to
+    /// stall video or end a session. A receiver too old to understand audio
+    /// frames, an encoder that will not build, a backed-up socket — each drops
+    /// the audio and leaves the display running.
+    private func handleAudio(_ sampleBuffer: CMSampleBuffer) {
+        guard connectionReady, let encoder = audioEncoder else { return }
+
+        // Audio frames only exist in the tagged framing of protocol 4+. Sending
+        // one to an older receiver would be read as video and corrupt the
+        // decoder, so this gate is load-bearing, not an optimisation.
+        guard peerSpeaksTaggedFrames else {
+            if !loggedAudioUnsupportedPeer {
+                loggedAudioUnsupportedPeer = true
+                Log.info("audio: receiver predates tagged frames — audio not sent")
+            }
+            return
+        }
+
+        // Late audio is worse than absent audio: if the socket is already
+        // backed up, drop this packet rather than deepening the queue.
+        pipelineLock.lock()
+        let backedUp = pendingSends >= maxPendingSends
+        pipelineLock.unlock()
+        if backedUp {
+            audioDropsThisWindow += 1
+            return
+        }
+
+        guard let format = sampleBuffer.formatDescription.map({ AVAudioFormat(cmAudioFormatDescription: $0) }),
+              encoder.prepare(for: format),
+              let pcm = Self.pcmBuffer(from: sampleBuffer, format: format),
+              let encoded = encoder.encode(pcm) else { return }
+
+        // Capture time on our own clock, matching the units the video path
+        // stamps frames with, so the receiver can align the two with the
+        // ping/pong offset it already maintains.
+        // Wall clock, matching the video path's `cap` stamp (see the telemetry
+        // prefix in the capture callback). CMSampleBuffer presentation stamps
+        // are mach uptime — seconds since boot — so using them here put audio
+        // on a different epoch from video: the receiver's latency calculation
+        // landed far outside its sanity window, was discarded, and both
+        // aE2e50 and avSkew read a permanent 0.
+        let ptsMs = Date().timeIntervalSince1970 * 1000
+
+        let packet = AudioPacket(codec: .aacLC,
+                                 hasConfig: encoded.hasConfig,
+                                 sampleRate: encoder.sampleRate,
+                                 channels: encoder.channels,
+                                 ptsMs: ptsMs,
+                                 payload: encoded.data)
+        sendAudio(packet.encoded())
+        audioPacketsSent += 1
+    }
+
+    /// Copy a captured audio buffer into a PCM buffer the converter accepts.
+    private static func pcmBuffer(from sampleBuffer: CMSampleBuffer,
+                                  format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard frames > 0,
+              let pcm = AVAudioPCMBuffer(pcmFormat: format,
+                                         frameCapacity: AVAudioFrameCount(frames)) else { return nil }
+        pcm.frameLength = AVAudioFrameCount(frames)
+        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sampleBuffer,
+            at: 0,
+            frameCount: Int32(frames),
+            into: pcm.mutableAudioBufferList)
+        guard status == noErr else { return nil }
+        return pcm
+    }
+
+    /// Frame and send an audio packet. Separate from `sendFramed` because
+    /// audio must not touch the video path's pending-send accounting, which
+    /// drives frame-drop decisions.
+    private func sendAudio(_ payload: Data) {
+        guard let connection, connectionReady else { return }
+        let frame = FrameCodec.encode(payload, type: .audio, tagged: peerSpeaksTaggedFrames)
+        connection.send(content: frame, completion: .contentProcessed { _ in })
     }
 
     private func isPipelineBackedUp() -> Bool {
@@ -2231,18 +2393,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func sendJSONFrame(_ json: String) {
         guard let connection, connectionReady else { return }
-        let payload = Data(json.utf8)
-        var header = UInt32(payload.count).bigEndian
-        var frame = Data(bytes: &header, count: 4)
-        frame.append(payload)
+        let frame = FrameCodec.encode(Data(json.utf8), type: .json,
+                                      tagged: peerSpeaksTaggedFrames)
         connection.send(content: frame, completion: .contentProcessed { _ in })
     }
 
     private func sendFramed(_ payload: Data) {
         guard let connection, connectionReady else { return }
-        var header = UInt32(payload.count).bigEndian
-        var frame = Data(bytes: &header, count: 4)
-        frame.append(payload)
+        let frame = FrameCodec.encode(payload, type: .video,
+                                      tagged: peerSpeaksTaggedFrames)
         pendingSends += 1
         connection.send(content: frame, completion: .contentProcessed { [weak self] error in
             guard let self else { return }

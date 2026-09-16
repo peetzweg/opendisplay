@@ -45,6 +45,20 @@ struct PerfOverlay: View {
                     // the render+capture wait and one e2e on top.
                     metric("input", String(format: "%.0f ms", stats.inputP50))
                 }
+                if stats.audioE2eP50 > 0 {
+                    metric("audio", String(format: "%.0f ms", stats.audioE2eP50))
+                    // The sync number: audio latency minus video latency.
+                    // Signed, because which one leads matters — a viewer
+                    // tolerates sound slightly late far better than early.
+                    metric("A/V skew", String(format: "%+.0f ms", stats.avSkewMs))
+                    metric("buffer", "\(stats.audioDepth)/\(stats.audioTarget)")
+                    if stats.audioUnderruns > 0 {
+                        metric("a-under", "\(stats.audioUnderruns)")
+                    }
+                    if stats.audioDrops > 0 {
+                        metric("a↓", "\(stats.audioDrops)")
+                    }
+                }
                 metric("rtt", String(format: "%.0f ms", stats.rttMs))
                 metric("FPS", "\(stats.fps)")
                 if stats.capFps > 0 {
