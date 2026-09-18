@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.0](https://github.com/peetzweg/opendisplay/compare/v1.20.0...v1.21.0) (2026-09-18)
+
+
+### Features
+
+* **ios:** lower deployment target to iOS 15 ([#291](https://github.com/peetzweg/opendisplay/issues/291)) ([4eef347](https://github.com/peetzweg/opendisplay/commit/4eef347e811d8b3610e012efb43065c6933083d9))
+
 ## [1.20.0](https://github.com/peetzweg/opendisplay/compare/v1.19.0...v1.20.0) (2026-09-18)
 
 
