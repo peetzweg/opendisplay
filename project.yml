@@ -156,6 +156,8 @@ targets:
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/Protocol.swift
+      - Mac/CaptureLifecycle.swift
+      - Shared/DisplayState.swift
       - Shared/LogSnapshot.swift
     settings:
       base:

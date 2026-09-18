@@ -19,11 +19,6 @@ import Network
 import CoreMedia
 import AppKit
 
-enum CaptureMode: String {
-    case mirror   // main display (Milestone 1)
-    case extend   // virtual display (Milestone 2)
-}
-
 struct PhoneInfo: Decodable {
     let pixelsWide: Int   // landscape-oriented (long edge)
     let pixelsHigh: Int
@@ -60,6 +55,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Status surfaced to the UI (updated on main thread).
     @MainActor var onStatus: ((String) -> Void)?
     @MainActor var onStats: ((Int, Double) -> Void)?   // framesSent, mbps
+    @MainActor var onCaptureLifecycleChanged: ((CaptureLifecyclePhase) -> Void)?
     // Fired when a previously connected device stays gone past the grace
     // period — the controller ends the session (capture, virtual display,
     // recording indicator all torn down) instead of dialing forever or
@@ -185,8 +181,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // after a user-initiated stop, amounts to defying the user. Counted per
     // failed recovery round, reset by a capture that comes back up. On
     // `queue`.
-    private var captureRecoveryFailures = 0
-    private let maxCaptureRecoveryFailures = 5
+    private var captureRecoveryBudget = CaptureRecoveryBudget()
+    private var captureRecoveryScheduled = false
 
     // Consecutive actively-refused dials on a previously connected session.
     // Refusal is unambiguous: the device is reachable but nothing listens,
@@ -272,6 +268,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Only touched on `cursorQueue`.
     private var cursorSessionGeneration: UInt64 = 0
     private var captureDisplayID: CGDirectDisplayID = 0
+    private let captureLifecycleLock = NSLock()
+    private var captureLifecycle = CaptureLifecycleState()
     // ScreenCaptureKit and VideoToolbox finish work asynchronously. During a
     // rotation, an old capture callback or a late encoder completion must not
     // put a frame from the retired display onto this device's new socket.
@@ -341,6 +339,31 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - Lifecycle
 
+    private func captureStateSnapshot() -> CaptureLifecycleState {
+        captureLifecycleLock.lock()
+        defer { captureLifecycleLock.unlock() }
+        return captureLifecycle
+    }
+
+    @discardableResult
+    private func updateCaptureState(
+        _ update: (inout CaptureLifecycleState) -> Bool
+    ) -> Bool {
+        captureLifecycleLock.lock()
+        let previous = captureLifecycle.phase
+        let accepted = update(&captureLifecycle)
+        let current = captureLifecycle.phase
+        captureLifecycleLock.unlock()
+        guard previous != current else { return accepted }
+        Task { @MainActor in self.onCaptureLifecycleChanged?(current) }
+        return accepted
+    }
+
+    /// Called on the sender queue while framing control messages.
+    private func sendDisplayState(_ state: DisplayState) {
+        sendJSONFrame("{\"type\":\"displayState\",\"state\":\"\(state.rawValue)\"}")
+    }
+
     func start() async throws {
         stopped = false
         queue.async { self.connect() }   // dial state lives on `queue`
@@ -367,23 +390,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         case .mirror:
             // Mirror also waits for hello so receiver capabilities are applied
             // before the first encoder is created. Legacy receivers omit the
-            // new fields and retain the existing H.264 behavior.
-            let info = try await waitForHello()
-            let content = try await SCShareableContent.current
-            guard let display = content.displays.first else {
-                throw NSError(domain: "MacSender", code: 1,
-                              userInfo: [NSLocalizedDescriptionKey: "no displays found"])
-            }
-            // SCDisplay.width/height are POINTS. Capturing at points on a
-            // Retina panel discards half the raster before the encoder ever
-            // sees it, and no quality setting can bring it back — read the
-            // true pixel size from the active display mode.
-            let displayMode = CGDisplayCopyDisplayMode(display.displayID)
-            let pixelsW = displayMode?.pixelWidth ?? display.width
-            let pixelsH = displayMode?.pixelHeight ?? display.height
-            try await startCapture(display: display,
-                                   sourcePixelsWide: pixelsW, sourcePixelsHigh: pixelsH,
-                                   receiver: info)
+            // new fields and retain the existing H.264 behavior — done inside
+            // `startMirrorCapture(display:)` so every recovery/resume path
+            // that reattaches Mirror capture gets the same negotiation.
+            try await startMirrorCapture(preferredDisplayID: nil)
 
         case .extend:
             // awaitingWake is queue-confined — read it there before surfacing.
@@ -411,6 +421,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 Log.info("Accessibility permission granted — touch input live")
             }
         }
+    }
+
+    private func startMirrorCapture(preferredDisplayID: CGDirectDisplayID?) async throws {
+        let content = try await SCShareableContent.current
+        let display = preferredDisplayID.flatMap { id in
+            content.displays.first(where: { $0.displayID == id })
+        } ?? content.displays.first
+        guard let display else {
+            throw NSError(domain: "MacSender", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "no displays found"])
+        }
+        try await startMirrorCapture(display: display)
     }
 
     /// Build (or rebuild) the virtual display + capture for the announced
@@ -825,7 +847,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                               sourcePixelsWide: Int, sourcePixelsHigh: Int,
                               receiver info: PhoneInfo) async throws {
         try Task.checkCancellation()
-        guard !stopped else { throw CancellationError() }
+        let initialPhase = captureStateSnapshot().phase
+        guard !stopped, initialPhase != .pausing, initialPhase != .paused, initialPhase != .stopped else {
+            throw CancellationError()
+        }
+        guard stream == nil else {
+            throw NSError(domain: "MacSender", code: 6,
+                          userInfo: [NSLocalizedDescriptionKey: "capture stream is already active"])
+        }
         let legacyCeiling: PixelSize?
         if let maxW = info.maxEncodeWide, let maxH = info.maxEncodeHigh,
            maxW > 0, maxH > 0 {
@@ -867,6 +896,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard !stopped else { throw CancellationError() }
         invalidateCapturePipeline(discardingLastFrame: true)
         let generation = captureGenerationNow
+        if let encoder { VTCompressionSessionInvalidate(encoder) }
+        encoder = nil
         try setupEncoder(selected)
         setActiveStreamConfiguration(selected)
         // `queue` is also the SCK sample queue. Enqueue the selection before
@@ -885,18 +916,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if self.stream === stream { self.stream = nil }
             throw error
         }
-        do {
-            try Task.checkCancellation()
-            guard !stopped else { throw CancellationError() }
-        } catch {
-            try? await stream.stopCapture()
-            if self.stream === stream {
-                self.stream = nil
-                invalidateCapturePipeline(discardingLastFrame: true)
-                if let encoder { VTCompressionSessionInvalidate(encoder) }
-                encoder = nil
+        guard updateCaptureState({ state in state.captureStarted() }) else {
+            if self.stream === stream { self.stream = nil }
+            invalidateCapturePipeline()
+            do {
+                try await stream.stopCapture()
+            } catch {
+                let nsError = error as NSError
+                Log.info("capture discarded after pause/disconnect failed to stop domain=\(nsError.domain) code=\(nsError.code)")
             }
-            throw error
+            throw CancellationError()
         }
         captureDisplayID = display.displayID
         lastCursorPNGHash = 0      // rotation rebuilds: re-send the sprite
@@ -906,7 +935,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // this, a pending recovery timer that finds the stream alive exits
         // without ever resetting the counter, and the next unrelated death
         // starts with as little as one round left.
-        queue.async { self.captureRecoveryFailures = 0 }
+        let receiverState = captureStateSnapshot().receiverDisplayState
+        queue.async {
+            self.captureRecoveryBudget.reset()
+            // Every successful capture start is authoritative. This also
+            // clears a paused state retained by the receiver when changing
+            // modes replaces the old session with a new sender.
+            self.sendDisplayState(receiverState)
+        }
         Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) generation \(generation) mode \(mode.rawValue) localCursor=\(localCursor)")
         let kind = lastHello?.kind ?? "device"
         await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
@@ -914,6 +950,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stop() {
         stopped = true
+        _ = updateCaptureState { state in
+            state.stop()
+            return true
+        }
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
         cursorImageTimer?.cancel()
@@ -937,6 +977,94 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // Unblock a start() that is still waiting for the hello.
             self?.helloContinuation?.resume(throwing: CancellationError())
             self?.helloContinuation = nil
+        }
+    }
+
+    func pauseDisplay() {
+        queue.async { [weak self] in
+            guard let self,
+                  self.updateCaptureState({ $0.requestPause() }) else { return }
+            self.sendDisplayState(.paused)
+            self.inputInjector?.cancelActiveInput()
+            self.invalidateCapturePipeline()
+            let activeStream = self.stream
+            Task {
+                var stopSucceeded = true
+                if let activeStream {
+                    do {
+                        try await activeStream.stopCapture()
+                    } catch {
+                        stopSucceeded = false
+                        let nsError = error as NSError
+                        Log.info("intentional pause stop failed domain=\(nsError.domain) code=\(nsError.code): \(error)")
+                    }
+                }
+                let stoppedCapture = stopSucceeded
+                self.queue.async {
+                    guard self.captureStateSnapshot().phase == .pausing else { return }
+                    if stoppedCapture {
+                        if self.stream === activeStream { self.stream = nil }
+                        if let encoder = self.encoder { VTCompressionSessionInvalidate(encoder) }
+                        self.encoder = nil
+                    }
+                    _ = self.updateCaptureState { $0.pauseCompleted() }
+                    Task { await self.status("Display paused") }
+                }
+            }
+        }
+    }
+
+    func resumeDisplay() {
+        queue.async { [weak self] in
+            guard let self,
+                  self.updateCaptureState({ $0.requestResume() }) else { return }
+            self.captureRecoveryBudget.reset()
+            Task { await self.resumeCapture() }
+        }
+    }
+
+    private func resumeCapture() async {
+        if let existing = stream {
+            do {
+                try await existing.stopCapture()
+            } catch {
+                let nsError = error as NSError
+                Log.info("resume could not stop retained stream domain=\(nsError.domain) code=\(nsError.code): \(error)")
+                queue.async {
+                    _ = self.updateCaptureState { $0.resumeStopFailed() }
+                }
+                return
+            }
+            if stream === existing { stream = nil }
+        }
+        if let encoder { VTCompressionSessionInvalidate(encoder) }
+        encoder = nil
+        needsKeyframe = true
+        do {
+            switch mode {
+            case .mirror:
+                try await startMirrorCapture(preferredDisplayID: captureDisplayID == 0 ? nil : captureDisplayID)
+            case .extend:
+                guard let vd = virtualDisplay else {
+                    throw NSError(domain: "MacSender", code: 10,
+                                  userInfo: [NSLocalizedDescriptionKey: "virtual display is unavailable while resuming"])
+                }
+                try ensureActiveDisplay(vd)
+                let size = CGSize(width: vd.pointsWide, height: vd.pointsHigh)
+                let display = try await findSCDisplay(id: vd.displayID, expectedSize: size)
+                try ensureActiveDisplay(vd)
+                let info = try await waitForHello()
+                try await startCapture(display: display,
+                                       sourcePixelsWide: vd.pointsWide * 2, sourcePixelsHigh: vd.pointsHigh * 2,
+                                       receiver: info)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard captureStateSnapshot().phase == .resuming else { return }
+            let nsError = error as NSError
+            Log.info("capture resume failed domain=\(nsError.domain) code=\(nsError.code): \(error) — retrying")
+            queue.async { self.recoveryRoundEnded() }
         }
     }
 
@@ -1074,73 +1202,156 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        // A retired stream commonly reports its stop after the replacement is
+        queue.async { [weak self] in
+            self?.handleCaptureStopped(stream, error: error)
+        }
+    }
+
+    private func handleCaptureStopped(_ stoppedStream: SCStream, error: Error) {
+        let lifecycle = captureStateSnapshot()
+        let nsError = error as NSError
+        let intentional = lifecycle.ownsCaptureStop
+        let isCurrentStream = stoppedStream === stream
+        // Pause/Resume owns its stream stops. In particular, .userStopped from
+        // our Pause button must not be mistaken for the system's Stop Extending.
+        guard !intentional else { return }
+        // A retired stream commonly reports its stop after its replacement is
         // already live. It must not tear down that replacement (#203).
-        guard stream === self.stream else { return }
-        Log.info("stream stopped with error: \(error)")
-        // The user stopped this capture from the system UI (the menu bar's
-        // recording indicator / "Stop Extending"). That is a disconnect, not
-        // a fault: restarting capture would defy the user — and macOS
-        // answers such defiance by saving display state that keeps this
-        // identity from ever coming online again (#206). Hand it to the
-        // controller to honor exactly like the in-app Disconnect.
+        guard isCurrentStream else { return }
+        // The system UI's Stop Extending is a user disconnect, not a fault.
         if let scError = error as? SCStreamError, scError.code == .userStopped,
            consoleIsInteractive {
             Task { @MainActor in self.onCaptureStoppedByUser?() }
             return
         }
+        guard !stopped,
+              updateCaptureState({ $0.unexpectedStop() }) else { return }
+        Log.info("unexpected SCStream stop mode=\(mode.rawValue) domain=\(nsError.domain) "
+            + "code=\(nsError.code): \(error.localizedDescription)")
         Task { await status("Capture stopped: \(error.localizedDescription)") }
-        // E.g. display sleep can tear the virtual display down underneath the
-        // stream — rebuild instead of sitting dead until an app restart.
-        guard !stopped, mode == .extend else { return }
         invalidateCapturePipeline()
-        self.stream = nil
+        stream = nil
         scheduleCaptureRecovery()
     }
 
-    /// Retry until capture is back. Per issue #29 fix-plan point 1: a dead
-    /// stream does NOT mean the display is gone. If our own virtual display
-    /// still exists, just re-attach the capture to it — rebuilding the display
-    /// (destroy+create) is what killed the NEIGHBOR's stream and ping-ponged
-    /// the infinite rebuild loop. Only do a full `reconfigure` when the display
-    /// is actually gone (e.g. display sleep tore it down).
+    /// Retry capture without rebuilding a healthy display. Extend recovery
+    /// keeps its existing reattach-first path; Mirror recovery reattaches to
+    /// the captured physical display and rebuilds capture alone on fallback.
     private func scheduleCaptureRecovery() {
+        guard !captureRecoveryScheduled, captureStateSnapshot().shouldRetryCapture else { return }
+        captureRecoveryScheduled = true
+        let attempt = captureRecoveryBudget.failedAttempts + 1
+        Log.info("capture recovery starting mode=\(mode.rawValue) "
+            + "attempt=\(attempt)/\(captureRecoveryBudget.maximumAttempts) delay=3s")
         queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            guard let self, !self.stopped, self.stream == nil,
-                  let hello = self.lastHello else { return }
-            // Does our virtual display still exist? CGDisplayBounds returns a
-            // zero rect for an unknown id, so a non-empty bounds means it's live.
-            // Test isEmpty, not isNull: isNull is only true for the special
-            // CGRect.null, so it reads as "live" for a dead display too and the
-            // rebuild fallback below would become unreachable.
-            if let vd = self.virtualDisplay,
-               !CGDisplayBounds(vd.displayID).isEmpty {
-                Log.info("capture died — display still present, re-attaching capture only (#29)")
-                Task {
-                    do {
-                        let display = try await self.findSCDisplay(id: vd.displayID)
-                        // Capture at the display's pixel resolution (points ×2 @2x),
-                        // not SCDisplay.width (logical points) — matches setupExtend.
-                        try await self.startCapture(display: display,
-                                                    sourcePixelsWide: vd.pointsWide * 2,
-                                                    sourcePixelsHigh: vd.pointsHigh * 2,
-                                                    receiver: hello)
-                        self.needsKeyframe = true
-                    } catch {
-                        Log.info("re-attach failed (\(error)) — falling back to full rebuild")
-                        await self.reconfigure(hello)
-                    }
-                    self.queue.async { self.recoveryRoundEnded() }
-                }
-                return
-            }
-            // Display genuinely gone — full rebuild (preserves old behavior).
-            Log.info("capture died — rebuilding pipeline")
-            Task {
-                await self.reconfigure(hello)
-                self.queue.async { self.recoveryRoundEnded() }
+            guard let self else { return }
+            self.captureRecoveryScheduled = false
+            guard !self.stopped, self.stream == nil,
+                  self.captureStateSnapshot().shouldRetryCapture else { return }
+            Task { await self.runCaptureRecovery(attempt: attempt) }
+        }
+    }
+
+    private func runCaptureRecovery(attempt: Int) async {
+        let targetAvailable: Bool
+        switch mode {
+        case .mirror:
+            targetAvailable = captureDisplayID != 0 && !CGDisplayBounds(captureDisplayID).isEmpty
+        case .extend:
+            if let virtualDisplay {
+                targetAvailable = !CGDisplayBounds(virtualDisplay.displayID).isEmpty
+            } else {
+                targetAvailable = false
             }
         }
+        let path = CaptureRecoveryPath.resolve(mode: mode, targetDisplayAvailable: targetAvailable)
+        Log.info("capture recovery attempt \(attempt)/\(captureRecoveryBudget.maximumAttempts) "
+            + "mode=\(mode.rawValue) path=\(String(describing: path)) targetAvailable=\(targetAvailable)")
+
+        do {
+            switch path {
+            case .reattachMirrorCapture:
+                try await reattachMirrorCapture()
+            case .rebuildMirrorPipeline:
+                try await rebuildMirrorCapturePipeline()
+            case .reattachExtendCapture:
+                try await reattachExtendCapture()
+            case .rebuildExtendPipeline:
+                if let hello = lastHello { await reconfigure(hello) }
+                else { throw CancellationError() }
+            }
+            guard captureStateSnapshot().phase == .running else { return }
+            Log.info("capture recovery attempt \(attempt) succeeded mode=\(mode.rawValue)")
+        } catch is CancellationError {
+            return
+        } catch {
+            guard captureStateSnapshot().shouldRetryCapture else { return }
+            let nsError = error as NSError
+            Log.info("capture reattach/rebuild attempt \(attempt) failed domain=\(nsError.domain) code=\(nsError.code): \(error)")
+            do {
+                switch mode {
+                case .mirror:
+                    Log.info("capture recovery attempt \(attempt) falling back to Mirror capture-pipeline rebuild")
+                    try await rebuildMirrorCapturePipeline()
+                case .extend:
+                    Log.info("capture recovery attempt \(attempt) falling back to Extend display-pipeline rebuild")
+                    if let hello = lastHello { await reconfigure(hello) }
+                }
+                if captureStateSnapshot().phase == .running {
+                    Log.info("capture recovery fallback succeeded attempt=\(attempt) mode=\(mode.rawValue)")
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                let rebuildError = error as NSError
+                Log.info("capture rebuild fallback failed domain=\(rebuildError.domain) code=\(rebuildError.code): \(error)")
+            }
+        }
+        queue.async { self.recoveryRoundEnded() }
+    }
+
+    private func reattachMirrorCapture() async throws {
+        guard captureDisplayID != 0,
+              !CGDisplayBounds(captureDisplayID).isEmpty else {
+            throw NSError(domain: "MacSender", code: 8,
+                          userInfo: [NSLocalizedDescriptionKey: "captured physical display is unavailable"])
+        }
+        let display = try await findSCDisplay(id: captureDisplayID)
+        try await startMirrorCapture(display: display)
+    }
+
+    private func startMirrorCapture(display: SCDisplay) async throws {
+        // Mirror also waits for hello so receiver capabilities are applied
+        // before the first encoder is created (see `start()`) — every
+        // reattach/rebuild/resume path funnels through here, so this is the
+        // one place that negotiation needs to happen for Mirror.
+        let info = try await waitForHello()
+        let displayMode = CGDisplayCopyDisplayMode(display.displayID)
+        let pixelsW = displayMode?.pixelWidth ?? display.width
+        let pixelsH = displayMode?.pixelHeight ?? display.height
+        try await startCapture(display: display,
+                               sourcePixelsWide: pixelsW, sourcePixelsHigh: pixelsH,
+                               receiver: info)
+    }
+
+    private func rebuildMirrorCapturePipeline() async throws {
+        let preferred = captureDisplayID != 0 && !CGDisplayBounds(captureDisplayID).isEmpty
+            ? captureDisplayID : nil
+        try await startMirrorCapture(preferredDisplayID: preferred)
+    }
+
+    private func reattachExtendCapture() async throws {
+        guard let vd = virtualDisplay else {
+            throw NSError(domain: "MacSender", code: 9,
+                          userInfo: [NSLocalizedDescriptionKey: "virtual display is unavailable"])
+        }
+        try ensureActiveDisplay(vd)
+        let display = try await findSCDisplay(id: vd.displayID)
+        try ensureActiveDisplay(vd)
+        let info = try await waitForHello()
+        try await startCapture(display: display,
+                               sourcePixelsWide: vd.pointsWide * 2, sourcePixelsHigh: vd.pointsHigh * 2,
+                               receiver: info)
     }
 
     /// SCK can report `.userStopped` for stops the user did not initiate
@@ -1162,14 +1373,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// session (display torn down, reconnect is the user's call) beats
     /// hammering WindowServer with create/destroy cycles forever.
     private func recoveryRoundEnded() {
+        guard captureStateSnapshot().shouldRetryCapture else { return }
         guard stream == nil else {
-            captureRecoveryFailures = 0
+            captureRecoveryBudget.reset()
             return
         }
-        captureRecoveryFailures += 1
-        guard captureRecoveryFailures < maxCaptureRecoveryFailures else {
+        let shouldRetry = captureRecoveryBudget.recordFailure()
+        guard shouldRetry else {
+            if captureStateSnapshot().phase == .resuming {
+                _ = updateCaptureState { $0.resumeFailed() }
+                Task { await status("Resume failed — try again") }
+                return
+            }
+            _ = updateCaptureState { $0.recoveryFailed() }
             Task { await status("Capture could not be restarted") }
-            reportGone("capture recovery failed \(captureRecoveryFailures)x — ending session")
+            reportGone("capture recovery failed \(captureRecoveryBudget.failedAttempts)x — ending session")
             return
         }
         scheduleCaptureRecovery()
@@ -2031,6 +2249,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
         case "touch":
+            guard receiverInputIsAllowed() else { return }
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
@@ -2044,10 +2263,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
         case "scroll":
+            guard receiverInputIsAllowed() else { return }
             if let dx = obj["dx"] as? Double, let dy = obj["dy"] as? Double {
                 inputInjector?.handleScroll(dx: dx, dy: dy)
             }
         case "pencil":
+            guard receiverInputIsAllowed() else { return }
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
@@ -2066,6 +2287,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             }
         case "proximity":
+            guard receiverInputIsAllowed() else { return }
             if let entering = obj["entering"] as? Bool,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
@@ -2103,6 +2325,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 break
             }
         }
+    }
+
+    private func receiverInputIsAllowed() -> Bool {
+        guard captureStateSnapshot().allowsInput else {
+            inputInjector?.cancelActiveInput()
+            return false
+        }
+        return true
     }
 
     private func waitForHello() async throws -> PhoneInfo {

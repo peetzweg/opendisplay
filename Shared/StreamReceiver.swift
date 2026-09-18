@@ -68,6 +68,7 @@ final class StreamReceiver: ObservableObject {
     @Published var fps = 0
     @Published var connected = false
     @Published var videoSize = CGSize.zero   // for touch coordinate mapping
+    @Published private(set) var displayState = DisplayState.running
     @Published var perf = PerfStats()
     // Compatibility signal from the connected Mac (issue #132). Nil = no signal.
     // Merged into the update gate by ReceiverScreen.
@@ -163,6 +164,7 @@ final class StreamReceiver: ObservableObject {
     // and normalized coordinates use a TOP-LEFT origin (video space).
     var onCursor: ((_ x: Double, _ y: Double, _ visible: Bool) -> Void)?
     var onCursorImage: ((_ image: CGImage, _ anchor: CGPoint, _ normSize: CGSize) -> Void)?
+    var onDisplayStateChange: ((DisplayState) -> Void)?
     // The video view attaches only once frames are on screen — usually AFTER
     // the connect-time sprite already arrived (the sender re-sends it only
     // when the cursor changes shape, so a plain arrow would stay invisible
@@ -407,6 +409,10 @@ final class StreamReceiver: ObservableObject {
                 self.stopCursorListener()
                 self.setConnected(false)
                 self.setStatus(status)
+                DispatchQueue.main.async {
+                    self.displayState = .running
+                    self.onDisplayStateChange?(.running)
+                }
                 completion?()
             }
             guard let conn = self.connection, conn.state == .ready else {
@@ -785,6 +791,13 @@ final class StreamReceiver: ObservableObject {
                 self.cursorSprite = (image, anchor, normSize)
                 self.onCursorImage?(image, anchor, normSize)
             }
+        case "displayState":
+            guard let state = DisplayState.decode(messageType: type,
+                                                  value: obj["state"] as? String) else { return }
+            DispatchQueue.main.async {
+                self.displayState = state
+                self.onDisplayStateChange?(state)
+            }
         case WireMessage.welcome:
             // The Mac identified itself (issue #132). If it speaks a protocol
             // older than we support, it's the Mac that needs updating — and an
@@ -958,6 +971,7 @@ final class StreamReceiver: ObservableObject {
     /// Stamped in *Mac* clock time (our clock + sync offset) so the Mac can
     /// measure touch→injection latency without doing its own clock sync.
     func sendTouch(phase: String, x: Double, y: Double) {
+        guard displayState == .running else { return }
         var msg: [String: Any] = ["type": "touch", "phase": phase, "x": x, "y": y]
         if let offset = clockOffsetMs { msg["t"] = nowMs + offset }
         sendControl(msg)
@@ -965,6 +979,7 @@ final class StreamReceiver: ObservableObject {
 
     /// Two-finger scroll: dx/dy in video pixels (natural-scrolling sign).
     func sendScroll(dx: Double, dy: Double) {
+        guard displayState == .running else { return }
         sendControl(["type": "scroll", "dx": dx, "dy": dy])
     }
 
@@ -972,6 +987,7 @@ final class StreamReceiver: ObservableObject {
     /// rotation is always 0 until Apple Pencil Pro barrel roll is wired up.
     func sendPencil(phase: String, x: Double, y: Double,
                     pressure: Double, azimuth: Double, altitude: Double) {
+        guard displayState == .running else { return }
         var msg: [String: Any] = [
             "type": "pencil",
             "phase": phase,
@@ -986,6 +1002,7 @@ final class StreamReceiver: ObservableObject {
     }
 
     func sendProximity(entering: Bool, x: Double, y: Double) {
+        guard displayState == .running else { return }
         sendControl(["type": "proximity", "entering": entering, "x": x, "y": y])
     }
 

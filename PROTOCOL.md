@@ -359,6 +359,7 @@ section 4.
 | `welcome` | pv 2 | `pv`, `min` | Sender's side of the version handshake |
 | `updateRequired` | pv 2 | `target`, `store`, `message` | Peer must update to continue |
 | `streamConfig` | pv 3 (additive) | `codec`, `width`, `height`, `framesPerSecond` | Selected video operating point |
+| `displayState` | additive | `state` (`running` or `paused`) | Capture pause state for receiver UI/input gating |
 
 **`pong`** echoes the `t` from the receiver's `ping` unchanged and adds
 `mt`: milliseconds since the Unix epoch on the sender's clock at the moment
@@ -379,6 +380,13 @@ The cursor rides the control path rather than being baked into the video
 so it moves at input rate, not at video latency; the official sender emits
 up to 120 updates/s, deduplicated by movement threshold. Receivers without
 cursor rendering MAY ignore both cursor messages.
+
+**`displayState`** carries `paused` when the user pauses capture and
+`running` after every successful capture start, including initial capture,
+resume, mode replacement, and recovery. Receivers SHOULD keep the last video
+frame visible and indicate that the display is paused; they SHOULD ignore
+interactive input while paused. This is additive and unknown message types
+remain safe to ignore.
 
 **`cursorImg`** delivers the current cursor sprite: `png` is the base64 of
 a PNG (kept under 24000 bytes pre-encoding, see section 4); `nw`, `nh` are
