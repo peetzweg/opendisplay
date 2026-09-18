@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.20.0](https://github.com/peetzweg/opendisplay/compare/v1.19.0...v1.20.0) (2026-09-18)
+
+
+### Features
+
+* **web:** add App Store QR and demo video ([#285](https://github.com/peetzweg/opendisplay/issues/285)) ([542eae4](https://github.com/peetzweg/opendisplay/commit/542eae4582641c932432a9d0c3673daf095b1c15))
+* **web:** redesign sender and receiver downloads ([#264](https://github.com/peetzweg/opendisplay/issues/264)) ([d0ee974](https://github.com/peetzweg/opendisplay/commit/d0ee9745c94bf056f8b644d15cf1fc20e6eaf821))
+
+
+### Bug Fixes
+
+* **dev:** grayscale Debug icon instead of inverted ([#263](https://github.com/peetzweg/opendisplay/issues/263)) ([4a23a16](https://github.com/peetzweg/opendisplay/commit/4a23a16d8ef41518618839db937aa292af6043a4))
+* **dev:** make Debug builds distinct (name + inverted icon) ([#261](https://github.com/peetzweg/opendisplay/issues/261)) ([238b0ff](https://github.com/peetzweg/opendisplay/commit/238b0ffa4b0475eecaccd4e01f9517df5e2eb632))
+* **mac:** strictly validate CGDisplayIsInMirrorSet return value ([#142](https://github.com/peetzweg/opendisplay/issues/142)) ([#250](https://github.com/peetzweg/opendisplay/issues/250)) ([02b917e](https://github.com/peetzweg/opendisplay/commit/02b917e8e0425a0f439a5003030e2353703d569d))
+* negotiate capability-safe stream configurations ([#288](https://github.com/peetzweg/opendisplay/issues/288)) ([d04a439](https://github.com/peetzweg/opendisplay/commit/d04a4396f121a985d6590e7e03ef41d01b813c6d))
+
 ## [1.19.0](https://github.com/peetzweg/opendisplay/compare/v1.18.0...v1.19.0) (2026-09-01)
 
 
