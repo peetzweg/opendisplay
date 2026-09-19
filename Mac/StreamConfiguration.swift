@@ -45,11 +45,12 @@ struct PixelSize: Equatable {
     let height: Int
 }
 
-/// One fully validated operating point for the current H.264 pipeline.
+/// One fully validated operating point for the selected codec.
 /// Every capture/recovery path builds this through `make`, so dimensions and
 /// frame rate cannot drift apart after a rotation or ScreenCaptureKit restart.
-struct H264StreamConfiguration: Equatable {
-    static let codec = "h264"
+struct VideoStreamConfiguration: Equatable {
+    static let h264Codec = "h264"
+    static let hevcCodec = "hevc"
     static let defaultFramesPerSecond = 60
     // H.264 High@L5.2 MaxFS and MaxMBPS. Keeping these as codec constraints,
     // rather than a model/display special case, is what makes 5K and future
@@ -59,6 +60,7 @@ struct H264StreamConfiguration: Equatable {
     // requested raster × rate crosses this boundary (issue #271).
     static let maxMacroblocksPerSecond = 2_073_600
 
+    let codec: String
     let encodedSize: PixelSize
     let bitrate: Int
     let framesPerSecond: Int
@@ -73,15 +75,16 @@ struct H264StreamConfiguration: Equatable {
             case .invalidSource:
                 return "The display reported an invalid video size."
             case .noCompatibleCodec:
-                return "The receiver does not support H.264 video."
+                return "The receiver does not support the selected video codec."
             case .noCompatibleConfiguration:
-                return "The receiver did not advertise a usable H.264 video configuration."
+                return "The receiver did not advertise a usable video configuration."
             }
         }
     }
 
     static func make(source: PixelSize,
                      quality: StreamQuality,
+                     codec: String = h264Codec,
                      legacyCeiling: PixelSize? = nil,
                      receiverCapabilities: [VideoCapability]? = nil,
                      displayMaxFrameRate: Int? = nil,
@@ -95,19 +98,20 @@ struct H264StreamConfiguration: Equatable {
                                    displayMaxFrameRate.flatMap { $0 > 0 ? $0 : nil }
                                        ?? requestedFramesPerSecond))
 
-        // Absence is the legacy H.264 contract. When capabilities are present,
-        // each matching entry is an alternative joint constraint set.
-        let h264Capabilities: [VideoCapability?]
+        // Absence is the legacy H.264 contract. Never infer HEVC support from
+        // an older receiver that did not advertise codec capabilities.
+        let matchingCapabilities: [VideoCapability?]
         if let receiverCapabilities {
             let matches = receiverCapabilities.filter { $0.codec.lowercased() == codec }
             guard !matches.isEmpty else { throw SelectionError.noCompatibleCodec }
-            h264Capabilities = matches.map(Optional.some)
+            matchingCapabilities = matches.map(Optional.some)
         } else {
-            h264Capabilities = [nil]
+            guard codec == h264Codec else { throw SelectionError.noCompatibleCodec }
+            matchingCapabilities = [nil]
         }
 
-        let candidates = h264Capabilities.compactMap { capability -> Self? in
-            if let ceiling = legacyCeiling,
+        let candidates = matchingCapabilities.compactMap { capability -> Self? in
+            if codec == h264Codec, let ceiling = legacyCeiling,
                ceiling.width < 2 || ceiling.height < 2 {
                 return nil
             }
@@ -118,12 +122,12 @@ struct H264StreamConfiguration: Equatable {
                 || capability.maxPixelsPerSecond.map({ $0 < 4 }) == true {
                 return nil
             }
-            var size = fit(scaled, inside: legacyCeiling)
+            var size = fit(scaled, inside: codec == h264Codec ? legacyCeiling : nil)
             if let capability {
                 size = fit(size, maxWidth: capability.maxWidth,
                            maxHeight: capability.maxHeight)
             }
-            size = fitH264LevelFrame(size)
+            if codec == h264Codec { size = fitH264LevelFrame(size) }
 
             // Prefer detail and lower the rate first. If even one frame would
             // exceed the advertised throughput, reduce the raster as well.
@@ -145,9 +149,11 @@ struct H264StreamConfiguration: Equatable {
                 fps = min(fps, pixelsPerSecond / pixels)
             }
             guard fps > 0 else { return nil }
-            fps = safeH264FrameRate(width: size.width, height: size.height,
-                                    requested: fps)
-            return Self(encodedSize: size, bitrate: quality.bitrate,
+            if codec == h264Codec {
+                fps = safeH264FrameRate(width: size.width, height: size.height,
+                                        requested: fps)
+            }
+            return Self(codec: codec, encodedSize: size, bitrate: quality.bitrate,
                         framesPerSecond: fps)
         }
 
@@ -173,10 +179,11 @@ struct H264StreamConfiguration: Equatable {
     /// scaled once (#322). The cap always uses Best; `makeForCanvas` keeps the
     /// lower presets' raster relative to the panel.
     static func canvasPixels(forReceiver panel: PixelSize,
+                             codec: String = h264Codec,
                              legacyCeiling: PixelSize? = nil,
                              receiverCapabilities: [VideoCapability]? = nil,
                              displayMaxFrameRate: Int? = nil) -> PixelSize {
-        guard let best = try? make(source: panel, quality: .best,
+        guard let best = try? make(source: panel, quality: .best, codec: codec,
                                    legacyCeiling: legacyCeiling,
                                    receiverCapabilities: receiverCapabilities,
                                    displayMaxFrameRate: displayMaxFrameRate)
@@ -192,15 +199,16 @@ struct H264StreamConfiguration: Equatable {
     static func makeForCanvas(_ canvas: PixelSize,
                               panel: PixelSize,
                               quality: StreamQuality,
+                              codec: String = h264Codec,
                               legacyCeiling: PixelSize? = nil,
                               receiverCapabilities: [VideoCapability]? = nil,
                               displayMaxFrameRate: Int? = nil) throws -> Self {
-        let fromCanvas = try make(source: canvas, quality: quality,
+        let fromCanvas = try make(source: canvas, quality: quality, codec: codec,
                                   legacyCeiling: legacyCeiling,
                                   receiverCapabilities: receiverCapabilities,
                                   displayMaxFrameRate: displayMaxFrameRate)
         guard panel != canvas,
-              let fromPanel = try? make(source: panel, quality: quality,
+              let fromPanel = try? make(source: panel, quality: quality, codec: codec,
                                         legacyCeiling: legacyCeiling,
                                         receiverCapabilities: receiverCapabilities,
                                         displayMaxFrameRate: displayMaxFrameRate),

@@ -2,7 +2,7 @@ import XCTest
 
 final class StreamConfigurationTests: XCTestCase {
     func testFiveKBestUsesReceiverRasterAtSafeH264Rate() throws {
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 5120, height: 2880),
             quality: .best,
             legacyCeiling: PixelSize(width: 4096, height: 2304))
@@ -13,22 +13,22 @@ final class StreamConfigurationTests: XCTestCase {
     }
 
     func testFiveKCanvasIsCappedAtTheStreamSoCaptureIsOneToOne() throws {
-        let canvas = H264StreamConfiguration.canvasPixels(
+        let canvas = VideoStreamConfiguration.canvasPixels(
             forReceiver: PixelSize(width: 5120, height: 2880))
         XCTAssertEqual(canvas, PixelSize(width: 4096, height: 2304))
 
         // Selecting a stream from that canvas must not scale it again.
-        let config = try H264StreamConfiguration.make(source: canvas, quality: .best)
+        let config = try VideoStreamConfiguration.make(source: canvas, quality: .best)
         XCTAssertEqual(config.encodedSize, canvas)
     }
 
     func testCanvasKeepsPanelThatFitsTheStream() {
         let panel = PixelSize(width: 2732, height: 2048)
-        XCTAssertEqual(H264StreamConfiguration.canvasPixels(forReceiver: panel), panel)
+        XCTAssertEqual(VideoStreamConfiguration.canvasPixels(forReceiver: panel), panel)
     }
 
     func testCanvasFollowsReceiverDecodeCeiling() {
-        let canvas = H264StreamConfiguration.canvasPixels(
+        let canvas = VideoStreamConfiguration.canvasPixels(
             forReceiver: PixelSize(width: 2560, height: 1600),
             legacyCeiling: PixelSize(width: 1920, height: 1920))
         XCTAssertEqual(canvas, PixelSize(width: 1920, height: 1200))
@@ -36,7 +36,7 @@ final class StreamConfigurationTests: XCTestCase {
 
     func testCanvasFallsBackToPanelWhenNoStreamIsPossible() {
         let panel = PixelSize(width: 2560, height: 1440)
-        XCTAssertEqual(H264StreamConfiguration.canvasPixels(
+        XCTAssertEqual(VideoStreamConfiguration.canvasPixels(
             forReceiver: panel,
             receiverCapabilities: [VideoCapability(codec: "hevc")]), panel)
     }
@@ -45,14 +45,14 @@ final class StreamConfigurationTests: XCTestCase {
         // The canvas is capped for Best; Balanced/Fast must still scale from
         // the 5K panel, not scale the capped canvas down a second time.
         let panel = PixelSize(width: 5120, height: 2880)
-        let canvas = H264StreamConfiguration.canvasPixels(forReceiver: panel)
+        let canvas = VideoStreamConfiguration.canvasPixels(forReceiver: panel)
         let expected: [(StreamQuality, PixelSize)] = [
             (.best, PixelSize(width: 4096, height: 2304)),
             (.balanced, PixelSize(width: 3840, height: 2160)),
             (.fast, PixelSize(width: 2560, height: 1440)),
         ]
         for (quality, size) in expected {
-            let config = try H264StreamConfiguration.makeForCanvas(
+            let config = try VideoStreamConfiguration.makeForCanvas(
                 canvas, panel: panel, quality: quality)
             XCTAssertEqual(config.encodedSize, size, "\(quality)")
         }
@@ -63,10 +63,10 @@ final class StreamConfigurationTests: XCTestCase {
         // legacy 4096x2304 decode ceiling.
         let panel = PixelSize(width: 5120, height: 2880)
         let ceiling = PixelSize(width: 4096, height: 2304)
-        let canvas = H264StreamConfiguration.canvasPixels(forReceiver: panel,
+        let canvas = VideoStreamConfiguration.canvasPixels(forReceiver: panel,
                                                           legacyCeiling: ceiling)
         XCTAssertEqual(canvas, ceiling)
-        let config = try H264StreamConfiguration.makeForCanvas(
+        let config = try VideoStreamConfiguration.makeForCanvas(
             canvas, panel: panel, quality: .best, legacyCeiling: ceiling)
         XCTAssertEqual(config.encodedSize, canvas)
     }
@@ -75,11 +75,11 @@ final class StreamConfigurationTests: XCTestCase {
         // A 4.5K panel is trimmed by the H.264 level, then rounded to even
         // points; whatever lands on the display must be captured 1:1.
         let panel = PixelSize(width: 4480, height: 2520)
-        let canvas = H264StreamConfiguration.canvasPixels(forReceiver: panel)
+        let canvas = VideoStreamConfiguration.canvasPixels(forReceiver: panel)
         let display = try XCTUnwrap(VirtualCanvasSizing.requested(
             pixelsWide: canvas.width, pixelsHigh: canvas.height))
         let onDisplay = PixelSize(width: display.pixelsWide, height: display.pixelsHigh)
-        let config = try H264StreamConfiguration.makeForCanvas(
+        let config = try VideoStreamConfiguration.makeForCanvas(
             onDisplay, panel: panel, quality: .best)
         XCTAssertEqual(config.encodedSize, onDisplay)
     }
@@ -88,12 +88,12 @@ final class StreamConfigurationTests: XCTestCase {
         let caps = [VideoCapability(codec: "h264", maxFrameRate: 60,
                                     maxPixelsPerSecond: 522_240 * 256)]
         let panel = PixelSize(width: 2048, height: 1536)
-        XCTAssertEqual(H264StreamConfiguration.canvasPixels(
+        XCTAssertEqual(VideoStreamConfiguration.canvasPixels(
             forReceiver: panel, receiverCapabilities: caps, displayMaxFrameRate: 60), panel)
     }
 
     func testFiveKIsBoundedByCodecLevelWithoutModelSpecificCeiling() throws {
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 5120, height: 2880), quality: .best)
 
         XCTAssertEqual(config.encodedSize, PixelSize(width: 4096, height: 2304))
@@ -104,13 +104,13 @@ final class StreamConfigurationTests: XCTestCase {
         let source = PixelSize(width: 5120, height: 2880)
         let ceiling = PixelSize(width: 4096, height: 2304)
 
-        let balanced = try H264StreamConfiguration.make(
+        let balanced = try VideoStreamConfiguration.make(
             source: source, quality: .balanced, legacyCeiling: ceiling)
         XCTAssertEqual(balanced.encodedSize, PixelSize(width: 3840, height: 2160))
         XCTAssertEqual(balanced.framesPerSecond, 60)
         XCTAssertEqual(balanced.bitrate, 10_000_000)
 
-        let fast = try H264StreamConfiguration.make(
+        let fast = try VideoStreamConfiguration.make(
             source: source, quality: .fast, legacyCeiling: ceiling)
         XCTAssertEqual(fast.encodedSize, PixelSize(width: 2560, height: 1440))
         XCTAssertEqual(fast.framesPerSecond, 60)
@@ -121,7 +121,7 @@ final class StreamConfigurationTests: XCTestCase {
         let caps = [VideoCapability(codec: "h264", maxWidth: 3000,
                                     maxHeight: 2000, maxFrameRate: 30,
                                     maxPixelsPerSecond: 150_000_000)]
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 4000, height: 3000), quality: .best,
             receiverCapabilities: caps, displayMaxFrameRate: 120)
 
@@ -137,7 +137,7 @@ final class StreamConfigurationTests: XCTestCase {
             VideoCapability(codec: "h264", maxWidth: 2560, maxHeight: 1440,
                             maxFrameRate: 30),
         ]
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 3840, height: 2160), quality: .best,
             receiverCapabilities: caps)
 
@@ -146,7 +146,7 @@ final class StreamConfigurationTests: XCTestCase {
     }
 
     func testCapabilityMayConstrainOneRasterAxis() throws {
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 4000, height: 3000), quality: .best,
             receiverCapabilities: [VideoCapability(codec: "h264", maxWidth: 2000)])
 
@@ -159,7 +159,7 @@ final class StreamConfigurationTests: XCTestCase {
         // keep the panel sharp and pay in frame rate, not the other way round.
         let caps = [VideoCapability(codec: "h264", maxFrameRate: 60,
                                     maxPixelsPerSecond: 522_240 * 256)]
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 2048, height: 1536), quality: .best,
             receiverCapabilities: caps, displayMaxFrameRate: 60)
 
@@ -169,7 +169,7 @@ final class StreamConfigurationTests: XCTestCase {
 
     func testPixelThroughputReducesRasterWhenOneFrameWouldExceedIt() throws {
         let maximum = 1_000_000
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 1920, height: 1080), quality: .best,
             receiverCapabilities: [VideoCapability(codec: "h264",
                                                     maxPixelsPerSecond: maximum)])
@@ -180,57 +180,81 @@ final class StreamConfigurationTests: XCTestCase {
     }
 
     func testUnusablePixelThroughputIsRejected() {
-        XCTAssertThrowsError(try H264StreamConfiguration.make(
+        XCTAssertThrowsError(try VideoStreamConfiguration.make(
             source: PixelSize(width: 1920, height: 1080), quality: .best,
             receiverCapabilities: [VideoCapability(codec: "h264",
                                                     maxPixelsPerSecond: 3)])) { error in
-                XCTAssertEqual(error as? H264StreamConfiguration.SelectionError,
+                XCTAssertEqual(error as? VideoStreamConfiguration.SelectionError,
                                .noCompatibleConfiguration)
             }
     }
 
     func testCapabilityTooSmallForEvenVideoIsRejected() {
-        XCTAssertThrowsError(try H264StreamConfiguration.make(
+        XCTAssertThrowsError(try VideoStreamConfiguration.make(
             source: PixelSize(width: 1920, height: 1080), quality: .best,
             receiverCapabilities: [VideoCapability(codec: "h264", maxWidth: 1)])) { error in
-                XCTAssertEqual(error as? H264StreamConfiguration.SelectionError,
+                XCTAssertEqual(error as? VideoStreamConfiguration.SelectionError,
                                .noCompatibleConfiguration)
             }
     }
 
     func testLegacyCeilingTooSmallForEvenVideoIsRejected() {
-        XCTAssertThrowsError(try H264StreamConfiguration.make(
+        XCTAssertThrowsError(try VideoStreamConfiguration.make(
             source: PixelSize(width: 1920, height: 1080), quality: .best,
             legacyCeiling: PixelSize(width: 1, height: 1080))) { error in
-                XCTAssertEqual(error as? H264StreamConfiguration.SelectionError,
+                XCTAssertEqual(error as? VideoStreamConfiguration.SelectionError,
                                .noCompatibleConfiguration)
             }
     }
 
     func testMissingCapabilitiesRetainLegacyH264() throws {
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 1920, height: 1080), quality: .best)
         XCTAssertEqual(config.framesPerSecond, 60)
     }
 
     func testExplicitCapabilitiesRequireH264() {
-        XCTAssertThrowsError(try H264StreamConfiguration.make(
+        XCTAssertThrowsError(try VideoStreamConfiguration.make(
             source: PixelSize(width: 1920, height: 1080), quality: .best,
             receiverCapabilities: [VideoCapability(codec: "future")])) { error in
-                XCTAssertEqual(error as? H264StreamConfiguration.SelectionError,
+                XCTAssertEqual(error as? VideoStreamConfiguration.SelectionError,
                                .noCompatibleCodec)
             }
     }
 
+    func testHEVCRequiresExplicitCapability() {
+        XCTAssertThrowsError(try VideoStreamConfiguration.make(
+            source: PixelSize(width: 5120, height: 2880), quality: .best,
+            codec: VideoStreamConfiguration.hevcCodec)) { error in
+                XCTAssertEqual(error as? VideoStreamConfiguration.SelectionError,
+                               .noCompatibleCodec)
+            }
+    }
+
+    func testHEVC5KUsesItsOwnCapabilityInsteadOfLegacyH264Ceiling() throws {
+        let config = try VideoStreamConfiguration.make(
+            source: PixelSize(width: 5120, height: 2880), quality: .best,
+            codec: VideoStreamConfiguration.hevcCodec,
+            legacyCeiling: PixelSize(width: 4096, height: 2304),
+            receiverCapabilities: [
+                VideoCapability(codec: "h264", maxWidth: 4096, maxHeight: 2304),
+                VideoCapability(codec: "hevc", maxWidth: 5120, maxHeight: 2880,
+                                maxFrameRate: 60),
+            ])
+        XCTAssertEqual(config.codec, "hevc")
+        XCTAssertEqual(config.encodedSize, PixelSize(width: 5120, height: 2880))
+        XCTAssertEqual(config.framesPerSecond, 60)
+    }
+
     func testOddDimensionsRoundDownAndPreserveAspectWhenCapped() throws {
-        let config = try H264StreamConfiguration.make(
+        let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 4097, height: 2305), quality: .best,
             legacyCeiling: PixelSize(width: 3001, height: 2001))
         XCTAssertEqual(config.encodedSize, PixelSize(width: 3000, height: 1688))
     }
 
     func testInvalidSourceFailsClearly() {
-        XCTAssertThrowsError(try H264StreamConfiguration.make(
+        XCTAssertThrowsError(try VideoStreamConfiguration.make(
             source: PixelSize(width: 0, height: 1080), quality: .best))
     }
 
