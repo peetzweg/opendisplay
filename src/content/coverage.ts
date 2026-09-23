@@ -57,6 +57,10 @@ export const COVERAGE: Coverage[] = [
     description: "Mit der OpenDisplay-App des unabhängigen Entwicklers Philip Polosczek lassen sich kostenlos iPads und iPhones als zweiter Bildschirm nutzen.",
     image: "https://www.appgefahren.de/wp-content/uploads/2026/08/OpenDisplay-Mac-iPad.jpg",
   },
+  {
+    kind: "coverage", url: "https://applech2.com/archives/20260902-opendisplay-receiver-mac-to-mac.html", site: "Applech2",
+    title: "使っていないiMacやMacBookのディスプレイを他のMacのセカンドディスプレイにできるMacアプリ「OpenDisplay Receiver」がリリース。", description: "OpenDisplayはドイツのPhilip Poloczekさんがオープンソースで開発しているAppleデバイスモニター化アプリですが、このOpenDisplayが余ったiMacやMacBookのディスプレイをセカンドディスプレイ化できるReceiverアプリに対応しています。", image: "https://applech2.com/wp-content/uploads/2026/09/OpenDisplay-Receiver-Mac-to-Mac-mode-Hero.webp",
+  },
   ...[
     ["https://x.com/z12789/status/2087988422824837490", "damo", "z12789", "August 13, 2026", "之前通过Mac OS sidecar 把iPad 作为副屏使用，但是只能横屏不能竖屏。最后发现免费方案 OpenDisplay 很好的解决了这个问题。"],
     ["https://x.com/CamilleRoux/status/2080291868101812582", "Camille Roux", "CamilleRoux", "July 23, 2026", "OpenDisplay : utilisez votre iPhone ou iPad comme second écran pour votre Mac, en USB ou WiFi. Open source, gratuit, sans compte, sans dongle."],
@@ -67,6 +71,7 @@ export const COVERAGE: Coverage[] = [
     ["https://x.com/okdt/status/2086467678991180198", "オカダリョウタロウ", "okdt", "August 9, 2026", "OpenDisplay 使ってみてる。iPhone/iPadがMacの拡張ディスプレイになる。無料・アカウント不要、外部サーバー・テレメトリはないGPL-3.0のOSS。"],
     ["https://x.com/MacGeneration/status/2079841743303057559", "MacGeneration", "MacGeneration", "July 22, 2026", "OpenDisplay : l’alternative gratuite à Sidecar qui supprime plusieurs limites d’Apple."],
     ["https://x.com/GcZsmkv/status/2073793241083003241", "阿尼欧Tiffany", "GcZsmkv", "July 5, 2026", "🪄平替工具：免费且开源的将你的 iPhone 或 iPad 变成 Mac 的扩展显示器工具“OpenDisplay”，就像是Apple Sidecar（随航）功能的一个开源替代品。"],
+    ["https://x.com/ihteshamali/status/2092587455996477819", "Ihtesham Ali", "ihteshamali", "August 26, 2026", "A guy named Philip turned every old iPhone and iPad into a working second monitor for free.\n\nIt is called OpenDisplay.\n\nIt gives your Mac a real extended display using an Apple device you already own.\n\nYou can use it for:\n\n> Messages\n> Spotify\n> Documentation\n> Video previews\n> Terminal windows\n> Reference material\n\nDownload the sender on your Mac and the receiver on your iPhone or iPad.\n\nConnect them using WiFi or the charging cable.\n\nYour Mac creates another display, and you can drag any window onto it exactly like a normal monitor.\n\nThe screen runs at native Retina resolution and can reach 60 FPS over USB.\n\nYou can tap to click, drag windows with your finger, scroll using two fingers, and rotate the device into portrait mode.\n\nIt even supports several devices at the same time.\n\nWhat I really like about this is that it doesn't need an account or subscription or some special dongle. Your screen travels directly between your own devices.\n\nPhilip built the whole project alone and released the source code on GitHub.\n\nYour old iPhone was never useless.\n\nIt was just waiting for someone to ignore Apple’s rules.\n\nhttp://opendisplay.app"],
   ].map(([url, author, handle, date, text]) => ({
     kind: "coverage" as const,
     url,
