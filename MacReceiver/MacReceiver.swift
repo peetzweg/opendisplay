@@ -35,9 +35,9 @@ final class ReceiverController: ObservableObject {
     private var sleepActivity: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
     private var screenSleepObservers: [NSObjectProtocol] = []
-    private var fullscreenSession = FullscreenSessionState()
-    private var fullscreenReconnectTimer: DispatchWorkItem?
+    private let fullscreenPreference = FullscreenPreference()
     private var windowObservers: [NSObjectProtocol] = []
+    private var windowCloseTimer: DispatchWorkItem?
 
     private var fallbackName: String { Host.current().localizedName ?? "Mac" }
 
@@ -63,7 +63,7 @@ final class ReceiverController: ObservableObject {
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] connected in
-                self?.handleConnectionChange(connected)
+                self?.connected = connected
             }
             .store(in: &cancellables)
         // Streaming = connected and the video format is known — that's when
@@ -75,7 +75,7 @@ final class ReceiverController: ObservableObject {
             .sink { [weak self] streaming in
                 self?.streaming = streaming
                 self?.updateSleepAssertion(streaming)
-                if streaming { self?.showWindow() } else { self?.closeWindow() }
+                if streaming { self?.showWindow() } else { self?.scheduleCloseWindow() }
             }
             .store(in: &cancellables)
 
@@ -118,8 +118,8 @@ final class ReceiverController: ObservableObject {
     func stop(completion: (() -> Void)? = nil) {
         guard let receiver else { completion?(); return }
         cancellables.removeAll()
-        fullscreenReconnectTimer?.cancel()
-        fullscreenReconnectTimer = nil
+        windowCloseTimer?.cancel()
+        windowCloseTimer = nil
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         let workspace = NSWorkspace.shared.notificationCenter
@@ -129,7 +129,6 @@ final class ReceiverController: ObservableObject {
         self.receiver = nil
         connected = false
         streaming = false
-        fullscreenSession.beginNextSession()
         closeWindow()
         updateSleepAssertion(false)
         Log.info("receiver mode stopped")
@@ -140,22 +139,6 @@ final class ReceiverController: ObservableObject {
     func setAdvertisedName(_ name: String) {
         UserDefaults.standard.set(name, forKey: "receiverName")
         receiver?.setServiceName(name)
-    }
-
-    /// A sender can reconnect after a brief network interruption. Keep the
-    /// user's fullscreen choice through that grace period, then re-arm the
-    /// default once the session is genuinely over.
-    private func handleConnectionChange(_ connected: Bool) {
-        self.connected = connected
-        fullscreenReconnectTimer?.cancel()
-        fullscreenReconnectTimer = nil
-        guard !connected else { return }
-
-        let timer = DispatchWorkItem { [weak self] in
-            self?.fullscreenSession.beginNextSession()
-        }
-        fullscreenReconnectTimer = timer
-        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(10), execute: timer)
     }
 
     /// The panel this Mac offers as a display: the primary screen's current
@@ -202,6 +185,8 @@ final class ReceiverController: ObservableObject {
     /// when the user closed the window while the stream keeps running.
     func showWindow() {
         guard let receiver, streaming || window != nil else { return }
+        windowCloseTimer?.cancel()
+        windowCloseTimer = nil
         var created = false
         if window == nil {
             let w = NSWindow(contentRect: initialContentRect(video: receiver.videoSize),
@@ -221,41 +206,65 @@ final class ReceiverController: ObservableObject {
         if receiver.videoSize != .zero { window?.contentAspectRatio = receiver.videoSize }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        // Only a freshly built window takes the session's choice. An existing
-        // one is either already where the user put it or was closed by them,
-        // and toggling it mid-animation would undo the transition.
-        if created, fullscreenSession.wantsFullscreen, let window {
+        // Only a freshly built window takes the preference: an existing one
+        // is already where the user put it, and toggling it mid-animation
+        // would undo the transition.
+        if created, fullscreenPreference.wantsFullscreen, let window {
             window.toggleFullScreen(nil)
         }
     }
 
+    /// The stream stopped. A sender moving the session to a better transport
+    /// can drop the old link a moment before the new one is adopted, so wait
+    /// briefly before taking the window down: rebuilding it would replay the
+    /// fullscreen transition, and a toggle during the old window's animation
+    /// is refused.
+    private func scheduleCloseWindow() {
+        windowCloseTimer?.cancel()
+        let timer = DispatchWorkItem { [weak self] in self?.closeWindow() }
+        windowCloseTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(2), execute: timer)
+    }
+
     private func closeWindow() {
-        // Our own close is not the user's choice: stop listening first so
-        // tearing down a fullscreen window doesn't record "windowed".
-        windowObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        windowObservers = []
+        windowCloseTimer?.cancel()
+        windowCloseTimer = nil
+        // Our own teardown is not the user's choice: stop listening first so
+        // closing a fullscreen window doesn't record "windowed".
+        stopObservingWindow()
         window?.close()
         window = nil
     }
 
-    /// Record what the user does with the green button and the close button,
-    /// so a window rebuilt later in the session comes back the same way.
+    /// Remember the user's green-button choice for every future window. A
+    /// user close drops the window before its fullscreen exit is reported;
+    /// the panel's button then builds a fresh one with the preference.
     private func observeFullscreenChoice(of window: NSWindow) {
         let center = NotificationCenter.default
-        let observe = { (name: Notification.Name, apply: @escaping (ReceiverController) -> Void) in
+        let observe = { (name: Notification.Name, apply: @escaping @MainActor (ReceiverController) -> Void) in
+            // Synchronous on .main: a close must stop observing before the
+            // fullscreen exit it causes is delivered.
             center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                Task { @MainActor in if let self { apply(self) } }
+                MainActor.assumeIsolated { if let self { apply(self) } }
             }
         }
         windowObservers = [
-            observe(NSWindow.didEnterFullScreenNotification) { $0.fullscreenSession.userEnteredFullscreen() },
-            observe(NSWindow.didExitFullScreenNotification) { $0.fullscreenSession.userLeftFullscreen() },
-            observe(NSWindow.willCloseNotification) { $0.fullscreenSession.userLeftFullscreen() },
+            observe(NSWindow.didEnterFullScreenNotification) { $0.fullscreenPreference.wantsFullscreen = true },
+            observe(NSWindow.didExitFullScreenNotification) { $0.fullscreenPreference.wantsFullscreen = false },
+            observe(NSWindow.willCloseNotification) {
+                $0.stopObservingWindow()
+                $0.window = nil
+            },
         ]
     }
 
-    /// Windowed at ~70% of the screen when the user has left fullscreen
-    /// this session; otherwise the frame fullscreen returns to.
+    private func stopObservingWindow() {
+        windowObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        windowObservers = []
+    }
+
+    /// Windowed at ~70% of the screen; fullscreen returns here when the user
+    /// leaves it.
     private func initialContentRect(video: CGSize) -> NSRect {
         let visible = NSScreen.screens.first?.visibleFrame.size
             ?? CGSize(width: 1440, height: 900)
