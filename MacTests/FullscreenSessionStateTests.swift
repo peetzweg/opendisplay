@@ -1,26 +1,35 @@
 import XCTest
 
 final class FullscreenSessionStateTests: XCTestCase {
-    func testFirstWindowInSessionEntersFullscreen() {
-        var state = FullscreenSessionState()
+    func testNewSessionWantsFullscreen() {
+        let state = FullscreenSessionState()
 
-        XCTAssertTrue(state.consumeAutoEnterFullscreen())
+        XCTAssertTrue(state.wantsFullscreen)
     }
 
-    func testReopeningWindowInSessionDoesNotReenterFullscreen() {
+    func testLeavingFullscreenIsKeptForTheSession() {
         var state = FullscreenSessionState()
 
-        _ = state.consumeAutoEnterFullscreen()
+        state.userLeftFullscreen()
 
-        XCTAssertFalse(state.consumeAutoEnterFullscreen())
+        XCTAssertFalse(state.wantsFullscreen)
     }
 
-    func testSessionAfterReconnectGraceRearmsFullscreen() {
+    func testReenteringFullscreenIsKeptForTheSession() {
         var state = FullscreenSessionState()
-        _ = state.consumeAutoEnterFullscreen()
+        state.userLeftFullscreen()
+
+        state.userEnteredFullscreen()
+
+        XCTAssertTrue(state.wantsFullscreen)
+    }
+
+    func testNextSessionRearmsFullscreen() {
+        var state = FullscreenSessionState()
+        state.userLeftFullscreen()
 
         state.beginNextSession()
 
-        XCTAssertTrue(state.consumeAutoEnterFullscreen())
+        XCTAssertTrue(state.wantsFullscreen)
     }
 }

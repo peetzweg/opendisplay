@@ -37,6 +37,7 @@ final class ReceiverController: ObservableObject {
     private var screenSleepObservers: [NSObjectProtocol] = []
     private var fullscreenSession = FullscreenSessionState()
     private var fullscreenReconnectTimer: DispatchWorkItem?
+    private var windowObservers: [NSObjectProtocol] = []
 
     private var fallbackName: String { Host.current().localizedName ?? "Mac" }
 
@@ -141,9 +142,9 @@ final class ReceiverController: ObservableObject {
         receiver?.setServiceName(name)
     }
 
-    /// A sender can reconnect after a brief network interruption. Keep a local
-    /// fullscreen exit through that grace period, then re-arm the default once
-    /// the session is genuinely over.
+    /// A sender can reconnect after a brief network interruption. Keep the
+    /// user's fullscreen choice through that grace period, then re-arm the
+    /// default once the session is genuinely over.
     private func handleConnectionChange(_ connected: Bool) {
         self.connected = connected
         fullscreenReconnectTimer?.cancel()
@@ -201,6 +202,7 @@ final class ReceiverController: ObservableObject {
     /// when the user closed the window while the stream keeps running.
     func showWindow() {
         guard let receiver, streaming || window != nil else { return }
+        var created = false
         if window == nil {
             let w = NSWindow(contentRect: initialContentRect(video: receiver.videoSize),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -211,25 +213,49 @@ final class ReceiverController: ObservableObject {
             w.collectionBehavior.insert(.fullScreenPrimary)
             w.center()
             window = w
+            observeFullscreenChoice(of: w)
+            created = true
         }
         // Resizes keep the stream's shape; re-set on every show because a
         // reconnect can arrive with new dimensions in the same window.
         if receiver.videoSize != .zero { window?.contentAspectRatio = receiver.videoSize }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        if fullscreenSession.consumeAutoEnterFullscreen(), let window,
-           !window.styleMask.contains(.fullScreen) {
+        // Only a freshly built window takes the session's choice. An existing
+        // one is either already where the user put it or was closed by them,
+        // and toggling it mid-animation would undo the transition.
+        if created, fullscreenSession.wantsFullscreen, let window {
             window.toggleFullScreen(nil)
         }
     }
 
     private func closeWindow() {
+        // Our own close is not the user's choice: stop listening first so
+        // tearing down a fullscreen window doesn't record "windowed".
+        windowObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        windowObservers = []
         window?.close()
         window = nil
     }
 
-    /// Windowed at ~70% of the screen to start — the green button (native
-    /// full screen) is the "use the whole panel" gesture.
+    /// Record what the user does with the green button and the close button,
+    /// so a window rebuilt later in the session comes back the same way.
+    private func observeFullscreenChoice(of window: NSWindow) {
+        let center = NotificationCenter.default
+        let observe = { (name: Notification.Name, apply: @escaping (ReceiverController) -> Void) in
+            center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                Task { @MainActor in if let self { apply(self) } }
+            }
+        }
+        windowObservers = [
+            observe(NSWindow.didEnterFullScreenNotification) { $0.fullscreenSession.userEnteredFullscreen() },
+            observe(NSWindow.didExitFullScreenNotification) { $0.fullscreenSession.userLeftFullscreen() },
+            observe(NSWindow.willCloseNotification) { $0.fullscreenSession.userLeftFullscreen() },
+        ]
+    }
+
+    /// Windowed at ~70% of the screen when the user has left fullscreen
+    /// this session; otherwise the frame fullscreen returns to.
     private func initialContentRect(video: CGSize) -> NSRect {
         let visible = NSScreen.screens.first?.visibleFrame.size
             ?? CGSize(width: 1440, height: 900)

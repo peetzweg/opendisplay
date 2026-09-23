@@ -1,17 +1,20 @@
-/// Controls the receiver's one-time fullscreen default for each sender session.
-/// The controller starts the next session after its reconnect grace period, so
-/// repeated window presentation within a session preserves the user's fullscreen
-/// choice.
+/// Whether the receiver's video window should be in native fullscreen for the
+/// current sender session. Each session starts wanting fullscreen; leaving it
+/// or closing the window records the user's choice until the session ends. A
+/// window rebuilt within the session (a reconnect inside the sender's grace
+/// period) is restored to that choice rather than the default.
 struct FullscreenSessionState {
-    private var shouldAutoEnterFullscreen = true
+    private(set) var wantsFullscreen = true
 
-    mutating func consumeAutoEnterFullscreen() -> Bool {
-        guard shouldAutoEnterFullscreen else { return false }
-        shouldAutoEnterFullscreen = false
-        return true
+    mutating func userEnteredFullscreen() {
+        wantsFullscreen = true
+    }
+
+    mutating func userLeftFullscreen() {
+        wantsFullscreen = false
     }
 
     mutating func beginNextSession() {
-        shouldAutoEnterFullscreen = true
+        wantsFullscreen = true
     }
 }
