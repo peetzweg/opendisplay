@@ -77,6 +77,20 @@ struct ReceiverScreen: View {
                                    useMetal: metalRenderer)
                         .id(metalRenderer)   // rebuild the layer tree on toggle
                         .ignoresSafeArea()
+                        .allowsHitTesting(model.receiver.displayState == .running)
+                    if model.receiver.displayState == .paused {
+                        VStack(spacing: 8) {
+                            Text("Display Paused")
+                                .font(.headline)
+                            Text("Resume from OpenDisplay on your Mac.")
+                                .font(.subheadline)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 14)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .foregroundStyle(.white)
+                        .allowsHitTesting(false)
+                    }
                     if showAnalytics {
                         VStack {
                             Spacer()
@@ -634,6 +648,10 @@ struct VideoLayerView: UIViewRepresentable {
         view.backgroundColor = .black
         view.isMultipleTouchEnabled = true
         view.receiver = receiver
+        receiver.onDisplayStateChange = { [weak view] state in
+            if state == .paused { view?.clearInputStateForPause() }
+        }
+        if receiver.displayState == .paused { view.clearInputStateForPause() }
 
         Log.info("video view: metal=\(useMetal)")
         if useMetal, let renderer = MetalVideoRenderer() {
@@ -712,6 +730,12 @@ struct VideoLayerView: UIViewRepresentable {
         private var cursorVisible = false
 
         private var lastLoggedLayout = ""
+
+        func clearInputStateForPause() {
+            twoFingerActive = false
+            discardPendingDown()
+            inputEngine.cancelForDisplayPause()
+        }
 
         override func layoutSubviews() {
             super.layoutSubviews()
@@ -1034,6 +1058,11 @@ final class InputCaptureEngine: NSObject {
             hover.allowedTouchTypes = [UITouch.TouchType.pencil.rawValue as NSNumber]
             view.addGestureRecognizer(hover)
         }
+    }
+
+    func cancelForDisplayPause() {
+        activePens.removeAll()
+        proximityActive = false
     }
 
     @objc private func hoverChanged(_ gr: UIHoverGestureRecognizer) {
