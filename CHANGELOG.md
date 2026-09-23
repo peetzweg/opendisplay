@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.22.0](https://github.com/peetzweg/opendisplay/compare/v1.21.0...v1.22.0) (2026-09-23)
+
+
+### Features
+
+* **receiver:** enter fullscreen when streaming starts ([#304](https://github.com/peetzweg/opendisplay/issues/304)) ([04f33ad](https://github.com/peetzweg/opendisplay/commit/04f33adb1a34f07b4bfa088eb12b9a14384239c0))
+
+
+### Bug Fixes
+
+* **readme:** use a transparent app icon ([#305](https://github.com/peetzweg/opendisplay/issues/305)) ([71ed45d](https://github.com/peetzweg/opendisplay/commit/71ed45d907012a58beae225449822f04c9bf0b45))
+
 ## [1.21.0](https://github.com/peetzweg/opendisplay/compare/v1.20.0...v1.21.0) (2026-09-18)
 
 
