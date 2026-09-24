@@ -198,6 +198,9 @@ final class SenderController: ObservableObject {
 
     private var browser: NWBrowser?
     private var usbWatcher: UsbmuxDeviceWatcher?
+    // Screen-unlock / system-wake observers that re-arm attached devices — see
+    // startObservingUnlockAndWake. Kept so they are not deallocated.
+    private var wakeObservers: [NSObjectProtocol] = []
 
     // Connection policy — one session per physical device, and the cable
     // wins whenever it's available (lower, steadier latency than WiFi):
@@ -237,7 +240,7 @@ final class SenderController: ObservableObject {
     // appears later was brought near the Mac mid-session, which is a user
     // action to confirm, not auto-grab.
     private var wifiAutoConnectArmed = false
-    private let wifiAutoConnectDeadline = Date().addingTimeInterval(12)
+    private var wifiAutoConnectDeadline = Date().addingTimeInterval(12)
 
     init() {
         startBrowsing()
@@ -253,6 +256,7 @@ final class SenderController: ObservableObject {
             self.wifiAutoConnectArmed = true
             self.autoConnect()
         }
+        startObservingUnlockAndWake()
     }
 
     private func startBrowsing() {
@@ -268,6 +272,55 @@ final class SenderController: ObservableObject {
         }
         browser.start(queue: .main)
         self.browser = browser
+    }
+
+    // MARK: - Re-arm after screen lock / system sleep
+
+    /// Locking the Mac makes the console non-interactive, so ScreenCaptureKit
+    /// stops the capture; a lock long enough to exhaust capture recovery ends
+    /// the session and tears the virtual display down. Nothing re-armed it
+    /// afterwards because the device never detached — auto-connect only fires
+    /// on a USB attach (or the brief WiFi launch window), so the user had to
+    /// reconnect by hand. These two notifications are that missing trigger.
+    ///
+    /// `autoConnect()` already does the right thing for a device that is still
+    /// attached but has no live session (it dials it again) and for one whose
+    /// session survived a short lock (it dedupes), so no new connection logic
+    /// is needed here.
+    private func startObservingUnlockAndWake() {
+        // Distributed (not the workspace) centre: loginwindow posts these on
+        // unlock, which is the moment the capture stack can come back.
+        let unlock = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.screenIsUnlocked"),
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.reArmAfterWake("screen unlocked") }
+            }
+        // Covers sleep/wake without a lock (e.g. display sleep), where the
+        // session ends the same way.
+        let wake = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.reArmAfterWake("system woke") }
+            }
+        wakeObservers = [unlock, wake]
+    }
+
+    private func reArmAfterWake(_ reason: String) {
+        guard autoConnectEnabled else { return }
+        Log.info("\(reason) — re-arming attached devices")
+        Task { @MainActor in
+            // Returning to the Mac after a lock is a user action as deliberate
+            // as launching the app, so re-open the WiFi auto-connect window the
+            // same way launch does; without this a remembered WiFi device would
+            // still not come back (the launch window closed long ago).
+            self.wifiAutoConnectArmed = true
+            self.wifiAutoConnectDeadline = Date().addingTimeInterval(12)
+            // A wake races WindowServer and ScreenCaptureKit; give them a
+            // moment so the redial does not fail while the display is still
+            // coming back. autoConnect() is otherwise a no-op.
+            try? await Task.sleep(for: .seconds(2))
+            self.autoConnect()
+        }
     }
 
     // MARK: - Physical-device identity
