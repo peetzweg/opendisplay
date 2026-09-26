@@ -1,0 +1,77 @@
+name: Linux
+
+# The Rust workspace in linux/ (protocol crates, fake sender, and later the
+# Linux receiver and sender) is built natively on both architectures it
+# targets. Cross-compiling is deliberately not attempted: the moment
+# GStreamer / libva enter the link it stops being worth it, and arm64
+# hosted runners are free for public repositories.
+on:
+  pull_request:
+    paths:
+      - "linux/**"
+      - "PROTOCOL.md"
+      - ".github/workflows/linux.yml"
+  push:
+    branches: [main]
+    paths:
+      - "linux/**"
+      - "PROTOCOL.md"
+      - ".github/workflows/linux.yml"
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    name: rust (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v6
+
+      # Build-time: GStreamer core/base/app/video headers and libwayland for
+      # od-receiver. Run-time: a software H.264 decoder so the fake-sender ->
+      # receiver test exercises real decode (into fakesink) on the runner.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libwayland-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: linux
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Includes the fake-sender end-to-end run over a real TCP socket against
+      # a ReceiverSession null sink: the protocol conformance check.
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build release binaries
+        run: cargo build --workspace --release

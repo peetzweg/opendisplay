@@ -1,0 +1,15 @@
+# Runs the receiver in the graphical session, fullscreen on the default output.
+#   systemctl --user enable --now od-receiver
+# Override arguments with `systemctl --user edit od-receiver`.
+[Unit]
+Description=OpenDisplay receiver
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/od-receiver
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

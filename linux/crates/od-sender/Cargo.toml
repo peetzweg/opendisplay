@@ -1,0 +1,25 @@
+[package]
+name = "od-sender"
+description = "OpenDisplay sender for Linux: extends a Wayland desktop onto an OpenDisplay receiver (PROTOCOL.md pv 3)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+opendisplay-proto = { workspace = true }
+opendisplay-session = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wayland-client = { workspace = true }
+wayland-protocols = { workspace = true }
+wayland-protocols-wlr = { workspace = true }
+openh264 = { workspace = true }
+mdns-sd = { workspace = true }
+uuid = { workspace = true }
