@@ -2,6 +2,35 @@
 
 **Protocol version (`pv`): 3** &nbsp;|&nbsp; Status: **normative** for `pv <= 3`
 
+This development branch additionally proposes optional hardware input at `pv` 4 and relative desktop pointers at `pv` 5, and precise trackpad scrolling at `pv` 6.
+The minimum supported peer remains 1. Existing framing and message semantics
+below are unchanged. Both peers must advertise `pv >= 4` for the new input path;
+legacy peers continue to use video, touch, scroll and Pencil as before.
+
+| New receiver → sender message | Fields | Meaning |
+| --- | --- | --- |
+| `key` | `code` (integer HID Keyboard/Keypad usage), `down` (Boolean), `mod` (unsigned modifier mask) | Physical key down/up; the Mac owns layout, IME and repeat. |
+| `pointer` | `phase` (`began`, `moved`, `ended`, `cancelled`), `x`, `y`, `button`, `clicks`, `mod` | Normalized pointer move, button or drag. Buttons: 1 primary, 2 secondary, 3 middle. Click count: 1–3. |
+| `pointerRelative` (pv 5) | `phase`, `dx`, `dy`, `button`, `clicks`, `mod` | Relative desktop-point motion and buttons at the current Mac cursor; gated on both peers having pv >= 5. |
+| `trackpadScroll` (pv 6) | `dx`, `dy` (desktop points), `mod`, `phase` (`began`, `changed`, `ended`, `cancelled`) | Continuous trackpad scrolling independent of the capture raster. Ends/cancels carry zero deltas. |
+| `pointerScroll` | `dx`, `dy`, `mod` | Natural-scroll deltas in the same video-pixel units as legacy `scroll`. |
+| `inputReset` | none | Release this session's owned keys and pointer buttons. Idempotent. |
+
+Modifier mask bits 16–21 represent Caps Lock, Shift, Control, Option, Command,
+and Numeric Pad respectively, matching UIKit/AppKit's published masks. Other
+bits are rejected. Coordinates must be finite and in `[0, 1]`; scroll deltas
+must be finite and at most 10000 video pixels per axis per message. Unsupported
+relative pointer deltas must be finite and at most 10000 desktop points per axis. Unsupported
+physical usages are ignored. Integer overflow, wrong field types and invalid
+phases do not reach platform input APIs.
+
+The sender accepts hardware input only during an active capture with
+Accessibility permission. The receiver sends it only while the foreground
+video view owns input; opening local settings or losing focus resets input.
+Stopping capture, disconnecting or replacing a display also releases owned
+input. This is a proposed extension, not a claim of a merged upstream release.
+See [HARDWARE_INPUT.md](HARDWARE_INPUT.md) for implementation and device testing.
+
 This document specifies the wire protocol spoken between an OpenDisplay
 *sender* (the machine whose desktop is extended, the Mac app today) and an
 OpenDisplay *receiver* (the device that shows the extra display, the
@@ -689,7 +718,10 @@ Mechanics at a glance (the policy behind them lives in COMPATIBILITY.md):
 | 3 | `pencil`, `proximity`; below pv 3 the receiver degrades stylus to `touch` |
 | 3 (additive) | `hello.cursorPort` and the UDP cursor side channel (6.3); optional, no bump |
 | 3 (additive) | `hello.videoCaps`, `displayMaxFrameRate`, and `streamConfig` (6.5); legacy peers remain implicit H.264 |
-| 4 (reserved) | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
+| 4 (proposed, local preview) | Optional physical keyboard, absolute pointer, hardware scroll and reset |
+| 5 (proposed, local preview) | Relative whole-desktop pointer, with pv 4 fallback |
+| 6 (proposed, local preview) | Desktop-point continuous scroll phases; legacy scroll remains video-pixel based |
+| Future, unassigned | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
 
 ---
 

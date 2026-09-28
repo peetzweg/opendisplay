@@ -168,6 +168,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var lastHello: PhoneInfo?
     private var helloContinuation: CheckedContinuation<PhoneInfo, Error>?
     private var inputInjector: InputInjector?
+    private let hardwareInputInjector = HardwareInputInjector(displayID: 0)
 
     // Liveness: both sides ping every 2s; if nothing arrives for 5s the link
     // is half-open (e.g. usbmuxd accepted but the device is gone) — reconnect.
@@ -826,6 +827,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                               receiver info: PhoneInfo) async throws {
         try Task.checkCancellation()
         guard !stopped else { throw CancellationError() }
+        hardwareInputInjector.setDisplayID(display.displayID)
         let legacyCeiling: PixelSize?
         if let maxW = info.maxEncodeWide, let maxH = info.maxEncodeHigh,
            maxW > 0, maxH > 0 {
@@ -914,6 +916,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stop() {
         stopped = true
+        hardwareInputInjector.setDisplayID(0)
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
         cursorImageTimer?.cancel()
@@ -1077,6 +1080,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // A retired stream commonly reports its stop after the replacement is
         // already live. It must not tear down that replacement (#203).
         guard stream === self.stream else { return }
+        hardwareInputInjector.releaseAll()
         Log.info("stream stopped with error: \(error)")
         // The user stopped this capture from the system UI (the menu bar's
         // recording indicator / "Stop Extending"). That is a disconnect, not
@@ -1195,6 +1199,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Bookkeeping shared by both transports once a connection is live.
     private func becomeReady(_ conn: NWConnection) {
+        hardwareInputInjector.releaseAll()
         Log.info("connection ready to \(endpointName)")
         connectionGeneration &+= 1
         let readyGeneration = connectionGeneration
@@ -1577,6 +1582,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func scheduleReconnect() {
         guard !stopped else { return }
+        hardwareInputInjector.releaseAll()
         if everConnected {
             if let since = disconnectedSince {
                 if Date().timeIntervalSince(since) > disconnectGraceSeconds {
@@ -2030,6 +2036,33 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     }
                 }
             }
+        case WireMessage.hardwareKey:
+            guard !stopped, stream != nil,
+                  (lastHello?.protocolVersion ?? 1) >= WireProtocol.hardwareInputWireVersion,
+                  let input = HardwareInput.decode(HardwareInput.Key.self, from: payload) else { return }
+            hardwareInputInjector.key(input)
+        case WireMessage.hardwarePointer:
+            guard !stopped, stream != nil,
+                  (lastHello?.protocolVersion ?? 1) >= WireProtocol.hardwareInputWireVersion,
+                  let input = HardwareInput.decode(HardwareInput.Pointer.self, from: payload) else { return }
+            hardwareInputInjector.pointer(input)
+        case WireMessage.relativePointer:
+            guard !stopped, stream != nil,
+                  (lastHello?.protocolVersion ?? 1) >= WireProtocol.relativePointerWireVersion,
+                  let input = HardwareInput.decode(HardwareInput.RelativePointer.self, from: payload) else { return }
+            hardwareInputInjector.relativePointer(input)
+        case WireMessage.preciseScroll:
+            guard !stopped, stream != nil,
+                  (lastHello?.protocolVersion ?? 1) >= WireProtocol.preciseScrollWireVersion,
+                  let input = HardwareInput.decode(HardwareInput.PreciseScroll.self, from: payload) else { return }
+            hardwareInputInjector.preciseScroll(input)
+        case WireMessage.hardwareScroll:
+            guard !stopped, stream != nil,
+                  (lastHello?.protocolVersion ?? 1) >= WireProtocol.hardwareInputWireVersion,
+                  let input = HardwareInput.decode(HardwareInput.Scroll.self, from: payload) else { return }
+            hardwareInputInjector.scroll(input)
+        case WireMessage.hardwareReset:
+            hardwareInputInjector.releaseAll()
         case "touch":
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,

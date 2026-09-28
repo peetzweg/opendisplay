@@ -9,13 +9,86 @@ let deviceKind = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
 /// Landing page — hosts the Mac app download and explains the two-app setup.
 let macAppURL = URL(string: "https://peetzweg.github.io/opendisplay/")!
 
+/// A public UIKit hosting controller supplies iPad pointer lock. The receiver
+/// screen remains SwiftUI; the scene delegate keeps its scenePhase environment.
 @main
-struct OpenSidecarPhoneApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ReceiverScreen()
+final class OpenSidecarPhoneApp: UIResponder, UIApplicationDelegate {
+    private var migratedScenes: [ReceiverSceneDelegate] = []
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        Log.info("receiver application launched")
+        // SwiftUI's old scene configuration is persisted by iPadOS across
+        // updates. A single-window app cannot destroy/reactivate that session;
+        // migrate its existing UIWindowScene to the public hosting controller.
+        DispatchQueue.main.async {
+            for scene in application.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+                guard !(scene.delegate is ReceiverSceneDelegate) else { continue }
+                let delegate = ReceiverSceneDelegate()
+                self.migratedScenes.append(delegate)
+                scene.delegate = delegate
+                delegate.install(in: scene)
+                delegate.updatePhase(scene.activationState == .foregroundActive ? .active : .inactive)
+                Log.info("receiver existing scene migrated")
+            }
+        }
+        return true
+    }
+    func application(_ application: UIApplication,
+                     configurationForConnecting session: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        Log.info("receiver scene configuration requested")
+        let config = UISceneConfiguration(name: "Receiver", sessionRole: session.role)
+        config.sceneClass = UIWindowScene.self
+        config.delegateClass = ReceiverSceneDelegate.self
+        return config
+    }
+}
+
+final class InputHostingController: UIHostingController<AnyView> {
+    var wantsPointerLock = false {
+        didSet {
+            if wantsPointerLock != oldValue { setNeedsUpdateOfPrefersPointerLocked() }
         }
     }
+    override var prefersPointerLocked: Bool { wantsPointerLock }
+}
+
+final class ReceiverSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+    private var controller: InputHostingController?
+    private let sceneState = ReceiverSceneState()
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
+               options: UIScene.ConnectionOptions) {
+        Log.info("receiver scene connected: \(type(of: scene))")
+        guard let scene = scene as? UIWindowScene else { return }
+        install(in: scene)
+    }
+    func install(in scene: UIWindowScene) {
+        let controller = InputHostingController(rootView: AnyView(
+            ReceiverSceneRoot(state: sceneState)))
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = controller
+        self.controller = controller
+        self.window = window
+        window.makeKeyAndVisible()
+    }
+    func updatePhase(_ phase: ScenePhase) {
+        if phase != .active { controller?.wantsPointerLock = false }
+        sceneState.phase = phase
+    }
+    func sceneDidBecomeActive(_ scene: UIScene) { updatePhase(.active) }
+    func sceneWillResignActive(_ scene: UIScene) { updatePhase(.inactive) }
+    func sceneDidEnterBackground(_ scene: UIScene) { updatePhase(.background) }
+}
+
+/// Keep the root view identity and receiver model stable across app switching.
+final class ReceiverSceneState: ObservableObject {
+    @Published var phase: ScenePhase = .inactive
+}
+
+struct ReceiverSceneRoot: View {
+    @ObservedObject var state: ReceiverSceneState
+    var body: some View { ReceiverScreen().environment(\.scenePhase, state.phase) }
 }
 
 // MARK: - Shake to open settings
@@ -44,6 +117,7 @@ struct ReceiverScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    @AppStorage("hardwareInputEnabled") private var hardwareInputEnabled = true
     // First-run onboarding (issue #49): explain the Mac app is required.
     // Shown until either the user dismisses it or the device connects once.
     @AppStorage("hasConnectedBefore") private var hasConnectedBefore = false
@@ -74,7 +148,9 @@ struct ReceiverScreen: View {
                     Color.black.ignoresSafeArea()
                     VideoLayerView(displayLayer: model.receiver.displayLayer,
                                    receiver: model.receiver,
-                                   useMetal: metalRenderer)
+                                   useMetal: metalRenderer,
+                                   hardwareInputEnabled: hardwareInputEnabled && !showSettings
+                                       && !showOnboarding && requiredUpdate == nil)
                         .id(metalRenderer)   // rebuild the layer tree on toggle
                         .ignoresSafeArea()
                     if showAnalytics {
@@ -308,6 +384,7 @@ struct OnboardingView: View {
 // MARK: - Settings / help sheet
 
 struct SettingsView: View {
+    @AppStorage("hardwareInputEnabled") private var hardwareInputEnabled = true
     @ObservedObject var receiver: StreamReceiver
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
@@ -341,6 +418,18 @@ struct SettingsView: View {
                     Text("Name")
                 } footer: {
                     Text("Shown in the Mac app's WiFi connection menu. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
+                }
+
+                Section {
+                    Toggle(String(localized: "Keyboard & trackpad input", table: "InputStrings"), isOn: $hardwareInputEnabled)
+                    KeyboardShortcutSettingsView()
+                    TrackpadSettingsView()
+                } header: {
+                    Text(String(localized: "Input", table: "InputStrings"))
+                } footer: {
+                    Text(receiver.macSupportsHardwareInput
+                         ? String(localized: "Input goes to your Mac only while this app is streaming in the foreground. Use the keyboard layout and input method selected on your Mac. Some iPadOS system shortcuts stay on the iPad.", table: "InputStrings")
+                         : String(localized: "Keyboard and trackpad forwarding needs an updated Mac app. Touch input remains available with older Mac apps.", table: "InputStrings"))
                 }
 
                 Section {
@@ -482,6 +571,43 @@ private struct DeviceNameField: View {
             .autocorrectionDisabled()
             .focused($focused)
             .onChange(of: deviceName) { name in onChange(name) }
+    }
+}
+
+/// Keep shortcut preferences separate from high-frequency receiver statistics.
+struct KeyboardShortcutSettingsView: View {
+    @AppStorage("swapCommandAndOption") private var swapCommandAndOption = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(String(localized: "Mac shortcut mode", table: "InputStrings"), isOn: $swapCommandAndOption)
+            Text(String(localized: "Swap Command and Option only while controlling your Mac. Turn off to restore the usual keys. iPadOS may still reserve its own shortcuts.", table: "InputStrings"))
+                .font(.caption).foregroundStyle(.secondary)
+            if swapCommandAndOption {
+                Text(String(localized: "Use Option instead of Command for Mac shortcuts: Option-Tab switches Mac apps; Option-Space opens Mac search; Option-C/V copies/pastes. Use Command for Mac Option shortcuts. Shift and Control keep their usual roles.", table: "InputStrings"))
+                    .font(.caption)
+            }
+        }
+    }
+}
+
+/// Own storage independently of receiver statistics, so slider drags keep focus.
+struct TrackpadSettingsView: View {
+    @AppStorage("trackpadPointerSpeed") private var pointerSpeed = TrackpadTuning.defaultPointerSpeed
+    @AppStorage("trackpadScrollSpeed") private var scrollSpeed = TrackpadTuning.defaultScrollSpeed
+    @AppStorage("trackpadReverseScroll") private var reverseScroll = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack { Text(String(localized: "Pointer speed", table: "InputStrings")); Spacer(); Text(String(format: "%.2f×", pointerSpeed)).monospacedDigit() }
+            Slider(value: $pointerSpeed, in: 0.5...4, step: 0.05).accessibilityLabel(String(localized: "Pointer speed", table: "InputStrings"))
+            HStack { Text(String(localized: "Scroll speed", table: "InputStrings")); Spacer(); Text(String(format: "%.2f×", scrollSpeed)).monospacedDigit() }
+            Slider(value: $scrollSpeed, in: 0.15...2, step: 0.05).accessibilityLabel(String(localized: "Scroll speed", table: "InputStrings"))
+            Toggle(String(localized: "Reverse scroll direction", table: "InputStrings"), isOn: $reverseScroll)
+            Button(String(localized: "Reset trackpad settings", table: "InputStrings")) {
+                pointerSpeed = TrackpadTuning.defaultPointerSpeed
+                scrollSpeed = TrackpadTuning.defaultScrollSpeed
+                reverseScroll = false
+            }
+        }
     }
 }
 
@@ -628,12 +754,15 @@ struct VideoLayerView: UIViewRepresentable {
     let displayLayer: AVSampleBufferDisplayLayer
     let receiver: StreamReceiver
     let useMetal: Bool
+    let hardwareInputEnabled: Bool
 
     func makeUIView(context: Context) -> VideoView {
-        let view = VideoView()
+        let view = VideoView(frame: .zero)
         view.backgroundColor = .black
         view.isMultipleTouchEnabled = true
         view.receiver = receiver
+        view.normalizeHardwarePoint = { [weak view] point in view?.normalized(point) }
+        view.configureHardwareInput(receiver: receiver, enabled: hardwareInputEnabled)
 
         Log.info("video view: metal=\(useMetal)")
         if useMetal, let renderer = MetalVideoRenderer() {
@@ -664,6 +793,7 @@ struct VideoLayerView: UIViewRepresentable {
         view.inputEngine.install(on: view)
 
         let pan = UIPanGestureRecognizer(target: view, action: #selector(VideoView.didTwoFingerPan(_:)))
+        pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         pan.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 2
         view.addGestureRecognizer(pan)
@@ -689,10 +819,15 @@ struct VideoLayerView: UIViewRepresentable {
 
     func updateUIView(_ uiView: VideoView, context: Context) {
         // videoSize arrives after the format description — re-fit the layers.
+        uiView.configureHardwareInput(receiver: receiver, enabled: hardwareInputEnabled)
         uiView.setNeedsLayout()
     }
 
-    final class VideoView: UIView {
+    static func dismantleUIView(_ uiView: VideoView, coordinator: ()) {
+        uiView.releaseHardwareInput()
+    }
+
+    final class VideoView: HardwareInputCaptureView {
         weak var receiver: StreamReceiver?
         var metalRenderer: MetalVideoRenderer?
         let inputEngine = InputCaptureEngine()
@@ -968,6 +1103,8 @@ struct VideoLayerView: UIViewRepresentable {
         }
 
         private func routeTouches(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?, ended: Bool) {
+            let pointerHandled = forwardPointerTouches(phase, touches, event)
+            let touches = pointerHandled ? touches.filter { $0.type != .indirectPointer } : touches
             let pencil = touches.filter { isPencil($0) }
             let finger = touches.filter { isFinger($0) }
             let usePencilWire = receiver?.macSupportsPencilWire ?? false

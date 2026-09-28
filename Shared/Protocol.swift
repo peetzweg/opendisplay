@@ -11,7 +11,12 @@ import Foundation
 /// protocol 1 — that's every install in the field that predates the handshake.
 enum WireProtocol {
     /// The protocol version this build speaks.
-    static let version = 3
+    static let version = 6
+
+    /// Optional hardware keyboard and pointer input, without raising the floor.
+    static let hardwareInputWireVersion = 4
+    static let relativePointerWireVersion = 5
+    static let preciseScrollWireVersion = 6
 
     /// Protocol version that introduced Apple Pencil / proximity wire messages.
     /// Peers below this get pencil input as legacy `touch` events.
@@ -30,6 +35,12 @@ enum WireProtocol {
 /// existing types (`hello`, `ping`, `pong`, `touch`, …) stay inline for now to
 /// keep this change additive and low-risk; unify later if we do a wider pass.
 enum WireMessage {
+    static let hardwareKey = "key"
+    static let hardwarePointer = "pointer"
+    static let hardwareScroll = "pointerScroll"
+    static let preciseScroll = "trackpadScroll"
+    static let relativePointer = "pointerRelative"
+    static let hardwareReset = "inputReset"
     static let welcome = "welcome"                  // Mac -> phone: Mac's pv + min supported
     static let updateRequired = "updateRequired"    // Mac -> phone: peer is below the Mac's floor
     static let sleeping = "sleeping"                // phone -> Mac: device locked, reconnect on wake

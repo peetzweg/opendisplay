@@ -1,6 +1,7 @@
 name: OpenSidecar
 options:
   createIntermediateGroups: true
+  developmentLanguage: en
 # Swift Package Manager dependencies. Sparkle powers the macOS app's
 # out-of-store auto-update (issue #52); it's an embedded open-source
 # framework + CLI tooling, not a hosted service — the appcast feed and the
@@ -34,6 +35,7 @@ settings:
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.9"
+    SWIFT_EMIT_LOC_STRINGS: YES
     # Version defaults for local builds. CI overrides both via xcargs:
     # MARKETING_VERSION from the release tag, CURRENT_PROJECT_VERSION from
     # the GitHub Actions run number (monotonic, keeps TestFlight builds unique).
@@ -150,6 +152,11 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - MacTests
+      - Mac/HardwareInputInjector.swift
+      - Shared/HardwareInput.swift
+      - Shared/HardwareKeyboardMapping.swift
+      - Shared/TrackpadTuning.swift
+      - Shared/InputStrings.xcstrings
       - Mac/DisplayArrangement.swift
       - Mac/StreamConfiguration.swift
       - Mac/VirtualCanvasSizing.swift
@@ -187,6 +194,13 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         UIRequiresFullScreen: true
+        UIApplicationSupportsIndirectInputEvents: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Receiver
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).ReceiverSceneDelegate
         NSLocalNetworkUsageDescription: OpenDisplay advertises itself on the local network so your Mac can connect over WiFi.
         NSBonjourServices: ["_opensidecar._tcp"]
         UISupportedInterfaceOrientations:

@@ -76,6 +76,11 @@ final class StreamReceiver: ObservableObject {
     @Published private(set) var macProtocolVersion = WireProtocol.assumedWhenAbsent
 
     /// True when the connected Mac understands pencil/proximity wire messages.
+    var macSupportsPreciseScroll: Bool { macProtocolVersion >= WireProtocol.preciseScrollWireVersion }
+    var macSupportsRelativePointer: Bool { macProtocolVersion >= WireProtocol.relativePointerWireVersion }
+    var macSupportsHardwareInput: Bool { macProtocolVersion >= WireProtocol.hardwareInputWireVersion }
+
+
     var macSupportsPencilWire: Bool { macProtocolVersion >= WireProtocol.pencilWireVersion }
 
     private var listener: NWListener?
@@ -428,6 +433,7 @@ final class StreamReceiver: ObservableObject {
                 return
             }
             Log.info("closing session — announcing \(type) to the Mac")
+            self.resetHardwareInput()
             self.sendControl(["type": type], on: conn) {
                 self.queue.async { finish() }
             }
@@ -1017,6 +1023,49 @@ final class StreamReceiver: ObservableObject {
             if let error { Log.info("control send error: \(error)") }
             completion?()
         })
+    }
+
+    /// Optional hardware input is silent when paired with a legacy sender.
+    func sendHardwareKey(_ input: HardwareInput.Key) {
+        guard macSupportsHardwareInput, input.isValid else { return }
+        sendControl(["type": WireMessage.hardwareKey, "code": input.code,
+                     "down": input.down, "mod": input.mod])
+    }
+
+    func sendHardwarePointer(_ input: HardwareInput.Pointer) {
+        guard macSupportsHardwareInput, input.isValid else { return }
+        sendControl(["type": WireMessage.hardwarePointer, "phase": input.phase.rawValue,
+                     "x": input.x, "y": input.y, "button": input.button,
+                     "clicks": input.clicks, "mod": input.mod])
+    }
+
+    func sendRelativePointer(_ input: HardwareInput.RelativePointer) {
+        guard macSupportsRelativePointer, input.isValid else { return }
+        sendControl(["type": WireMessage.relativePointer, "phase": input.phase.rawValue,
+                     "dx": input.dx, "dy": input.dy, "button": input.button,
+                     "clicks": input.clicks, "mod": input.mod])
+    }
+
+    func sendPreciseScroll(_ input: HardwareInput.PreciseScroll, legacyPixelScale: Double = 2) {
+        guard input.isValid else { return }
+        if macSupportsPreciseScroll {
+            sendControl(["type": WireMessage.preciseScroll, "dx": input.dx, "dy": input.dy,
+                         "mod": input.mod, "phase": input.phase.rawValue])
+        } else if input.phase == .began || input.phase == .changed {
+            sendHardwareScroll(.init(dx: input.dx * legacyPixelScale,
+                                     dy: input.dy * legacyPixelScale, mod: input.mod))
+        }
+    }
+
+    func sendHardwareScroll(_ input: HardwareInput.Scroll) {
+        guard macSupportsHardwareInput, input.isValid else { return }
+        sendControl(["type": WireMessage.hardwareScroll,
+                     "dx": input.dx, "dy": input.dy, "mod": input.mod])
+    }
+
+    func resetHardwareInput() {
+        guard macSupportsHardwareInput else { return }
+        sendControl(["type": WireMessage.hardwareReset])
     }
 
     // MARK: - Socket read + length-prefixed deframing
