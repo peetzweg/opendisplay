@@ -495,8 +495,8 @@ instead of a silent failure.
 
 **`streamConfig`** announces the sender's selected video configuration before
 the first video frame and again after a reconnect or stream reconfiguration.
-`codec` is a lowercase token (`"h264"` or opt-in `"hevc"`); `width` and `height` are encoded
-pixels; `framesPerSecond` is the maximum submission rate. Receivers MUST ignore
+`codec` is a lowercase token (`"h264"` or `"hevc"`); `width` and `height` are
+encoded pixels; `framesPerSecond` is the maximum submission rate. Receivers MUST ignore
 unknown fields. A receiver that gets video without `streamConfig` MUST assume
 the legacy H.264 stream. A sender MUST NOT select a non-H.264 codec unless the
 receiver affirmatively advertised it in `videoCaps`.
@@ -518,9 +518,16 @@ be freely combined. Unknown codecs and fields MUST be ignored. The sender
 intersects a receiver entry with its own encoder constraints and the requested
 desktop/quality policy, then reports the result with `streamConfig`.
 
-The official receiver advertises H.264. The Mac receiver may also advertise
-experimental HEVC when explicitly enabled and hardware decode is available.
-HEVC is additive: a peer that ignores the new capability keeps H.264.
+Every official receiver advertises H.264. A receiver with a hardware HEVC
+decoder also advertises HEVC: the Mac receiver up to 5120×2880 at 60 FPS, the
+iOS receiver at 60 FPS with its panel and any decode budget as the limit. HEVC is additive: a peer that ignores the new
+capability keeps H.264.
+
+Codec choice is the sender's, with no user setting. The official sender picks
+HEVC whenever the receiver offers it and the sender has a hardware HEVC
+encoder (Apple silicon today), and H.264 otherwise. If the HEVC encoder
+cannot be created it falls back to H.264 for the rest of its run. Receivers
+MUST take the codec from `streamConfig`, not from the bitstream.
 
 The current H.264 sender also enforces the High@L5.2 frame-size and
 macroblock-rate limits locally. For a 16:9 5K source that codec rule selects

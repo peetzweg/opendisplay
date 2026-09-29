@@ -82,6 +82,19 @@ struct VideoStreamConfiguration: Equatable {
         }
     }
 
+    /// Codec policy, no user switch: HEVC whenever the receiver offers it and
+    /// this Mac has a hardware HEVC encoder, else H.264. At the same raster the
+    /// two encode equally fast on Apple silicon, and HEVC is sharper after every
+    /// change and on slow links; above H.264's level limit it is the only way
+    /// to send a 5K panel 1:1 (research/hevc-m5-2026-09-29).
+    static func preferredCodec(receiverCapabilities: [VideoCapability]?,
+                               senderEncodesHEVC: Bool) -> String {
+        guard senderEncodesHEVC,
+              receiverCapabilities?.contains(where: { $0.codec.lowercased() == hevcCodec }) == true
+        else { return h264Codec }
+        return hevcCodec
+    }
+
     static func make(source: PixelSize,
                      quality: StreamQuality,
                      codec: String = h264Codec,

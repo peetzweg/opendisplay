@@ -59,7 +59,7 @@ pipeline, USB transport, input injection) are already working.
   like a trackpad. (Apple Pencil support is on the roadmap.)
 - 🔄 **Portrait or landscape** — rotate the device and the virtual display
   rebuilds itself as a vertical monitor at native resolution.
-- ⚡ **Low-latency pipeline** — hardware H.264 encode (VideoToolbox,
+- ⚡ **Low-latency pipeline** — hardware H.264 or HEVC encode (VideoToolbox,
   real-time mode, no B-frames), TCP_NODELAY, frame-drop backpressure with
   keyframe recovery, decode-and-render via `AVSampleBufferDisplayLayer`.
 - 💻 **A spare Mac as a display** — install the small *OpenDisplay
@@ -99,7 +99,7 @@ iPhone app open in the foreground. USB mode is unaffected.
 charge-only USB cable will **not** work. Look for a cable described as a
 *data*, *sync*, or *charging and data-transfer* cable. A data-capable USB 2.0
 cable is enough; USB 3, Thunderbolt, and video Alt Mode are not required.
-OpenDisplay streams H.264 over a TCP connection through macOS's built-in
+OpenDisplay streams video over a TCP connection through macOS's built-in
 `usbmuxd`, not as a USB video device. Its highest-quality preset uses 18 Mb/s,
 well below USB 2.0's 480 Mb/s high-speed link rate, so USB 2.0 has ample
 bandwidth for the stream. USB 1.x is not supported or tested. For best
@@ -130,25 +130,37 @@ Input from the receiving Mac's keyboard and mouse is a follow-up
 
 **Do the Larger Text / More Space display settings affect a Mac receiver?**
 Yes, in Extend mode. OpenDisplay gives the extended desktop the receiver's
-working area at Retina scale, up to what the video stream can carry. The stream
-tops out at 4096×2304 pixels (the H.264 limit), so the desktop is capped at
-2048×1152 points. Every captured pixel is then sent 1:1 instead of a bigger
-desktop being shrunk before encoding, which is what keeps text sharp.
+working area at Retina scale, up to what the video stream can carry, so every
+captured pixel is sent 1:1 instead of a bigger desktop being shrunk before
+encoding. That is what keeps text sharp.
 
-On a 5K iMac this means **Default** and **More Space** both give a
-2048×1152-point desktop. Settings toward **Larger Text** are used as they are:
-for example 1600×900 points, streamed at 3200×1800. They are lighter on
-encoding and the network, so they can be noticeably smoother, especially over
-WiFi. The sender's Best/Balanced/Fast setting can reduce the transmitted image
-further without changing the desktop's working area. In Mirror mode, the
+How far that goes depends on the codec, which OpenDisplay picks for you:
+
+- **HEVC** is used when the sending Mac has Apple silicon and the receiving
+  Mac has a hardware HEVC decoder (most Macs from 2017 on). The stream goes up
+  to 5120×2880, so a 5K iMac at **Default** gets its full 2560×1440-point
+  desktop, sent pixel for pixel.
+- **H.264** is used otherwise. Its stream tops out at 4096×2304, so a 5K iMac
+  gets a 2048×1152-point desktop.
+
+**More Space** gives no extra room beyond that cap, and settings toward
+**Larger Text** are used as they are: for example 1600×900 points, streamed at
+3200×1800. Smaller streams are lighter on encoding and the network, so they
+can be noticeably smoother. A full 5K picture is a lot of pixels: moving
+content at 5K runs at about 30 fps even on an M5 Pro, limited by the sending
+Mac's encoder. The sender's Best/Balanced/Fast setting reduces the transmitted
+image further without changing the desktop's working area. In Mirror mode, the
 sending Mac's display determines the capture resolution, so the receiver's
-display setting has much less effect. A full 5K stream, with room for a
-2560×1440-point desktop, is tracked in
-[#322](https://github.com/peetzweg/opendisplay/issues/322).
+display setting has much less effect.
 
-**Why H.264 and not HEVC/AV1?** Hardware H.264 encode/decode is universally
-fast and the latency is excellent. HEVC is a planned option for better
-quality-per-bit.
+**Why H.264 and HEVC, and not AV1?** Both have fast hardware encode and
+decode, and the latency is excellent. At the same resolution they run at the
+same frame rate on Apple silicon, but HEVC is sharper right after a window
+change and holds detail much better on a slow link. It is also the only way to
+send a 5K panel 1:1. So OpenDisplay uses HEVC whenever both Macs support it in
+hardware and falls back to H.264 everywhere else, with nothing to configure.
+iPhones and iPads with an A9 chip or later decode HEVC too. Measurements:
+[research/hevc-m5-2026-09-29](research/hevc-m5-2026-09-29/README.md).
 
 **Is my screen content sent anywhere?** No. One direct TCP connection
 between your Mac and your device, over your cable or your LAN. No servers,
@@ -201,7 +213,7 @@ ship for any of these platforms later.
 MAC (sender)                                      iPHONE / iPAD (receiver)
 CGVirtualDisplay  ← macOS believes a monitor is attached
    → ScreenCaptureKit (capture the virtual display)
-   → VideoToolbox H.264 (hardware, real-time)
+   → VideoToolbox H.264 or HEVC (hardware, real-time)
    → TCP  [4-byte length][Annex B frame]  ═══════→  NWListener :9000
                                                       → AVSampleBufferDisplayLayer
    ← JSON control messages (hello, touch, scroll) ═══

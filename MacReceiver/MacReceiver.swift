@@ -11,6 +11,7 @@
 
 import AppKit
 import AVFoundation
+import VideoToolbox
 import Combine
 import IOKit.pwr_mgt
 import SwiftUI
@@ -47,12 +48,20 @@ final class ReceiverController: ObservableObject {
         // receive it as an H.264 capability and intersect it with their own
         // codec constraints. 4096x2304 is the practical H.264 hardware-decode
         // ceiling measured across Intel and Apple-silicon Macs, rather than an
-        // iMac-model exception. A 5K/6K panel keeps its full desktop geometry
-        // while the video is scaled. Revisit the envelope with the HEVC path.
+        // iMac-model exception.
+        //
+        // With a hardware HEVC decoder we also offer HEVC up to 5120x2880, so
+        // 4K and 5K panels can be sent 1:1 (the sender prefers HEVC). 5K is the
+        // largest raster measured live, on the oldest such Mac tested (a 2017
+        // Intel iMac); larger panels get a 5K stream scaled to fit.
+        let hevc = VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)
+            ? VideoCapability(codec: "hevc", maxWidth: 5120, maxHeight: 2880, maxFrameRate: 60)
+            : nil
         let receiver = StreamReceiver(displayLayer: AVSampleBufferDisplayLayer(),
                                       deviceKind: "Mac",
                                       fallbackServiceName: fallbackName,
-                                      maxEncodeWide: 4096, maxEncodeHigh: 2304)
+                                      maxEncodeWide: 4096, maxEncodeHigh: 2304,
+                                      hevcCapability: hevc)
         let saved = UserDefaults.standard.string(forKey: "receiverName")
         receiver.serviceName = (saved?.isEmpty == false) ? saved! : fallbackName
         announcePanel(to: receiver)

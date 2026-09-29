@@ -119,10 +119,6 @@ final class StreamReceiver: ObservableObject {
     private let idleFrameDumper = IdleFrameDumper.makeIfEnabled()
     #endif
     private var streamCodec = "h264"
-    private var hevcAvailable: Bool {
-        deviceKind == "Mac" && UserDefaults.standard.bool(forKey: "hevcExperimental")
-            && VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)
-    }
     private var vps: Data?
     private var sps: Data?
     private var pps: Data?
@@ -233,6 +229,9 @@ final class StreamReceiver: ObservableObject {
     // Decode ceiling advertised in hello (PROTOCOL.md 6.5): the largest
     // stream this machine can actually sustain, which a big panel says
     // nothing about. nil = advertise nothing (sender streams full size).
+    /// HEVC decode offer (PROTOCOL.md 6.6); nil advertises H.264 only. The
+    /// platform app decides, from its hardware decoder and tested limits.
+    private let hevcCapability: VideoCapability?
     private let maxEncodeWide: Int?
     private let maxEncodeHigh: Int?
     /// Decoder throughput ceiling advertised in `hello.videoCaps`
@@ -327,8 +326,10 @@ final class StreamReceiver: ObservableObject {
 
     init(displayLayer: AVSampleBufferDisplayLayer, deviceKind: String,
          fallbackServiceName: String,
-         maxEncodeWide: Int? = nil, maxEncodeHigh: Int? = nil) {
+         maxEncodeWide: Int? = nil, maxEncodeHigh: Int? = nil,
+         hevcCapability: VideoCapability? = nil) {
         self.displayLayer = displayLayer
+        self.hevcCapability = hevcCapability
         self.deviceKind = deviceKind
         self.fallbackServiceName = fallbackServiceName
         self.maxEncodeWide = maxEncodeWide
@@ -823,7 +824,7 @@ final class StreamReceiver: ObservableObject {
             // H.264 remains implicit for old senders. New senders announce the
             // codec before the first binary frame.
             let codec = (obj["codec"] as? String)?.lowercased() ?? "h264"
-            guard codec == "h264" || (codec == "hevc" && hevcAvailable) else {
+            guard codec == "h264" || (codec == "hevc" && hevcCapability != nil) else {
                 Log.info("unsupported stream codec selected: \(codec)")
                 return
             }
@@ -916,9 +917,14 @@ final class StreamReceiver: ObservableObject {
         }
         if let maxPixelsPerSecond { h264["maxPixelsPerSecond"] = maxPixelsPerSecond }
         var videoCaps = [h264]
-        if hevcAvailable {
-            videoCaps.append(["codec": "hevc", "maxWidth": 5120,
-                              "maxHeight": 2880, "maxFrameRate": 60])
+        if let hevc = hevcCapability {
+            var entry: [String: Any] = ["codec": "hevc"]
+            if let v = hevc.maxWidth { entry["maxWidth"] = v }
+            if let v = hevc.maxHeight { entry["maxHeight"] = v }
+            if let v = hevc.maxFrameRate { entry["maxFrameRate"] = v }
+            // The decode budget describes the device's decoder, not a codec.
+            if let v = hevc.maxPixelsPerSecond ?? maxPixelsPerSecond { entry["maxPixelsPerSecond"] = v }
+            videoCaps.append(entry)
         }
         hello["videoCaps"] = videoCaps
         // Additive capability: only offered while the UDP listener is bound,

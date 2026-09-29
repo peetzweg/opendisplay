@@ -321,7 +321,7 @@ export default function App() {
           <h2>A true extended display, the way it should be.</h2>
           <div className="fgrid">
             <div className="fcell"><span className="n">001</span><h3>No account, ever</h3><p>No sign-up, no email, no login. And unlike Apple Sidecar — which only works between devices on the <em>same</em> Apple ID — OpenDisplay pairs across different Apple IDs, so you can use a partner's or friend's iPad. Download both apps and go.</p></div>
-            <div className="fcell"><span className="n">002</span><h3>Low-latency pipeline</h3><p>Up to 60 FPS over USB. Hardware H.264 (VideoToolbox real-time mode), TCP_NODELAY, and frame-dropping backpressure with instant keyframe recovery keep it responsive.</p></div>
+            <div className="fcell"><span className="n">002</span><h3>Low-latency pipeline</h3><p>Up to 60 FPS over USB. Hardware H.264 or HEVC (VideoToolbox real-time mode), TCP_NODELAY, and frame-dropping backpressure with instant keyframe recovery keep it responsive.</p></div>
             <div className="fcell"><span className="n">003</span><h3>Two, even three screens</h3><p>You're not limited to one device. Run several iPads and iPhones at once, each as its own extended display — up to three has been tested, and you can freely mix iPads and iPhones. Arrange them all in System Settings like real monitors.</p></div>
             <div className="fcell"><span className="n">004</span><h3>Retina sharp</h3><p>Native Retina resolution — the virtual display matches your device panel pixel-for-pixel at HiDPI (@2x), so text looks exactly like it should.</p></div>
             <div className="fcell"><span className="n">005</span><h3>USB-wired, lowest latency</h3><p>Streams over your charging cable via usbmux. No network, no jitter — and your phone charges while it works.</p></div>
@@ -438,11 +438,12 @@ export default function App() {
             <details>
               <summary>Why is the desktop on my 5K iMac smaller than its resolution?</summary>
               <p>OpenDisplay gives the extended desktop the receiver's working area at Retina scale, up
-              to what the video stream can carry sharply. The stream tops out at 4096×2304 pixels, so
-              on a 5K iMac the desktop is 2048×1152 points, whether the iMac is set to Default or More
-              Space. Every pixel is sent 1:1 instead of a bigger desktop being shrunk first, which keeps
-              text crisp. Settings toward Larger Text are used as they are and run smoother, especially
-              over WiFi. A full 5K stream is on the roadmap.</p>
+              to what the video stream can carry, and sends every pixel 1:1 so text stays crisp. When the
+              sending Mac has Apple silicon and the iMac can decode HEVC in hardware, the stream goes up to
+              5120×2880 and the iMac gets its full 2560×1440 desktop at Default. Otherwise the stream uses
+              H.264, which tops out at 4096×2304, and the desktop is 2048×1152 points. More Space adds no
+              room beyond that. Settings toward Larger Text are used as they are and run smoother,
+              especially over WiFi.</p>
             </details>
             <details>
               <summary>Is any of my screen data sent to a server?</summary>

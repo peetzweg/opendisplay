@@ -1,4 +1,5 @@
 import SwiftUI
+import VideoToolbox
 import AVFoundation
 import UIKit
 import Combine
@@ -494,9 +495,16 @@ final class ReceiverModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     init() {
+        // Offer HEVC wherever the hardware decodes it (A9 and later; the A8/A8X
+        // iPads stay on H.264). Panels here fit H.264's raster anyway, so HEVC
+        // buys quality per bit, which matters most over WiFi.
+        let hevc = VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)
+            ? VideoCapability(codec: "hevc", maxFrameRate: 60)
+            : nil
         receiver = StreamReceiver(displayLayer: AVSampleBufferDisplayLayer(),
                                   deviceKind: deviceKind,
-                                  fallbackServiceName: UIDevice.current.name)
+                                  fallbackServiceName: UIDevice.current.name,
+                                  hevcCapability: hevc)
         // Announce the native panel size to the Mac.
         let native = UIScreen.main.nativeBounds.size   // portrait pixels
         receiver.setNativePanel(long: Int(max(native.width, native.height)),

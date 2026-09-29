@@ -246,6 +246,72 @@ final class StreamConfigurationTests: XCTestCase {
         XCTAssertEqual(config.framesPerSecond, 60)
     }
 
+    private let hevcMacReceiver = [
+        VideoCapability(codec: "h264", maxWidth: 4096, maxHeight: 2304, maxFrameRate: 60),
+        VideoCapability(codec: "hevc", maxWidth: 5120, maxHeight: 2880, maxFrameRate: 60),
+    ]
+
+    func testSenderPrefersHEVCWheneverBothSidesCanDoItInHardware() {
+        XCTAssertEqual(VideoStreamConfiguration.preferredCodec(
+            receiverCapabilities: hevcMacReceiver, senderEncodesHEVC: true), "hevc")
+        XCTAssertEqual(VideoStreamConfiguration.preferredCodec(
+            receiverCapabilities: hevcMacReceiver, senderEncodesHEVC: false), "h264")
+        XCTAssertEqual(VideoStreamConfiguration.preferredCodec(
+            receiverCapabilities: [VideoCapability(codec: "h264")], senderEncodesHEVC: true), "h264")
+        XCTAssertEqual(VideoStreamConfiguration.preferredCodec(
+            receiverCapabilities: nil, senderEncodesHEVC: true), "h264")
+        XCTAssertEqual(VideoStreamConfiguration.preferredCodec(
+            receiverCapabilities: [VideoCapability(codec: "HEVC")], senderEncodesHEVC: true), "hevc")
+    }
+
+    func testHEVCCanvasFollowsThePanelUpToItsCapability() {
+        let legacy = PixelSize(width: 4096, height: 2304)
+        let cases: [(PixelSize, PixelSize)] = [
+            (PixelSize(width: 3840, height: 2160), PixelSize(width: 3840, height: 2160)),  // 4K display
+            (PixelSize(width: 4096, height: 2304), PixelSize(width: 4096, height: 2304)),  // 21.5" 4K iMac
+            (PixelSize(width: 5120, height: 2880), PixelSize(width: 5120, height: 2880)),  // 5K at Default
+            (PixelSize(width: 6400, height: 3600), PixelSize(width: 5120, height: 2880)),  // 5K at More Space
+            (PixelSize(width: 6016, height: 3384), PixelSize(width: 5120, height: 2880)),  // 6K display
+            (PixelSize(width: 3024, height: 1964), PixelSize(width: 3024, height: 1964)),  // MacBook Pro 14"
+        ]
+        for (panel, expected) in cases {
+            let canvas = VideoStreamConfiguration.canvasPixels(
+                forReceiver: panel, codec: "hevc", legacyCeiling: legacy,
+                receiverCapabilities: hevcMacReceiver, displayMaxFrameRate: 60)
+            XCTAssertEqual(canvas.width, expected.width, "\(panel)")
+            XCTAssertLessThanOrEqual(abs(canvas.height - expected.height), 2, "\(panel)")
+        }
+    }
+
+    func testHEVCPresetsOnFiveKScaleFromThePanelAtFullRate() throws {
+        let panel = PixelSize(width: 5120, height: 2880)
+        let canvas = VideoStreamConfiguration.canvasPixels(
+            forReceiver: panel, codec: "hevc", receiverCapabilities: hevcMacReceiver)
+        let expected: [(StreamQuality, PixelSize)] = [
+            (.best, PixelSize(width: 5120, height: 2880)),
+            (.balanced, PixelSize(width: 3840, height: 2160)),
+            (.fast, PixelSize(width: 2560, height: 1440)),
+        ]
+        for (quality, size) in expected {
+            let config = try VideoStreamConfiguration.makeForCanvas(
+                canvas, panel: panel, quality: quality, codec: "hevc",
+                receiverCapabilities: hevcMacReceiver)
+            XCTAssertEqual(config.codec, "hevc")
+            XCTAssertEqual(config.encodedSize, size, "\(quality)")
+            XCTAssertEqual(config.framesPerSecond, 60, "\(quality)")
+        }
+    }
+
+    func testH264FallbackFromAnHEVCSizedCanvasStaysInsideTheH264Level() throws {
+        // The encoder fallback keeps the 5K canvas it already built.
+        let config = try VideoStreamConfiguration.makeForCanvas(
+            PixelSize(width: 5120, height: 2880), panel: PixelSize(width: 5120, height: 2880),
+            quality: .best, codec: "h264", legacyCeiling: PixelSize(width: 4096, height: 2304),
+            receiverCapabilities: hevcMacReceiver)
+        XCTAssertEqual(config.codec, "h264")
+        XCTAssertEqual(config.encodedSize, PixelSize(width: 4096, height: 2304))
+    }
+
     func testOddDimensionsRoundDownAndPreserveAspectWhenCapped() throws {
         let config = try VideoStreamConfiguration.make(
             source: PixelSize(width: 4097, height: 2305), quality: .best,
