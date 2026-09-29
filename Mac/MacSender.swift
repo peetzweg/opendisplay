@@ -39,7 +39,7 @@ struct PhoneInfo: Decodable {
     let addrs: [String]?  // every address the receiver is reachable on
                           // (PROTOCOL.md 6.4); probed for a cable upgrade
     let maxEncodeWide: Int?  // receiver's decode ceiling in pixels (PROTOCOL.md
-    let maxEncodeHigh: Int?  //  6.5): cap the stream, keep the desktop size
+    let maxEncodeHigh: Int?  //  6.5): caps the stream, and with it the desktop
     let displayMaxFrameRate: Int?       // presentation ceiling; absent = legacy 60
     let videoCaps: [VideoCapability]?   // codec-specific joint decode constraints
 
@@ -672,7 +672,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         defer { reconfiguring = false }
         var target = info
         while !stopped {
-            Log.info("reconfiguring stream for \(target.pixelsWide)x\(target.pixelsHigh)")
+            Log.info("reconfiguring stream for a \(target.pixelsWide)x\(target.pixelsHigh) panel")
             // A cached frame is valid for a network reconnect to the same
             // display, but never for a rotation: it belongs to the retired
             // desktop and can otherwise be replayed onto the new one.
@@ -734,7 +734,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     /// Apply a rotated mode when needed and restart the capture/encoder pieces.
-    /// A capability-only update leaves the virtual display mode untouched.
+    /// The canvas follows the panel and the stream cap (`canvasPixels`), so a
+    /// capability update that changes the cap also resizes the desktop.
     /// Returns false only when there is no reusable display or its previous
     /// canvas cannot be recovered, letting the caller rebuild as a last resort.
     private func resizeExistingDisplay(for info: PhoneInfo) async throws -> Bool {
@@ -880,12 +881,23 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         try Task.checkCancellation()
         guard !stopped else { throw CancellationError() }
         let legacyCeiling = legacyEncodeCeiling(for: info)
-        let selected = try H264StreamConfiguration.make(
-            source: PixelSize(width: sourcePixelsWide, height: sourcePixelsHigh),
-            quality: quality,
-            legacyCeiling: legacyCeiling,
-            receiverCapabilities: info.videoCaps,
-            displayMaxFrameRate: info.displayMaxFrameRate)
+        let source = PixelSize(width: sourcePixelsWide, height: sourcePixelsHigh)
+        // Extend captures our own virtual display, whose canvas may be capped
+        // below the panel; presets keep scaling from the panel (#322).
+        let selected = mode == .extend
+            ? try H264StreamConfiguration.makeForCanvas(
+                source,
+                panel: PixelSize(width: info.pixelsWide, height: info.pixelsHigh),
+                quality: quality,
+                legacyCeiling: legacyCeiling,
+                receiverCapabilities: info.videoCaps,
+                displayMaxFrameRate: info.displayMaxFrameRate)
+            : try H264StreamConfiguration.make(
+                source: source,
+                quality: quality,
+                legacyCeiling: legacyCeiling,
+                receiverCapabilities: info.videoCaps,
+                displayMaxFrameRate: info.displayMaxFrameRate)
         let pixelsWide = selected.encodedSize.width
         let pixelsHigh = selected.encodedSize.height
         let sourceDescription = "\(sourcePixelsWide)x\(sourcePixelsHigh)"

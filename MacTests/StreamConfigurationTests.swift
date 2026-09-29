@@ -41,6 +41,57 @@ final class StreamConfigurationTests: XCTestCase {
             receiverCapabilities: [VideoCapability(codec: "hevc")]), panel)
     }
 
+    func testLowerPresetsOnACappedCanvasKeepTheirPanelRaster() throws {
+        // The canvas is capped for Best; Balanced/Fast must still scale from
+        // the 5K panel, not scale the capped canvas down a second time.
+        let panel = PixelSize(width: 5120, height: 2880)
+        let canvas = H264StreamConfiguration.canvasPixels(forReceiver: panel)
+        let expected: [(StreamQuality, PixelSize)] = [
+            (.best, PixelSize(width: 4096, height: 2304)),
+            (.balanced, PixelSize(width: 3840, height: 2160)),
+            (.fast, PixelSize(width: 2560, height: 1440)),
+        ]
+        for (quality, size) in expected {
+            let config = try H264StreamConfiguration.makeForCanvas(
+                canvas, panel: panel, quality: quality)
+            XCTAssertEqual(config.encodedSize, size, "\(quality)")
+        }
+    }
+
+    func testMacReceiverHelloCapsCanvasAndCapturesOneToOne() throws {
+        // What the Mac receiver sends on a 5K iMac: its panel plus the
+        // legacy 4096x2304 decode ceiling.
+        let panel = PixelSize(width: 5120, height: 2880)
+        let ceiling = PixelSize(width: 4096, height: 2304)
+        let canvas = H264StreamConfiguration.canvasPixels(forReceiver: panel,
+                                                          legacyCeiling: ceiling)
+        XCTAssertEqual(canvas, ceiling)
+        let config = try H264StreamConfiguration.makeForCanvas(
+            canvas, panel: panel, quality: .best, legacyCeiling: ceiling)
+        XCTAssertEqual(config.encodedSize, canvas)
+    }
+
+    func testLevelTrimmedCanvasRoundTripsThroughVirtualCanvasSizing() throws {
+        // A 4.5K panel is trimmed by the H.264 level, then rounded to even
+        // points; whatever lands on the display must be captured 1:1.
+        let panel = PixelSize(width: 4480, height: 2520)
+        let canvas = H264StreamConfiguration.canvasPixels(forReceiver: panel)
+        let display = try XCTUnwrap(VirtualCanvasSizing.requested(
+            pixelsWide: canvas.width, pixelsHigh: canvas.height))
+        let onDisplay = PixelSize(width: display.pixelsWide, height: display.pixelsHigh)
+        let config = try H264StreamConfiguration.makeForCanvas(
+            onDisplay, panel: panel, quality: .best)
+        XCTAssertEqual(config.encodedSize, onDisplay)
+    }
+
+    func testDecodeBudgetThatLowersRateLeavesCanvasAtPanel() {
+        let caps = [VideoCapability(codec: "h264", maxFrameRate: 60,
+                                    maxPixelsPerSecond: 522_240 * 256)]
+        let panel = PixelSize(width: 2048, height: 1536)
+        XCTAssertEqual(H264StreamConfiguration.canvasPixels(
+            forReceiver: panel, receiverCapabilities: caps, displayMaxFrameRate: 60), panel)
+    }
+
     func testFiveKIsBoundedByCodecLevelWithoutModelSpecificCeiling() throws {
         let config = try H264StreamConfiguration.make(
             source: PixelSize(width: 5120, height: 2880), quality: .best)

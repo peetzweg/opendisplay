@@ -6,8 +6,9 @@ import VideoToolbox
 
 /// Dev-only sharpness probe (#322): decodes every received sample on a side
 /// session and, once the stream has been quiet for `idle`, writes the settled
-/// frame to `/tmp/od-idle.png`. Debug builds only, enabled with
-/// `-dumpIdleFrames YES`.
+/// frame to `od-idle.png` in `/tmp` (macOS) or the app's temporary directory (iOS).
+/// Debug builds only, enabled with `-dumpIdleFrames YES`; creating
+/// `od-dump-request` there dumps the next frame even if the screen never idles.
 final class IdleFrameDumper {
     static func makeIfEnabled() -> IdleFrameDumper? {
         #if DEBUG
@@ -24,6 +25,17 @@ final class IdleFrameDumper {
     private var lastImage: CVImageBuffer?
     private var framesSinceDump = 0
     private var timer: DispatchSourceTimer?
+    #if os(macOS)
+    private let directory = URL(fileURLWithPath: "/tmp")   // easy to reach over ssh
+    #else
+    private let directory = URL(fileURLWithPath: NSTemporaryDirectory())   // sandboxed
+    #endif
+    private var requestPath: String { directory.appendingPathComponent("od-dump-request").path }
+
+    deinit {
+        timer?.cancel()
+        if let session { VTDecompressionSessionInvalidate(session) }
+    }
 
     func push(_ shared: CMSampleBuffer) {
         // The display path mutates the shared sample's attachments right after
@@ -43,9 +55,8 @@ final class IdleFrameDumper {
         queue.async { [self] in
             decode(sample)
             framesSinceDump += 1
-            // `touch /tmp/od-dump-request` dumps the next frame even if the screen never idles.
-            if FileManager.default.fileExists(atPath: "/tmp/od-dump-request") {
-                try? FileManager.default.removeItem(atPath: "/tmp/od-dump-request")
+            if FileManager.default.fileExists(atPath: requestPath) {
+                try? FileManager.default.removeItem(atPath: requestPath)
                 dump()
             }
             timer?.cancel()
@@ -71,6 +82,8 @@ final class IdleFrameDumper {
             sessionFormat = format
         }
         guard let session else { return }
+        // Flags [] decode synchronously, so the handler runs on this queue
+        // before the call returns and `lastImage` stays queue-confined.
         VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [],
                                           infoFlagsOut: nil) { [weak self] status, _, image, _, _ in
             if status == noErr, let image { self?.lastImage = image }
@@ -91,12 +104,15 @@ final class IdleFrameDumper {
                                   bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
                                       | CGBitmapInfo.byteOrder32Little.rawValue),
               let cg = ctx.makeImage() else { return }
-        let url = URL(fileURLWithPath: "/tmp/od-idle.png")
+        let url = directory.appendingPathComponent("od-idle.png")
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
         else { return }
         CGImageDestinationAddImage(dest, cg, nil)
-        CGImageDestinationFinalize(dest)
-        Log.info("idle frame dumped after \(framesSinceDump) frames")
+        guard CGImageDestinationFinalize(dest) else {
+            Log.info("idle frame dump failed to write \(url.path)")
+            return
+        }
+        Log.info("idle frame dumped to \(url.path) after \(framesSinceDump) frames")
         framesSinceDump = 0
     }
 }

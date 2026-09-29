@@ -1,8 +1,9 @@
 import Foundation
 
-/// Capture-resolution / bitrate trade-off. The virtual display always runs at
-/// native size — only the captured/encoded stream is scaled, so lower presets
-/// cut encode, transmit, and decode work at the cost of sharpness.
+/// Capture-resolution / bitrate trade-off. The virtual display runs at the
+/// receiver's size, capped at the Best stream (`canvasPixels`); presets only
+/// scale the captured/encoded stream, so lower presets cut encode, transmit,
+/// and decode work at the cost of sharpness.
 enum StreamQuality: String, CaseIterable {
     case best, balanced, fast
 
@@ -169,8 +170,8 @@ struct H264StreamConfiguration: Equatable {
     /// panel (a 5K receiver over H.264), a panel-sized canvas would be
     /// downscaled before encoding and upscaled again on the receiver, which
     /// visibly softens text. A canvas at the stream size is captured 1:1 and
-    /// scaled once (#322). Quality presets below Best still scale this canvas
-    /// down on purpose, so the cap always uses Best.
+    /// scaled once (#322). The cap always uses Best; `makeForCanvas` keeps the
+    /// lower presets' raster relative to the panel.
     static func canvasPixels(forReceiver panel: PixelSize,
                              legacyCeiling: PixelSize? = nil,
                              receiverCapabilities: [VideoCapability]? = nil,
@@ -181,6 +182,34 @@ struct H264StreamConfiguration: Equatable {
                                    displayMaxFrameRate: displayMaxFrameRate)
         else { return panel }
         return best.encodedSize
+    }
+
+    /// Stream for an extended desktop whose canvas may be capped below the
+    /// receiver's panel. Quality presets still scale from the panel, as they
+    /// did before the cap, and the result never exceeds the canvas: Best stays
+    /// 1:1, and Balanced/Fast keep their raster instead of scaling the capped
+    /// canvas down a second time.
+    static func makeForCanvas(_ canvas: PixelSize,
+                              panel: PixelSize,
+                              quality: StreamQuality,
+                              legacyCeiling: PixelSize? = nil,
+                              receiverCapabilities: [VideoCapability]? = nil,
+                              displayMaxFrameRate: Int? = nil) throws -> Self {
+        let fromCanvas = try make(source: canvas, quality: quality,
+                                  legacyCeiling: legacyCeiling,
+                                  receiverCapabilities: receiverCapabilities,
+                                  displayMaxFrameRate: displayMaxFrameRate)
+        guard panel != canvas,
+              let fromPanel = try? make(source: panel, quality: quality,
+                                        legacyCeiling: legacyCeiling,
+                                        receiverCapabilities: receiverCapabilities,
+                                        displayMaxFrameRate: displayMaxFrameRate),
+              fromPanel.encodedSize.width <= canvas.width,
+              fromPanel.encodedSize.height <= canvas.height,
+              fromPanel.encodedSize.width * fromPanel.encodedSize.height
+                > fromCanvas.encodedSize.width * fromCanvas.encodedSize.height
+        else { return fromCanvas }
+        return fromPanel
     }
 
     private static func safeH264FrameRate(width: Int, height: Int,

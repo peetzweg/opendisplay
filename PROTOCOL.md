@@ -527,7 +527,7 @@ intersection and `streamConfig` announcement.
 
 `hello.maxEncodeWide` / `maxEncodeHigh` is the legacy H.264 decode ceiling:
 
-`hello.pixelsWide/High` sets the desktop size, and without further
+`hello.pixelsWide/High` sets the desired desktop size, and without further
 information it also sets the stream size — but a big panel says nothing
 about the decoder behind it. Measured end to end, H.264 hardware decode
 stops below 5120 pixels wide on every Mac tested, current models
@@ -537,10 +537,13 @@ cleanly.
 
 Both fields are optional and additive (no `pv` bump). A receiver MAY
 advertise the largest stream, in pixels, it can actually decode at
-frame rate; a sender that understands the fields SHOULD keep the
-desktop at the announced panel size and, when the stream it would
-encode exceeds the ceiling, scale the stream down to fit inside it,
-preserving aspect. A ceiling the stream already fits inside changes
+frame rate; a sender that understands the fields SHOULD, when the
+stream it would encode exceeds the ceiling, scale the stream down to fit
+inside it, preserving aspect. The sender MAY then size the desktop to
+that stream instead of the announced panel, so capture is 1:1 and the
+picture is scaled only once, on the receiver; the reference sender does
+(#322). Receivers need no change either way: `streamConfig` announces
+the stream, and the desktop size is the sender's choice. A ceiling the stream already fits inside changes
 nothing, and a receiver that omits the fields gets the previous
 behavior (stream size follows the announced pixels and the sender's
 quality setting). Derive advertised ceilings from measured playback: a
