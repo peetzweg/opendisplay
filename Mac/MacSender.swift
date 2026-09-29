@@ -428,14 +428,41 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Build (or rebuild) the virtual display + capture for the announced
     /// phone dimensions. Called at startup and again whenever the phone
     /// rotates (it re-sends hello with swapped dimensions).
+    /// Canvas pixels for the receiver's panel: capped at the stream size so
+    /// capture is 1:1 (see `H264StreamConfiguration.canvasPixels`).
+    /// `-canvasAtStreamSize NO` restores a panel-sized canvas for A/B tests.
+    private func canvasPixels(for info: PhoneInfo) -> PixelSize {
+        let panel = PixelSize(width: info.pixelsWide, height: info.pixelsHigh)
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "canvasAtStreamSize") != nil,
+           !defaults.bool(forKey: "canvasAtStreamSize") { return panel }
+        let canvas = H264StreamConfiguration.canvasPixels(
+            forReceiver: panel,
+            legacyCeiling: legacyEncodeCeiling(for: info),
+            receiverCapabilities: info.videoCaps,
+            displayMaxFrameRate: info.displayMaxFrameRate)
+        if canvas != panel {
+            Log.info("canvas capped at the stream size: \(canvas.width)x\(canvas.height) "
+                + "for a \(panel.width)x\(panel.height) panel")
+        }
+        return canvas
+    }
+
+    private func legacyEncodeCeiling(for info: PhoneInfo) -> PixelSize? {
+        guard let maxW = info.maxEncodeWide, let maxH = info.maxEncodeHigh,
+              maxW > 0, maxH > 0 else { return nil }
+        return PixelSize(width: maxW, height: maxH)
+    }
+
     private func setupExtend(_ info: PhoneInfo) async throws {
         Log.info("phone hello: \(info.pixelsWide)x\(info.pixelsHigh) @\(info.scale)x")
 
         // The virtual display runs @2x HiDPI. Large modes are applied only
         // after a conservative bootstrap mode is online; some saved macOS
         // display states reject the same mode when it is present at creation.
+        let canvas = canvasPixels(for: info)
         guard let canvasPlan = VirtualCanvasSizing.plan(
-            pixelsWide: info.pixelsWide, pixelsHigh: info.pixelsHigh) else {
+            pixelsWide: canvas.width, pixelsHigh: canvas.height) else {
             throw NSError(domain: "MacSender", code: 7,
                           userInfo: [NSLocalizedDescriptionKey: "the receiver reported an invalid display size"])
         }
@@ -701,8 +728,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard let vd = virtualDisplay else { return false }
         try ensureActiveDisplay(vd)
 
-        let pointsWide = (info.pixelsWide / 2) & ~1
-        let pointsHigh = (info.pixelsHigh / 2) & ~1
+        let canvas = canvasPixels(for: info)
+        let pointsWide = (canvas.width / 2) & ~1
+        let pointsHigh = (canvas.height / 2) & ~1
         let arrangementKey = info.id ?? String(format: "serial-%08x", displaySerial)
         let size = CGSize(width: pointsWide, height: pointsHigh)
         let previous = VirtualCanvasSize(pointsWide: vd.pointsWide,
@@ -838,13 +866,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                               receiver info: PhoneInfo) async throws {
         try Task.checkCancellation()
         guard !stopped else { throw CancellationError() }
-        let legacyCeiling: PixelSize?
-        if let maxW = info.maxEncodeWide, let maxH = info.maxEncodeHigh,
-           maxW > 0, maxH > 0 {
-            legacyCeiling = PixelSize(width: maxW, height: maxH)
-        } else {
-            legacyCeiling = nil
-        }
+        let legacyCeiling = legacyEncodeCeiling(for: info)
         let selected = try H264StreamConfiguration.make(
             source: PixelSize(width: sourcePixelsWide, height: sourcePixelsHigh),
             quality: quality,

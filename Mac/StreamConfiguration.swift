@@ -164,6 +164,25 @@ struct H264StreamConfiguration: Equatable {
         return selected
     }
 
+    /// The desktop canvas to create for a receiver: its panel, capped at the
+    /// best stream we can send it. When the stream must be smaller than the
+    /// panel (a 5K receiver over H.264), a panel-sized canvas would be
+    /// downscaled before encoding and upscaled again on the receiver, which
+    /// visibly softens text. A canvas at the stream size is captured 1:1 and
+    /// scaled once (#322). Quality presets below Best still scale this canvas
+    /// down on purpose, so the cap always uses Best.
+    static func canvasPixels(forReceiver panel: PixelSize,
+                             legacyCeiling: PixelSize? = nil,
+                             receiverCapabilities: [VideoCapability]? = nil,
+                             displayMaxFrameRate: Int? = nil) -> PixelSize {
+        guard let best = try? make(source: panel, quality: .best,
+                                   legacyCeiling: legacyCeiling,
+                                   receiverCapabilities: receiverCapabilities,
+                                   displayMaxFrameRate: displayMaxFrameRate)
+        else { return panel }
+        return best.encodedSize
+    }
+
     private static func safeH264FrameRate(width: Int, height: Int,
                                           requested: Int) -> Int {
         let macroblocksWide = (width + 15) / 16

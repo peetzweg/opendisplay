@@ -12,6 +12,35 @@ final class StreamConfigurationTests: XCTestCase {
         XCTAssertEqual(config.bitrate, 18_000_000)
     }
 
+    func testFiveKCanvasIsCappedAtTheStreamSoCaptureIsOneToOne() throws {
+        let canvas = H264StreamConfiguration.canvasPixels(
+            forReceiver: PixelSize(width: 5120, height: 2880))
+        XCTAssertEqual(canvas, PixelSize(width: 4096, height: 2304))
+
+        // Selecting a stream from that canvas must not scale it again.
+        let config = try H264StreamConfiguration.make(source: canvas, quality: .best)
+        XCTAssertEqual(config.encodedSize, canvas)
+    }
+
+    func testCanvasKeepsPanelThatFitsTheStream() {
+        let panel = PixelSize(width: 2732, height: 2048)
+        XCTAssertEqual(H264StreamConfiguration.canvasPixels(forReceiver: panel), panel)
+    }
+
+    func testCanvasFollowsReceiverDecodeCeiling() {
+        let canvas = H264StreamConfiguration.canvasPixels(
+            forReceiver: PixelSize(width: 2560, height: 1600),
+            legacyCeiling: PixelSize(width: 1920, height: 1920))
+        XCTAssertEqual(canvas, PixelSize(width: 1920, height: 1200))
+    }
+
+    func testCanvasFallsBackToPanelWhenNoStreamIsPossible() {
+        let panel = PixelSize(width: 2560, height: 1440)
+        XCTAssertEqual(H264StreamConfiguration.canvasPixels(
+            forReceiver: panel,
+            receiverCapabilities: [VideoCapability(codec: "hevc")]), panel)
+    }
+
     func testFiveKIsBoundedByCodecLevelWithoutModelSpecificCeiling() throws {
         let config = try H264StreamConfiguration.make(
             source: PixelSize(width: 5120, height: 2880), quality: .best)
