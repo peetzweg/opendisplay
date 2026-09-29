@@ -1,8 +1,9 @@
 #!/bin/zsh
 # usage: measure.sh label  -> 35 s of motion, summary of the last 5 stats windows
-L="$HOME/Library/Logs/OpenDisplay Dev/opendisplay.log"
-cd /Users/mnml/git/opensidecar.hevc
-swift tools/hevc-motion-test.swift >/dev/null 2>&1 & P=$!
+# Needs exactly one OpenDisplay virtual screen (disconnect other receivers).
+source "$(dirname "$0")/env.sh"
+L=$SENDER_LOG
+swift "$ROOT/tools/quality/motion.swift" >/dev/null 2>&1 & P=$!
 sleep 36; kill $P
 grep PHONE-STATS "$L" | tail -n 5 | python3 -c '
 import sys,json,re,statistics as st

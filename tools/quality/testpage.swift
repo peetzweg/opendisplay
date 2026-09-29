@@ -1,7 +1,7 @@
 // Static sharpness/colour page on the OpenDisplay virtual screen.
 // Writes ground-truth renders of the same view at 2x and 2.5x plus the window's
 // position in virtual-display pixels, then stays up until killed.
-// usage: swift testpage.swift <outdir>
+// usage: testpage <outdir> [static|change|scroll] [frames]  (see tools/quality/README.md)
 import AppKit
 
 let W: CGFloat = 1600, H: CGFloat = 900
@@ -119,7 +119,8 @@ if mode == "change" {
     let n = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "40"
     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        p.arguments = ["-n", "-o", "BatchMode=yes", "imac", "echo \(n) > /tmp/od-dump-request"]; try? p.run(); p.waitUntilExit()
+        p.arguments = ["-n", "-o", "BatchMode=yes", ProcessInfo.processInfo.environment["OD_RECEIVER_HOST"] ?? "imac",
+                        "echo \(n) > /tmp/od-dump-request"]; try? p.run(); p.waitUntilExit()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             page.blank = false; page.needsDisplay = true; print("page shown"); fflush(stdout) }
     }

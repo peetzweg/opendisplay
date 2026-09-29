@@ -1,6 +1,6 @@
 // Draw moving bars on one OpenDisplay virtual screen at 60 Hz so video FPS
 // measurements do not depend on whether the desktop happens to be idle.
-// Run on the sender: swift tools/hevc-motion-test.swift [display-id]
+// Run on the sender: swift tools/quality/motion.swift [display-id]
 import AppKit
 import CoreGraphics
 
@@ -25,7 +25,7 @@ if CommandLine.arguments.count == 1 {
           let id = CGDirectDisplayID(CommandLine.arguments[1]) {
     requestedID = id
 } else {
-    fputs("Usage: swift tools/hevc-motion-test.swift [display-id]\n", stderr)
+    fputs("Usage: swift tools/quality/motion.swift [display-id]\n", stderr)
     exit(2)
 }
 

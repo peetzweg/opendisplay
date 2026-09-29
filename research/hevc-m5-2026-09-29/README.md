@@ -2,16 +2,16 @@
 
 Sender: MacBook Pro (M5 Pro). Receiver: 2017 5K iMac (iMac18,3, Radeon Pro 570, macOS 13) over a Thunderbolt Bridge. Build: `feat/hevc-5k-mac-receiver` rebased onto main after PR 323 (canvas capped at the stream size); the measurements below used its opt-in flag, which the final branch replaces with automatic selection. Tracking: https://github.com/peetzweg/opendisplay/issues/10 and https://github.com/peetzweg/opendisplay/issues/322
 
-All images are crops of a synthetic test page (`tools/testpage.swift`); no desktop content.
+All images are crops of a synthetic test page (`tools/quality/testpage.swift`); no desktop content.
 
 ## Method
 
 - **Test page**: 1600x900 pt window on the virtual display with system and monospaced text from 8 to 15 pt, coloured text on coloured backgrounds, 24 solid patches, gradients, and 1 px lines and checkerboards. The page renders its own ground truth at 2x and 2.5x.
 - **Frames**: the Debug receiver probe (`Shared/IdleFrameDumper.swift`) decodes each received frame on a side session. It saves the settled frame, or the next N frames (`echo N > /tmp/od-dump-request`).
-- **Scores** (`tools/score.py`, `tools/score_seq.py`): PSNR of luma (Y) and chroma (CbCr) per region, plus the CIE76 ΔE of patch centres. "Panel" scores first upscale the stream bilinearly to 5120, as the receiver's layer does (measured equal to bilinear in the 2026-09-29 sharpness study). They then compare against the page rendered natively at that scale.
-- **Motion** (`tools/hevc-motion-test.swift` via `tools/measure.sh`): moving bars at 60 Hz, averaged over 5 sender stats windows. The receiver probe is off during fps runs.
-- **Resolution switching**: the iMac's display mode was switched over ssh with `tools/mode.swift`.
-- The scripts use this session's scratchpad paths; adjust `S=` before reuse.
+- **Scores** (`tools/quality/score.py`, `tools/quality/score_seq.py`): PSNR of luma (Y) and chroma (CbCr) per region, plus the CIE76 ΔE of patch centres. "Panel" scores first upscale the stream bilinearly to 5120, as the receiver's layer does (measured equal to bilinear in the 2026-09-29 sharpness study). They then compare against the page rendered natively at that scale.
+- **Motion** (`tools/quality/motion.swift` via `tools/quality/measure.sh`): moving bars at 60 Hz, averaged over 5 sender stats windows. The receiver probe is off during fps runs.
+- **Resolution switching**: the iMac's display mode was switched over ssh with `tools/quality/mode.swift`.
+- The suite now lives in [`tools/quality`](../../tools/quality/README.md).
 
 ## Frame rate (moving window, receiver fullscreen)
 
@@ -38,7 +38,7 @@ The shipped policy keeps one encode in flight for both codecs, as H.264 always h
 
 ## Receiver decode headroom (2017 iMac, hardware decoder)
 
-`tools/decbench.swift` hardware-encodes a clip on the sender, then decodes it on the iMac as fast as possible. The stress clip changes the whole screen on every frame at the 18 Mbps cap (about 40 KB per frame).
+`tools/quality/decbench.swift` hardware-encodes a clip on the sender, then decodes it on the iMac as fast as possible. The stress clip changes the whole screen on every frame at the 18 Mbps cap (about 40 KB per frame).
 
 | Clip | One frame at a time | Pipelined |
 |---|---:|---:|

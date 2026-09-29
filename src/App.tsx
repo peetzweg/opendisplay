@@ -436,14 +436,19 @@ export default function App() {
               input from the receiving Mac is a follow-up.</p>
             </details>
             <details>
-              <summary>Why is the desktop on my 5K iMac smaller than its resolution?</summary>
-              <p>OpenDisplay gives the extended desktop the receiver's working area at Retina scale, up
-              to what the video stream can carry, and sends every pixel 1:1 so text stays crisp. When the
-              sending Mac has Apple silicon and the iMac can decode HEVC in hardware, the stream goes up to
-              5120×2880 and the iMac gets its full 2560×1440 desktop at Default. Otherwise the stream uses
-              H.264, which tops out at 4096×2304, and the desktop is 2048×1152 points. More Space adds no
-              room beyond that. Settings toward Larger Text are used as they are and run smoother,
-              especially over WiFi.</p>
+              <summary>Which settings give the best picture?</summary>
+              <p>The defaults are already the sharpest setup: the sender on Best, the receiver at its Default
+              display setting, and the video fullscreen. A cable gives steadier latency than WiFi, but it
+              doesn't need to be fast: the stream uses at most 18 Mb/s, so any USB data cable works for iPhone
+              and iPad. For Mac to Mac, a Thunderbolt, USB4, Ethernet or USB-C data cable all give the same picture.
+              Balanced and Fast send fewer pixels: softer, but smoother, with lower latency.</p>
+              <p>On a Mac receiver, the display setting sets the desktop's size, sent 1:1 up to what the codec
+              allows. With an Apple silicon sender and a receiver that decodes HEVC (Apple silicon, most Intel
+              Macs from 2017 on) that is up to 5120×2880, so a 5K iMac at Default gets its full 2560×1440 desktop.
+              Otherwise H.264 tops out at 4096×2304 (a 2048×1152 desktop). More Space never adds room beyond that.
+              Measured from an M5 Pro to a 5K iMac: Default + Best is the sharpest at about 30 fps; one or two
+              steps toward Larger Text (1600×900) keeps text crisp at about 55 fps; Default + Fast is soft but
+              about 58 fps for video. The README has the full table.</p>
             </details>
             <details>
               <summary>Is any of my screen data sent to a server?</summary>

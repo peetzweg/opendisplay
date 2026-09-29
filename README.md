@@ -128,31 +128,72 @@ Thunderbolt 2 cable.
 Input from the receiving Mac's keyboard and mouse is a follow-up
 ([#147](https://github.com/peetzweg/opendisplay/issues/147)).
 
-**Do the Larger Text / More Space display settings affect a Mac receiver?**
-Yes, in Extend mode. OpenDisplay gives the extended desktop the receiver's
-working area at Retina scale, up to what the video stream can carry, so every
-captured pixel is sent 1:1 instead of a bigger desktop being shrunk before
-encoding. That is what keeps text sharp.
+**Which settings give the best picture?** Out of the box OpenDisplay already
+picks the sharpest setup it can, so you rarely need to change anything. The
+defaults are: sender on **Best**, receiver at its **Default** display
+setting, and video filling the receiver's screen (fullscreen). If you want to
+tune it, three things matter.
 
-How far that goes depends on the codec, which OpenDisplay picks for you:
+*1. The connection.* A cable gives steadier latency than WiFi, but it does not
+need to be fast: the stream uses at most 18 Mb/s.
 
-- **HEVC** is used when the sending Mac has Apple silicon and the receiving
-  Mac can decode HEVC in hardware (Apple silicon, and most Intel Macs from
-  2017 on). The stream goes up
-  to 5120×2880, so a 5K iMac at **Default** gets its full 2560×1440-point
-  desktop, sent pixel for pixel.
-- **H.264** is used otherwise. Its stream tops out at 4096×2304, so a 5K iMac
-  gets a 2048×1152-point desktop.
+- iPhone or iPad: any USB data cable (see the USB question above).
+- Mac receiver: a Thunderbolt or USB4 cable, Ethernet, or a USB-C data cable
+  (see *Can another Mac be the display?*). The picture is the same over any of
+  them; a Thunderbolt cable is not sharper than a USB-C data cable.
+- WiFi works well for documents and slower motion. Expect a little more
+  latency and the occasional hitch when the network is busy. 5 GHz or 6 GHz
+  and a nearby access point help. If motion stutters, try **Fast**.
 
-**More Space** gives no extra room beyond that cap, and settings toward
-**Larger Text** are used as they are: for example 1600×900 points, streamed at
-3200×1800. Smaller streams are lighter on encoding and the network, so they
-can be noticeably smoother. A full 5K picture is a lot of pixels: moving
-content at 5K runs at about 30 fps even on an M5 Pro, limited by the sending
-Mac's encoder. The sender's Best/Balanced/Fast setting reduces the transmitted
-image further without changing the desktop's working area. In Mirror mode, the
-sending Mac's display determines the capture resolution, so the receiver's
-display setting has much less effect.
+*2. The sender's quality setting.* **Best** sends the full resolution.
+**Balanced** and **Fast** send fewer pixels: the image is softer, but encoding
+is faster, so motion is smoother and latency lower. The desktop's size stays
+the same.
+
+*3. The receiving Mac's display setting* (Larger Text … More Space). In
+Extend mode this sets the size of the extended desktop, which OpenDisplay
+renders at Retina scale and sends 1:1, up to the largest stream the codec
+allows:
+
+- **HEVC**: up to 5120×2880. It is used when the sending Mac has Apple
+  silicon and the receiving Mac decodes HEVC in hardware (Apple silicon, and
+  most Intel Macs from 2017 on).
+- **H.264**: up to 4096×2304, used otherwise. On a 5K iMac that means a
+  2048×1152-point desktop even at Default.
+
+**More Space** never adds room beyond those caps, so it only makes text
+smaller. Settings toward **Larger Text** send fewer pixels and are smoother.
+
+Measured with an M5 Pro MacBook Pro sending to a 2017 5K iMac over a cable
+(HEVC, moving content; latency is capture to display):
+
+| iMac display setting | Sender | Desktop | Video sent | Motion | Latency |
+| --- | --- | --- | --- | ---: | ---: |
+| Default | Best | 2560×1440 | 5120×2880, 1:1 | ~30 fps | ~30 ms |
+| Default | Balanced | 2560×1440 | 3840×2160 | ~32 fps | ~20 ms |
+| Default | Fast | 2560×1440 | 2560×1440 | ~58 fps | ~12 ms |
+| 2048×1152 | Best | 2048×1152 | 4096×2304, 1:1 | ~31 fps | ~20 ms |
+| 1600×900 | Best | 1600×900 | 3200×1800, 1:1 | ~55 fps | ~15 ms |
+
+So on that pair:
+
+- **Reading, writing and code**: Default + Best. It is the sharpest and gives
+  the full desktop. Motion is limited to about 30 fps by the sender's encoder.
+- **Sharp and smooth**: one or two steps toward Larger Text (1600×900 on a 5K
+  iMac) + Best. Text stays crisp and larger, at close to 60 fps.
+- **Video and fast animation**: Default + Fast, which is softer but smooth.
+- **2048×1152 no longer helps with HEVC**: it runs at the same rate as
+  Default with less room.
+
+Other pairs behave the same way with different numbers. A newer or larger
+Apple silicon chip encodes faster; an M1 Pro manages about 23 fps at 5K.
+Receivers with a 4K-or-smaller panel get their full resolution 1:1 with
+either codec and run faster. If the receiver shows the video in a window
+instead of fullscreen, the picture is scaled once more and looks softer. In
+Mirror mode, the sending Mac's display sets the resolution, so the receiver's
+display setting has little effect. Measurements and the tools behind them:
+[research/hevc-m5-2026-09-29](research/hevc-m5-2026-09-29/README.md),
+[tools/quality](tools/quality/README.md).
 
 **Why H.264 and HEVC, and not AV1?** Both have fast hardware encode and
 decode, and the latency is excellent. At the same resolution they run at the
@@ -160,8 +201,10 @@ same frame rate on Apple silicon, but HEVC is sharper right after a window
 change and holds detail much better on a slow link. It is also the only way to
 send a 5K panel 1:1. So OpenDisplay uses HEVC whenever both Macs support it in
 hardware and falls back to H.264 everywhere else, with nothing to configure.
-iPhones and iPads with an A9 chip or later decode HEVC too. Measurements:
-[research/hevc-m5-2026-09-29](research/hevc-m5-2026-09-29/README.md).
+iPhones and iPads with an A9 chip or later decode HEVC too. Colour detail is
+the same with both, because both send colour at a quarter of the resolution
+(4:2:0); fuller colour is tracked in
+[#322](https://github.com/peetzweg/opendisplay/issues/322).
 
 **Is my screen content sent anywhere?** No. One direct TCP connection
 between your Mac and your device, over your cable or your LAN. No servers,

@@ -1,4 +1,7 @@
-"""Zoomed crops of the test page only (never the surrounding desktop)."""
+"""Zoomed crops of the test page only (never the surrounding desktop).
+
+usage: crops.py <quality dir> <out dir>. The comparisons below name capture
+labels from the 2026-09-29 HEVC study; edit them for a new study."""
 import json, numpy as np, sys
 from PIL import Image, ImageDraw
 S = sys.argv[1]; out = sys.argv[2]
