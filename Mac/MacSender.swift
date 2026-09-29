@@ -337,6 +337,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Debounced replay after encoder/send backpressure drops a frame.
     /// At most one timer is active; each new drop resets the 30ms deadline.
     private var dropReplayTimer: DispatchSourceTimer?
+    /// Settle refinement (#322 step 2, experiment): once capture has been
+    /// quiet for `refineIdleMs`, re-encode `lastPixelBuffer` for
+    /// `refineFrames` frames at `refineBoost` x the base bitrate. One timer,
+    /// cancelled and replaced by every changed capture frame.
+    private let refineFrames = UserDefaults.standard.integer(forKey: "refineFrames")
+    private let refineBoost = UserDefaults.standard.object(forKey: "refineBoost") == nil
+        ? 4.0 : UserDefaults.standard.double(forKey: "refineBoost")
+    private let refineIdleMs = UserDefaults.standard.object(forKey: "refineIdleMs") == nil
+        ? 150 : UserDefaults.standard.integer(forKey: "refineIdleMs")
+    private var refineTimer: DispatchSourceTimer?
+    private var refineRemaining = 0
+    /// Bitrate the encoder was configured with; refinement restores it.
+    private var baseBitrate = 0
 
     init(transport: SenderTransport, name: String, mode: CaptureMode,
          quality: StreamQuality = .best, displaySerial: UInt32 = 0x0001,
@@ -972,6 +985,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         encoder = nil
         virtualDisplay = nil   // releasing it removes the display
         cancelDropReplayTimer()
+        queue.async { [weak self] in self?.cancelSettleRefinement() }
         queue.async { [weak self] in
             // Unblock a start() that is still waiting for the hello.
             self?.helloContinuation?.resume(throwing: CancellationError())
@@ -2254,13 +2268,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 3600 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 60 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
+        // -bitrate <Mbps>: dev override for the wired-bitrate A/B (#322 step 1).
+        let bitrateOverride = UserDefaults.standard.integer(forKey: "bitrate")
+        baseBitrate = bitrateOverride > 0 ? bitrateOverride * 1_000_000 : configuration.bitrate
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate,
-                             value: configuration.bitrate as CFNumber)
+                             value: baseBitrate as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate,
                              value: configuration.framesPerSecond as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         VTCompressionSessionPrepareToEncodeFrames(encoder)
-        Log.info("encoder ready: \(width)x\(height) H.264 \(configuration.bitrate / 1_000_000)Mbps @\(configuration.framesPerSecond)fps quality=\(quality.rawValue) lowLatencyRC=\(lowLatency && !usedFallback)\(usedFallback ? " (fallback)" : "")")
+        Log.info("encoder ready: \(width)x\(height) H.264 \(baseBitrate / 1_000_000)Mbps @\(configuration.framesPerSecond)fps quality=\(quality.rawValue) lowLatencyRC=\(lowLatency && !usedFallback)\(usedFallback ? " (fallback)" : "")")
     }
 
     // MARK: - Capture callback
@@ -2279,6 +2296,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastPixelBuffer = pixelBuffer
         lastCaptureAt = Date()
         capFrames += 1
+        scheduleSettleRefinement()
 
         // No receiver, or a pipeline stage is backed up: skip this frame.
         guard connectionReady else { return }
@@ -2316,6 +2334,57 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func cancelDropReplayTimer() {
         dropReplayTimer?.cancel()
         dropReplayTimer = nil
+    }
+
+    /// Restart the settle countdown (must be called on `queue`). A changed
+    /// frame also ends any refinement in progress and restores the base rate
+    /// before that frame is encoded.
+    private func scheduleSettleRefinement() {
+        guard refineFrames > 0 else { return }
+        cancelSettleRefinement()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        let interval = max(1, Int(ceil(1_000 / Double(activeStreamConfigurationSnapshot?.framesPerSecond ?? 60))))
+        timer.schedule(deadline: .now() + .milliseconds(refineIdleMs),
+                       repeating: .milliseconds(interval))
+        refineRemaining = refineFrames
+        timer.setEventHandler { [weak self] in self?.refineStep() }
+        timer.resume()
+        refineTimer = timer
+    }
+
+    private func cancelSettleRefinement() {
+        guard let timer = refineTimer else { return }
+        timer.cancel()
+        refineTimer = nil
+        if refineRemaining < refineFrames { setEncoderBitrate(baseBitrate) }
+        refineRemaining = 0
+    }
+
+    private func refineStep() {
+        guard !stopped, connectionReady, let pixelBuffer = lastPixelBuffer else {
+            cancelSettleRefinement()
+            return
+        }
+        // Wait out backpressure; the timer ticks again one frame later.
+        if isPipelineBackedUp() { return }
+        if refineRemaining == refineFrames {
+            setEncoderBitrate(Int(Double(baseBitrate) * refineBoost))
+            Log.info("settle refinement: \(refineFrames) frames at \(refineBoost)x")
+        }
+        refineRemaining -= 1
+        encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()),
+               generation: captureGenerationNow)
+        if refineRemaining <= 0 {
+            refineTimer?.cancel()
+            refineTimer = nil
+            setEncoderBitrate(baseBitrate)
+        }
+    }
+
+    private func setEncoderBitrate(_ bitrate: Int) {
+        guard let encoder, bitrate > 0 else { return }
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate,
+                             value: bitrate as CFNumber)
     }
 
     /// Re-encode the most recent pixel buffer once backpressure clears.
