@@ -520,20 +520,24 @@ desktop/quality policy, then reports the result with `streamConfig`.
 
 Every official receiver advertises H.264. A receiver with a hardware HEVC
 decoder also advertises HEVC: the Mac receiver up to 5120×2880 at 60 FPS, the
-iOS receiver at 60 FPS with its panel and any decode budget as the limit. HEVC is additive: a peer that ignores the new
-capability keeps H.264.
+iOS receiver up to its panel's long side on either axis at 60 FPS, within any
+decode budget. HEVC is additive: a peer that ignores the new capability keeps
+H.264.
 
 Codec choice is the sender's, with no user setting. The official sender picks
-HEVC whenever the receiver offers it and the sender has a hardware HEVC
-encoder (Apple silicon today), and H.264 otherwise. If the HEVC encoder
-cannot be created it falls back to H.264 for the rest of its run. Receivers
-MUST take the codec from `streamConfig`, not from the bitstream.
+HEVC whenever the receiver offers it and the sender can create a hardware
+HEVC encoder at the stream size (Apple silicon today), and H.264 otherwise.
+If the HEVC encoder fails later, the sender falls back to H.264 for the rest
+of that session. On a reconnect it neither announces nor sends HEVC until the new
+connection's `hello` offers it. Receivers MUST take the codec from
+`streamConfig`, not from the bitstream.
 
 The current H.264 sender also enforces the High@L5.2 frame-size and
 macroblock-rate limits locally. For a 16:9 5K source that codec rule selects
-4096×2304 at 55 FPS; it is not a receiver-model or 5K-iMac exception. HEVC
-uses its own encoder constraints and can carry a 5K source when both peers
-offer it.
+4096×2304 at 55 FPS; it is not a receiver-model or 5K-iMac exception. The
+HEVC raster is bounded by the receiver's HEVC entry instead, so a 5K source
+goes out at 5120×2880 when both peers offer HEVC. `framesPerSecond` stays a
+ceiling: the encoder's real throughput decides the delivered rate.
 
 `hello.maxEncodeWide` / `maxEncodeHigh` is the legacy H.264 decode ceiling:
 
@@ -562,8 +566,8 @@ decode session that merely creates successfully proves nothing.
 During migration, a receiver MAY send both the legacy ceiling and
 `videoCaps`. For H.264, a sender that understands both MUST satisfy both. The
 legacy ceiling does not limit HEVC. Receiver limits do not replace sender
-validation: the sender must independently keep the selected codec's raster
-and rate within its encoder's constraints.
+validation: the sender must independently check that its encoder accepts the
+selected codec's raster and rate.
 
 ## 7. Coordinate spaces and units
 

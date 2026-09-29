@@ -302,6 +302,29 @@ final class StreamConfigurationTests: XCTestCase {
         }
     }
 
+    func testMirroringASixKDisplayToAnIPhoneIsBoundedByItsHEVCOffer() throws {
+        // iOS offers HEVC up to its panel's long side on both axes.
+        let iPhone = [VideoCapability(codec: "h264", maxFrameRate: 60),
+                      VideoCapability(codec: "hevc", maxWidth: 2868, maxHeight: 2868, maxFrameRate: 60)]
+        let config = try VideoStreamConfiguration.make(
+            source: PixelSize(width: 6016, height: 3384), quality: .best, codec: "hevc",
+            receiverCapabilities: iPhone, displayMaxFrameRate: 120)
+        XCTAssertEqual(config.encodedSize.width, 2868)
+        XCTAssertLessThanOrEqual(abs(config.encodedSize.height - 1613), 2)
+        XCTAssertEqual(config.framesPerSecond, 60)
+    }
+
+    func testHEVCHonoursADecodeBudget() throws {
+        let budget = 1920 * 1080 * 30
+        let config = try VideoStreamConfiguration.make(
+            source: PixelSize(width: 1920, height: 1080), quality: .best, codec: "hevc",
+            receiverCapabilities: [VideoCapability(codec: "hevc", maxFrameRate: 60,
+                                                   maxPixelsPerSecond: budget)])
+        XCTAssertEqual(config.encodedSize, PixelSize(width: 1920, height: 1080))
+        XCTAssertLessThanOrEqual(config.encodedSize.width * config.encodedSize.height
+                                 * config.framesPerSecond, budget)
+    }
+
     func testH264FallbackFromAnHEVCSizedCanvasStaysInsideTheH264Level() throws {
         // The encoder fallback keeps the 5K canvas it already built.
         let config = try VideoStreamConfiguration.makeForCanvas(

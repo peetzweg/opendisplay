@@ -1,6 +1,6 @@
 # HEVC vs H.264 on an M5 Pro sender, 2026-09-29
 
-Sender: MacBook Pro (M5 Pro). Receiver: 2017 5K iMac (iMac18,3, Radeon Pro 570, macOS 13) over a Thunderbolt Bridge. Build: `feat/hevc-5k-mac-receiver` (opt-in `hevcExperimental`) rebased onto main after PR 323 (canvas capped at the stream size). Tracking: https://github.com/peetzweg/opendisplay/issues/10 and https://github.com/peetzweg/opendisplay/issues/322
+Sender: MacBook Pro (M5 Pro). Receiver: 2017 5K iMac (iMac18,3, Radeon Pro 570, macOS 13) over a Thunderbolt Bridge. Build: `feat/hevc-5k-mac-receiver` rebased onto main after PR 323 (canvas capped at the stream size); the measurements below used its opt-in flag, which the final branch replaces with automatic selection. Tracking: https://github.com/peetzweg/opendisplay/issues/10 and https://github.com/peetzweg/opendisplay/issues/322
 
 All images are crops of a synthetic test page (`tools/testpage.swift`); no desktop content.
 
@@ -21,10 +21,10 @@ All images are crops of a synthetic test page (`tools/testpage.swift`); no deskt
 | 4096x2304 | H.264 | 2 | 42 | 17 ms | 19 / 36 ms |
 | 4096x2304 | H.264 | 3 | 46 | 17 ms | 29 / 52 ms |
 | 4096x2304 | HEVC | 1 | 30 | 18 ms | 20 / 20 ms |
-| 4096x2304 | HEVC | 2 (default) | 40 | 18 ms | 20 / 38 ms |
+| 4096x2304 | HEVC | 2 | 40 | 18 ms | 20 / 38 ms |
 | 4096x2304 | HEVC | 3 | 45 | 18 ms | 37 / 56 ms |
 | 5120x2880 | HEVC | 1 | 29 | 28 ms | 30 / 31 ms |
-| 5120x2880 | HEVC | 2 (default) | 29–30 | 27 ms | 49–55 / 57 ms |
+| 5120x2880 | HEVC | 2 | 29–30 | 27 ms | 49–55 / 57 ms |
 | 5120x2880 | HEVC | 3 | 35 | 27 ms | 55 / 84 ms |
 
 - **At the same raster the two codecs perform the same.** HEVC's higher rate in the handoff came from its two-frame pipeline, and H.264 with two frames in flight gains the same.
@@ -33,6 +33,22 @@ All images are crops of a synthetic test page (`tools/testpage.swift`); no deskt
 - **Pipelining at 5K doesn't pay.** Two frames in flight add ~25 ms of latency and no frames; one is the better setting there.
 - **Receiver load is negligible.** The iMac's hardware HEVC decoder sat at about 1% CPU at 5K; the network had 0 drops.
 - **Compared with the M1 Pro** (Sept 19 handoff): 5K HEVC went from ~23 to ~29 fps.
+
+The shipped policy keeps one encode in flight for both codecs, as H.264 always had.
+
+## Receiver decode headroom (2017 iMac, hardware decoder)
+
+`tools/decbench.swift` hardware-encodes a clip on the sender, then decodes it on the iMac as fast as possible. The stress clip changes the whole screen on every frame at the 18 Mbps cap (about 40 KB per frame).
+
+| Clip | One frame at a time | Pipelined |
+|---|---:|---:|
+| H.264 4096x2304, scrolling | 176 fps | 195 fps |
+| H.264 4096x2304, full change every frame | 180 fps | 198 fps |
+| HEVC 4096x2304, scrolling | 193 fps | 231 fps |
+| HEVC 5120x2880, scrolling | 136 fps | 151 fps |
+| HEVC 5120x2880, full change every frame | 135 fps | 140 fps |
+
+5K HEVC decodes at more than twice 60 fps on the oldest Mac tested, so the Mac receiver's 5120x2880@60 offer is safe there. Older Intel Macs whose hardware also reports HEVC decode (Skylake, 2015–2016) were not measured.
 
 ## Sharpness and colour (settled frames, 18 Mbps)
 
@@ -77,3 +93,18 @@ In both cases More Space adds no room over Default, and it costs nothing either.
 | `1-change-first-frame-{text,colour}-3x.png` | Reference, then H.264, then HEVC: first frame after a full-page change, 4096 stream, 18 Mbps |
 | `2-default-panel-{text,colour}-3x.png` | iMac at Default, as the panel shows it: H.264 (4096 stretched, 2048x1152 pt desktop) vs HEVC (5120 1:1, 2560x1440 pt desktop). Text is physically smaller in the HEVC tile because the desktop is larger. |
 | `3-scroll-6mbps-{text,colour}-3x.png` | Reference, then H.264, then HEVC while scrolling at 6 Mbps |
+
+## Selection and compatibility checks (final branch, live)
+
+| Case | Result |
+|---|---|
+| New sender, new iMac receiver at Default | HEVC 5120x2880 chosen automatically, no flags |
+| HEVC encoder unavailable at the stream size (Debug `-failHEVCEncoder`) | H.264 canvas and stream from the start, 4096x2304 captured 1:1 |
+| HEVC session fails after the canvas was sized (Debug `-failHEVCSession`) | H.264 at once, canvas rebuilt to 4096x2304 within ~0.5 s |
+| New sender, release receiver 1.22.0 (H.264 only) | H.264 4096x2304, 1:1, as before |
+| Sender from main, new receiver | H.264 4096x2304, receiver unaffected by its HEVC offer |
+| iMac switched live: 2048x1152, 3200x1800, 1600x900, Default | HEVC 4096, 5120, 3200, 5120; every switch rebuilt the decoder, 0 decode errors |
+| Mirror mode (MacBook Pro 3024x1964 display) | HEVC 3024x1964 1:1 |
+| iPad Pro 13" simulator | H.264 (no hardware HEVC in the simulator); with Debug `-forceHEVCOffer YES`, HEVC 2064x2752 decoded and displayed |
+
+Not yet tested on hardware: iPhone and iPad receivers, Intel senders (they stay on H.264 by design), and a reconnect over WiFi onto a different receiver build at the same address (covered in code: the sender holds HEVC until the new hello offers it).

@@ -137,7 +137,8 @@ encoding. That is what keeps text sharp.
 How far that goes depends on the codec, which OpenDisplay picks for you:
 
 - **HEVC** is used when the sending Mac has Apple silicon and the receiving
-  Mac has a hardware HEVC decoder (most Macs from 2017 on). The stream goes up
+  Mac can decode HEVC in hardware (Apple silicon, and most Intel Macs from
+  2017 on). The stream goes up
   to 5120×2880, so a 5K iMac at **Default** gets its full 2560×1440-point
   desktop, sent pixel for pixel.
 - **H.264** is used otherwise. Its stream tops out at 4096×2304, so a 5K iMac

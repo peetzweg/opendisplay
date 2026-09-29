@@ -1166,7 +1166,7 @@ final class StreamReceiver: ObservableObject {
                 }
             }
         }
-        if formatDesc == nil, let sps, let pps {
+        if formatDesc == nil, let sps, let pps, streamCodec != "hevc" || vps != nil {
             displayLayer.flushAndRemoveImage()   // drop the previous format's last image
             if streamCodec == "hevc", let vps {
                 buildHEVCFormatDescription(vps: vps, sps: sps, pps: pps)
