@@ -1,3 +1,4 @@
+#if DEBUG
 import CoreMedia
 import Foundation
 import ImageIO
@@ -11,11 +12,7 @@ import VideoToolbox
 /// `od-dump-request` there dumps the next frame even if the screen never idles.
 final class IdleFrameDumper {
     static func makeIfEnabled() -> IdleFrameDumper? {
-        #if DEBUG
         UserDefaults.standard.bool(forKey: "dumpIdleFrames") ? IdleFrameDumper() : nil
-        #else
-        nil
-        #endif
     }
 
     private let queue = DispatchQueue(label: "idle-frame-dumper")
@@ -116,3 +113,4 @@ final class IdleFrameDumper {
         framesSinceDump = 0
     }
 }
+#endif

@@ -115,7 +115,9 @@ final class StreamReceiver: ObservableObject {
     private let queue = DispatchQueue(label: "receiver.video")
     private var buffer = Data()
     private var formatDesc: CMVideoFormatDescription?
+    #if DEBUG
     private let idleFrameDumper = IdleFrameDumper.makeIfEnabled()
+    #endif
     private var sps: Data?
     private var pps: Data?
 
@@ -1217,7 +1219,9 @@ final class StreamReceiver: ObservableObject {
             sampleBufferOut: &sample)
 
         guard let sample else { return }
+        #if DEBUG
         idleFrameDumper?.push(sample)
+        #endif
 
         if loggedDisplayPath != (useMetalPath && onDecodedFrame != nil) {
             loggedDisplayPath = useMetalPath && onDecodedFrame != nil

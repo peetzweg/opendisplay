@@ -337,7 +337,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Debounced replay after encoder/send backpressure drops a frame.
     /// At most one timer is active; each new drop resets the 30ms deadline.
     private var dropReplayTimer: DispatchSourceTimer?
-    /// Settle refinement (#322 step 2, experiment): once capture has been
+    #if DEBUG
+    /// Settle refinement (#322 step 2, Debug-only experiment): once capture has been
     /// quiet for `refineIdleMs`, re-encode `lastPixelBuffer` for
     /// `refineFrames` frames at `refineBoost` x the base bitrate. One timer,
     /// cancelled and replaced by every changed capture frame.
@@ -348,6 +349,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         ? 150 : UserDefaults.standard.integer(forKey: "refineIdleMs")
     private var refineTimer: DispatchSourceTimer?
     private var refineRemaining = 0
+    #endif
     /// Bitrate the encoder was configured with; refinement restores it.
     private var baseBitrate = 0
 
@@ -443,12 +445,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// rotates (it re-sends hello with swapped dimensions).
     /// Canvas pixels for the receiver's panel: capped at the stream size so
     /// capture is 1:1 (see `H264StreamConfiguration.canvasPixels`).
-    /// `-canvasAtStreamSize NO` restores a panel-sized canvas for A/B tests.
+    /// Debug builds: `-canvasAtStreamSize NO` restores a panel-sized canvas for A/B tests.
     private func canvasPixels(for info: PhoneInfo) -> PixelSize {
         let panel = PixelSize(width: info.pixelsWide, height: info.pixelsHigh)
+        #if DEBUG
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "canvasAtStreamSize") != nil,
            !defaults.bool(forKey: "canvasAtStreamSize") { return panel }
+        #endif
         let canvas = H264StreamConfiguration.canvasPixels(
             forReceiver: panel,
             legacyCeiling: legacyEncodeCeiling(for: info),
@@ -997,7 +1001,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         encoder = nil
         virtualDisplay = nil   // releasing it removes the display
         cancelDropReplayTimer()
+        #if DEBUG
         queue.async { [weak self] in self?.cancelSettleRefinement() }
+        #endif
         queue.async { [weak self] in
             // Unblock a start() that is still waiting for the hello.
             self?.helloContinuation?.resume(throwing: CancellationError())
@@ -2280,9 +2286,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 3600 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 60 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
+        baseBitrate = configuration.bitrate
+        #if DEBUG
         // -bitrate <Mbps>: dev override for the wired-bitrate A/B (#322 step 1).
         let bitrateOverride = UserDefaults.standard.integer(forKey: "bitrate")
-        baseBitrate = bitrateOverride > 0 ? bitrateOverride * 1_000_000 : configuration.bitrate
+        if bitrateOverride > 0 { baseBitrate = bitrateOverride * 1_000_000 }
+        #endif
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate,
                              value: baseBitrate as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate,
@@ -2308,7 +2317,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         lastPixelBuffer = pixelBuffer
         lastCaptureAt = Date()
         capFrames += 1
+        #if DEBUG
         scheduleSettleRefinement()
+        #endif
 
         // No receiver, or a pipeline stage is backed up: skip this frame.
         guard connectionReady else { return }
@@ -2348,6 +2359,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         dropReplayTimer = nil
     }
 
+    #if DEBUG
     /// Restart the settle countdown (must be called on `queue`). A changed
     /// frame also ends any refinement in progress and restores the base rate
     /// before that frame is encoded.
@@ -2398,6 +2410,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate,
                              value: bitrate as CFNumber)
     }
+    #endif
 
     /// Re-encode the most recent pixel buffer once backpressure clears.
     private func replayLastFrameAfterDrop() {
