@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.1](https://github.com/peetzweg/opendisplay/compare/v1.22.0...v1.22.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **mac:** capture the virtual display 1:1 when the stream is smaller than the panel ([#323](https://github.com/peetzweg/opendisplay/issues/323)) ([f244d63](https://github.com/peetzweg/opendisplay/commit/f244d63025d66fd8dcfbddffc2beceab0eb43ee2)), closes [#322](https://github.com/peetzweg/opendisplay/issues/322)
+* **mac:** keep the session through display sleep and screen lock ([#320](https://github.com/peetzweg/opendisplay/issues/320)) ([09e717e](https://github.com/peetzweg/opendisplay/commit/09e717edf3ed795869fc8c5a5b094dabb95701d6))
+
 ## [1.22.0](https://github.com/peetzweg/opendisplay/compare/v1.21.0...v1.22.0) (2026-09-23)
 
 
