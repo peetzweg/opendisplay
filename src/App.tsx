@@ -436,6 +436,15 @@ export default function App() {
               input from the receiving Mac is a follow-up.</p>
             </details>
             <details>
+              <summary>Why is the desktop on my 5K iMac smaller than its resolution?</summary>
+              <p>OpenDisplay gives the extended desktop the receiver's working area at Retina scale, up
+              to what the video stream can carry sharply. The stream tops out at 4096×2304 pixels, so
+              on a 5K iMac the desktop is 2048×1152 points, whether the iMac is set to Default or More
+              Space. Every pixel is sent 1:1 instead of a bigger desktop being shrunk first, which keeps
+              text crisp. Settings toward Larger Text are used as they are and run smoother, especially
+              over WiFi. A full 5K stream is on the roadmap.</p>
+            </details>
+            <details>
               <summary>Is any of my screen data sent to a server?</summary>
               <p>No. One direct TCP connection between your Mac and your device. No accounts, no
               analytics, no cloud. The full story — what the apps store locally, which permissions they

@@ -128,31 +128,23 @@ Thunderbolt 2 cable.
 Input from the receiving Mac's keyboard and mouse is a follow-up
 ([#147](https://github.com/peetzweg/opendisplay/issues/147)).
 
-**Do the Larger Text / More Space display settings affect Mac receiver performance?**
-Yes, in Extend mode. On a Mac receiver, this setting changes the logical size
-of the desktop, not only the apparent text size. OpenDisplay advertises that
-desktop at Retina scale, and the sender creates, renders, captures, and encodes
-a virtual display with the same working area. **More Space** therefore gives
-you room for more windows, but starts with a larger source surface and puts
-more pressure on rendering, capture, scaling, encoding, and the network. At a
-fixed bitrate it also gives each pixel less data. Moving toward **Larger Text**
-reduces that work and can be noticeably smoother, especially over WiFi.
+**Do the Larger Text / More Space display settings affect a Mac receiver?**
+Yes, in Extend mode. OpenDisplay gives the extended desktop the receiver's
+working area at Retina scale, up to what the video stream can carry. The stream
+tops out at 4096×2304 pixels (the H.264 limit), so the desktop is capped at
+2048×1152 points. Every captured pixel is then sent 1:1 instead of a bigger
+desktop being shrunk before encoding, which is what keeps text sharp.
 
-For example, on the 5K iMac used for testing, the less-spacious setting offers
-a 1600×900-point desktop and a 3200×1800 stream at up to 60 fps. More Space
-offers a 3200×1800-point desktop, which is rendered at 6400×3600; the current
-H.264 path safely scales that to 4096×2304 at up to 55 fps. That is about 50%
-more encoded pixels per second, in addition to the four-times-larger source
-surface. Exact sizes vary by Mac.
-
-Start with the receiver's **Default** setting. Move one or more steps toward
-**Larger Text** when smoothness and latency matter most, or toward **More
-Space** when desktop area matters and you have a fast wired connection. The
-sender's Best/Balanced/Fast setting can reduce the transmitted image further
-without changing the desktop's working area. Fullscreen changes presentation
-and compositor load, but not the negotiated stream resolution. In Mirror mode,
-the sending Mac's display determines the capture resolution, so the receiver's
-display setting has much less effect.
+On a 5K iMac this means **Default** and **More Space** both give a
+2048×1152-point desktop. Settings toward **Larger Text** are used as they are:
+for example 1600×900 points, streamed at 3200×1800. They are lighter on
+encoding and the network, so they can be noticeably smoother, especially over
+WiFi. The sender's Best/Balanced/Fast setting can reduce the transmitted image
+further without changing the desktop's working area. In Mirror mode, the
+sending Mac's display determines the capture resolution, so the receiver's
+display setting has much less effect. A full 5K stream, with room for a
+2560×1440-point desktop, is tracked in
+[#322](https://github.com/peetzweg/opendisplay/issues/322).
 
 **Why H.264 and not HEVC/AV1?** Hardware H.264 encode/decode is universally
 fast and the latency is excellent. HEVC is a planned option for better
