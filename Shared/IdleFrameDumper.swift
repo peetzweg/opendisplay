@@ -9,7 +9,8 @@ import VideoToolbox
 /// session and, once the stream has been quiet for `idle`, writes the settled
 /// frame to `od-idle.png` in `/tmp` (macOS) or the app's temporary directory (iOS).
 /// Debug builds only, enabled with `-dumpIdleFrames YES`; creating
-/// `od-dump-request` there dumps the next frame even if the screen never idles.
+/// `od-dump-request` there dumps the next frame even if the screen never idles;
+/// writing a number N into it saves the next N frames as `od-seq-<i>.png`.
 final class IdleFrameDumper {
     static func makeIfEnabled() -> IdleFrameDumper? {
         UserDefaults.standard.bool(forKey: "dumpIdleFrames") ? IdleFrameDumper() : nil
@@ -21,6 +22,8 @@ final class IdleFrameDumper {
     private var sessionFormat: CMFormatDescription?
     private var lastImage: CVImageBuffer?
     private var framesSinceDump = 0
+    private var sequenceRemaining = 0
+    private var sequence: [CVImageBuffer] = []
     private var timer: DispatchSourceTimer?
     #if os(macOS)
     private let directory = URL(fileURLWithPath: "/tmp")   // easy to reach over ssh
@@ -52,9 +55,16 @@ final class IdleFrameDumper {
         queue.async { [self] in
             decode(sample)
             framesSinceDump += 1
+            if sequenceRemaining > 0, let image = lastImage {
+                sequence.append(image)
+                sequenceRemaining -= 1
+                if sequenceRemaining == 0 { writeSequence() }
+            }
             if FileManager.default.fileExists(atPath: requestPath) {
+                let count = (try? String(contentsOfFile: requestPath, encoding: .utf8))
+                    .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
                 try? FileManager.default.removeItem(atPath: requestPath)
-                dump()
+                if count > 0 { sequenceRemaining = count; sequence = [] } else { dump() }
             }
             timer?.cancel()
             let next = DispatchSource.makeTimerSource(queue: queue)
@@ -87,9 +97,27 @@ final class IdleFrameDumper {
         }
     }
 
+    private func writeSequence() {
+        for (i, image) in sequence.enumerated() { write(image, name: String(format: "od-seq-%02d.png", i)) }
+        Log.info("frame sequence dumped: \(sequence.count) frames")
+        sequence = []
+    }
+
     private func dump() {
         timer = nil
+        if sequenceRemaining > 0 {   // the stream went quiet before N frames arrived
+            sequenceRemaining = 0
+            writeSequence()
+        }
         guard let image = lastImage else { return }
+        if write(image, name: "od-idle.png") {
+            Log.info("idle frame dumped after \(framesSinceDump) frames")
+            framesSinceDump = 0
+        }
+    }
+
+    @discardableResult
+    private func write(_ image: CVImageBuffer, name: String) -> Bool {
         CVPixelBufferLockBaseAddress(image, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
         guard let ctx = CGContext(data: CVPixelBufferGetBaseAddress(image),
@@ -100,17 +128,16 @@ final class IdleFrameDumper {
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                   bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
                                       | CGBitmapInfo.byteOrder32Little.rawValue),
-              let cg = ctx.makeImage() else { return }
-        let url = directory.appendingPathComponent("od-idle.png")
+              let cg = ctx.makeImage() else { return false }
+        let url = directory.appendingPathComponent(name)
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
-        else { return }
+        else { return false }
         CGImageDestinationAddImage(dest, cg, nil)
         guard CGImageDestinationFinalize(dest) else {
-            Log.info("idle frame dump failed to write \(url.path)")
-            return
+            Log.info("frame dump failed to write \(url.path)")
+            return false
         }
-        Log.info("idle frame dumped to \(url.path) after \(framesSinceDump) frames")
-        framesSinceDump = 0
+        return true
     }
 }
 #endif
