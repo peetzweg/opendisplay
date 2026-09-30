@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.0](https://github.com/peetzweg/opendisplay/compare/v1.22.1...v1.23.0) (2026-09-30)
+
+
+### Features
+
+* **video:** use HEVC automatically when both sides support it in hardware ([#325](https://github.com/peetzweg/opendisplay/issues/325)) ([91ca272](https://github.com/peetzweg/opendisplay/commit/91ca272debd4615d134f18a5bc98f0ef8a236544))
+
 ## [1.22.1](https://github.com/peetzweg/opendisplay/compare/v1.22.0...v1.22.1) (2026-09-29)
 
 
