@@ -254,6 +254,9 @@ final class SenderController: ObservableObject {
     // same, so the opt-out simply holds until the user connects by hand.
     // In memory: a relaunched sender starts fresh.
     private var cableOptOut: Set<String> = []
+    // Every service seen on the cable this run: a Disconnect counts as a
+    // cable opt-out even while the record is briefly gone (receiver asleep).
+    private var everOnCable: Set<String> = []
 
     init() {
         startBrowsing()
@@ -391,6 +394,7 @@ final class SenderController: ObservableObject {
         })
         let plugged = nowOnCable.subtracting(onDirectCable)
         onDirectCable = nowOnCable
+        everOnCable.formUnion(nowOnCable)
         guard autoConnectEnabled, !plugged.isEmpty else { return }
         for result in discovered {
             guard let name = serviceName(of: result), plugged.contains(name),
@@ -705,7 +709,7 @@ final class SenderController: ObservableObject {
         case .usb: usbDisabled.insert(session.id)
         case .wifi:
             wifiRemembered.remove(session.id)
-            if let name = session.wifiServiceName, onDirectCable.contains(name) {
+            if let name = session.wifiServiceName, everOnCable.contains(name) {
                 cableOptOut.insert(name)
             }
         }
