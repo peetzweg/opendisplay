@@ -241,6 +241,13 @@ final class SenderController: ObservableObject {
     // action to confirm, not auto-grab.
     private var wifiAutoConnectArmed = false
     private let wifiAutoConnectDeadline = Date().addingTimeInterval(12)
+    // Services whose Bonjour record is currently seen over the direct
+    // host-to-host cable. Plugging that cable in is a deliberate act, so a
+    // record newly gaining such an interface connects like a cabled iPhone
+    // does; plain WiFi discovery never grabs a (possibly shared) receiver
+    // after the launch window. Transition-based: Disconnect with the cable
+    // still in is respected until it is replugged.
+    private var onDirectCable: Set<String> = []
 
     init() {
         startBrowsing()
@@ -267,6 +274,7 @@ final class SenderController: ObservableObject {
                 self.discovered = Array(results)
                 self.endSessionsWhoseServiceVanished()
                 self.autoConnect()
+                self.connectNewlyCabled()
             }
         }
         browser.start(queue: .main)
@@ -365,6 +373,24 @@ final class SenderController: ObservableObject {
     private func cabled(_ result: NWBrowser.Result) -> Bool {
         usbDevices.contains {
             sameDevice(result, $0) && !usbDisabled.contains("usb:\($0.udid)")
+        }
+    }
+
+    /// A Mac receiver just appeared on the direct cable: connect to it unless
+    /// a session already covers it (a live WiFi session moves onto the cable
+    /// through the sender's own upgrade probe instead).
+    private func connectNewlyCabled() {
+        let nowOnCable = Set(discovered.compactMap { result in
+            result.interfaces.contains(where: DirectCable.isDirectLink) ? serviceName(of: result) : nil
+        })
+        let plugged = nowOnCable.subtracting(onDirectCable)
+        onDirectCable = nowOnCable
+        guard autoConnectEnabled, !plugged.isEmpty else { return }
+        for result in discovered {
+            guard let name = serviceName(of: result), plugged.contains(name),
+                  activeSession(coveringWiFi: result) == nil else { continue }
+            Log.info("\(name) appeared on the direct cable — connecting")
+            connect(to: .wifi(result))
         }
     }
 
