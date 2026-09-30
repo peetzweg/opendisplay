@@ -27,8 +27,10 @@ enum DirectCable {
     /// link-local addresses. Used to spot a Bonjour record seen over the
     /// cable (NWBrowser.Result.interfaces).
     static func isDirectLink(_ interface: NWInterface) -> Bool {
-        // anpi* is Apple's internal link to a USB-attached iPhone/iPad; it is
-        // link-local too but belongs to usbmux, never a Mac receiver.
+        // anpi* is Apple's internal peripheral link: link-local and wired,
+        // and a Mac receiver's record shows up on it too, but it completes
+        // TCP handshakes without carrying the stream (see the matching
+        // exclusion in StreamReceiver). The real cable is a plain en/bridge.
         interface.type == .wiredEthernet && !interface.name.hasPrefix("anpi")
             && onlyLinkLocal(addresses(of: interface.name))
     }
