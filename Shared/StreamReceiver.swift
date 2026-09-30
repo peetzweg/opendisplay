@@ -37,7 +37,9 @@ struct PerfStats: Equatable {
     var encodeP50 = 0.0          // Mac-side capture→socket (encode + queue)
     var rttMs = 0.0              // control-channel round trip
     var e2eSamples: [Double] = []  // last ~120 per-frame e2e latencies, ms
-    var transport = "—"          // USB (loopback via usbmux) or WiFi
+    var transport = "—"          // USB (loopback via usbmux), Cable (direct link) or WiFi
+    var codec = ""               // "H.264" or "HEVC" once a stream is known
+    var hitches = 0              // gaps over 1.5x the median interval (last ~120 frames)
     var cursorPerSec = 0         // cursor position updates applied (this window)
     var cursorLost = 0           // UDP cursor datagrams missing or reordered (this window)
     var macDrops = 0             // enc + net drops (legacy total)
@@ -687,6 +689,11 @@ final class StreamReceiver: ObservableObject {
         let onReady: () -> Void = { [weak self] in
             guard let self else { return }
             self.lastDataReceived = Date()
+            // Non-loopback is WiFi only if the path says so: a Mac receiver on
+            // a Thunderbolt Bridge or USB-C peer link is a cable too.
+            if self.transport != "USB", let path = conn.currentPath {
+                self.transport = path.usesInterfaceType(.wifi) ? "WiFi" : "Cable"
+            }
             self.setConnected(true)
             self.sendHello(on: conn)
         }
@@ -1369,6 +1376,9 @@ final class StreamReceiver: ObservableObject {
             stats.rttMs = lastRttMs
             stats.e2eSamples = e2eRing
             stats.transport = transport
+            stats.codec = streamCodec == "hevc" ? "HEVC" : "H.264"
+            let medianInterval = percentile(frameIntervals, 0.5)
+            stats.hitches = frameIntervals.filter { $0 > medianInterval * 1.5 }.count
             stats.macDrops = macDrops
             stats.macEncDrops = macEncDrops
             stats.macNetDrops = macNetDrops
@@ -1409,6 +1419,13 @@ final class StreamReceiver: ObservableObject {
                     "ph50": stats.photonP50.rounded(),
                     "ph95": stats.photonP95.rounded(),
                     "offsetKnown": clockOffsetMs != nil,
+                    // Frame pacing over the last ~120 frames: a "hitch" is a gap
+                    // over 1.5x the median, i.e. at least one frame missing from
+                    // an otherwise steady cadence (what reads as stutter).
+                    "int50": percentile(frameIntervals, 0.5).rounded(),
+                    "int95": percentile(frameIntervals, 0.95).rounded(),
+                    "hitch": stats.hitches,
+                    "codec": stats.codec,
                 ])
                 e2eWindow.removeAll(keepingCapacity: true)
                 encodeWindow.removeAll(keepingCapacity: true)
