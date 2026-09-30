@@ -442,6 +442,9 @@ export default function App() {
               doesn't need to be fast: the stream uses at most 18 Mb/s, so any USB data cable works for iPhone
               and iPad. For Mac to Mac, a Thunderbolt, USB4, Ethernet or USB-C data cable all give the same picture.
               Balanced and Fast send fewer pixels: softer, but smoother, with lower latency.</p>
+              <p>On WiFi, set AirDrop on the sending Mac to Contacts Only or No One. With Everyone, the Mac's
+              WiFi pauses for about 75 ms twice a second to look for nearby devices, and the picture hitches each
+              time. In our measurements this one setting removed almost all WiFi hitches.</p>
               <p>On a Mac receiver, the display setting sets the desktop's size, sent 1:1 up to what the codec
               allows. With an Apple silicon sender and a receiver that decodes HEVC (Apple silicon, most Intel
               Macs from 2017 on) that is up to 5120×2880, so a 5K iMac at Default gets its full 2560×1440 desktop.

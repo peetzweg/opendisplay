@@ -144,6 +144,10 @@ need to be fast: the stream uses at most 18 Mb/s.
 - WiFi works well for documents and slower motion. Expect a little more
   latency and the occasional hitch when the network is busy. 5 GHz or 6 GHz
   and a nearby access point help. If motion stutters, try **Fast**.
+- On WiFi, set AirDrop on the sending Mac to **Contacts Only** or **No One**
+  (Control Center, AirDrop). With **Everyone**, the Mac's WiFi pauses for about
+  75 ms twice a second to look for nearby devices, and the picture hitches each
+  time. In our measurements this one setting removed almost all WiFi hitches.
 
 *2. The sender's quality setting.* **Best** sends the full resolution.
 **Balanced** and **Fast** send fewer pixels: the image is softer, but encoding
