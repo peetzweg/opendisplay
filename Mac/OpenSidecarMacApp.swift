@@ -1063,19 +1063,13 @@ struct SessionRow: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            Button {
-                if session.failed {
-                    controller.retry(session)
-                } else {
-                    session.sender.forceReconnect()
-                }
-            } label: {
-                Image(systemName: "arrow.clockwise")
+            // A live session recovers on its own (liveness watchdog, redial,
+            // transport failover), so only a failed start gets a button.
+            if session.failed {
+                Button("Retry") { controller.retry(session) }
+                    .controlSize(.small)
+                    .help("Start this connection over")
             }
-            .controlSize(.small)
-            .help(session.failed
-                ? "Start this connection over"
-                : "Drop the connection and pair with the device again")
             if session.powerActions.contains(.shutdown) {
                 Button {
                     confirmingShutdown = true

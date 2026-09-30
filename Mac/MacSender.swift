@@ -1255,17 +1255,6 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    /// Drop the current connection and dial again — fresh TCP through the
-    /// tunnel, fresh accept on the phone. Bound to the UI Reconnect button.
-    func forceReconnect() {
-        queue.async { [weak self] in
-            guard let self, !self.stopped else { return }
-            Log.info("manual reconnect requested")
-            self.disconnectedSince = Date()   // fresh grace window
-            self.scheduleReconnect()
-        }
-    }
-
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         // A retired stream commonly reports its stop after the replacement is
         // already live. It must not tear down that replacement (#203).
@@ -1403,7 +1392,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: - Connection (with retry)
 
     // Guards against a stale async USB dial adopting after a newer one (or a
-    // manual reconnect) superseded it. Only touched on `queue`.
+    // migration) superseded it. Only touched on `queue`.
     private var dialGeneration = 0
     // Encoded output is asynchronous. Tag it with the connection that was
     // active at submission so an old WiFi frame cannot become the first video
