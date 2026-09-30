@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.24.0](https://github.com/peetzweg/opendisplay/compare/v1.23.0...v1.24.0) (2026-09-30)
+
+
+### Features
+
+* **mac:** auto-connect a Mac receiver when the cable is plugged in ([#338](https://github.com/peetzweg/opendisplay/issues/338)) ([42ad6fb](https://github.com/peetzweg/opendisplay/commit/42ad6fbdb4b9f9f1da29d11afd60b44cf7628cd4))
+* **receiver:** shut down a cabled Mac receiver from the sender ([#332](https://github.com/peetzweg/opendisplay/issues/332)) ([d2dfb3f](https://github.com/peetzweg/opendisplay/commit/d2dfb3f744d020f66f60956c52ed4f4dc7c4a3b2))
+
+
+### Bug Fixes
+
+* **mac:** show Retry only on a failed session ([#335](https://github.com/peetzweg/opendisplay/issues/335)) ([c27e538](https://github.com/peetzweg/opendisplay/commit/c27e538c0cb86b075e7129a176a163654627efe4))
+
 ## [1.23.0](https://github.com/peetzweg/opendisplay/compare/v1.22.1...v1.23.0) (2026-09-30)
 
 
