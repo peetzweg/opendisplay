@@ -132,6 +132,9 @@ final class DeviceSession: ObservableObject, Identifiable {
     // "iPhone" / "iPad" from hello — naming fallback while (or in case)
     // lockdown hasn't resolved the device's real name.
     var deviceKind: String?
+    // Power actions the receiver offers on the live path (PROTOCOL.md 6.6).
+    // Every hello replaces it, so it follows the session on and off the cable.
+    @Published var powerActions: [PowerAction] = []
     // `target` names the identity the session was created for; the live
     // transport can migrate (cable-in upgrade, unplug failover) — these
     // track where the sender actually is right now.
@@ -559,6 +562,12 @@ final class SenderController: ObservableObject {
             guard let self, let session else { return }
             session.deviceID = info.id
             session.deviceKind = info.device
+            let power = (info.power ?? []).compactMap(PowerAction.init(rawValue:))
+            if power != session.powerActions {
+                Log.info("session \(session.id) power actions: "
+                    + (power.isEmpty ? "none" : power.map(\.rawValue).joined(separator: ",")))
+                session.powerActions = power
+            }
             if case .usb(let udid?) = session.target, let installID = info.id {
                 self.installIDByUDID[udid] = installID
             }
@@ -1023,6 +1032,7 @@ struct SessionRow: View {
     let title: String
     @ObservedObject var session: DeviceSession
     let controller: SenderController
+    @State private var confirmingShutdown = false
 
     private var statusColor: Color {
         if session.status.hasPrefix("Extending") || session.status.hasPrefix("Mirroring")
@@ -1066,6 +1076,20 @@ struct SessionRow: View {
             .help(session.failed
                 ? "Start this connection over"
                 : "Drop the connection and pair with the device again")
+            if session.powerActions.contains(.shutdown) {
+                Button {
+                    confirmingShutdown = true
+                } label: {
+                    Image(systemName: "power")
+                }
+                .controlSize(.small)
+                .help("Shut down \(title)")
+                .confirmationDialog("Shut down \(title) now?", isPresented: $confirmingShutdown) {
+                    Button("Shut Down", role: .destructive) { session.sender.requestPower(.shutdown) }
+                } message: {
+                    Text("Apps on it with unsaved changes can still stop the shutdown.")
+                }
+            }
             Button("Disconnect") { controller.disconnect(session) }
                 .controlSize(.small)
         }

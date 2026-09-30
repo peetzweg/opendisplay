@@ -106,6 +106,14 @@ final class StreamReceiver: ObservableObject {
     // receivers put addrs in their hello — see sendHello for why phones
     // must not.
     private var advertisesAddresses: Bool { deviceKind == "Mac" }
+    /// Power actions this platform can carry out (PROTOCOL.md 6.6); empty
+    /// on platforms that cannot power off (iOS). Set before start(). Offered
+    /// in hello, and obeyed, only on a direct-cable session until pairing
+    /// exists: anything on the LAN can reach the listener, the cable cannot
+    /// be faked from the far end.
+    var powerActions: [PowerAction] = []
+    /// Called on the main thread once a power action passed the gate.
+    var onPowerAction: ((PowerAction) -> Void)?
     private var lastCursorSeq: UInt64 = 0
     // Cursor channel health for the HUD/stats: how many positions landed and
     // how many datagrams never did (sequence gaps + reordered drops). A
@@ -847,6 +855,15 @@ final class StreamReceiver: ObservableObject {
             let height = obj["height"] as? Int ?? 0
             let fps = obj["framesPerSecond"] as? Int ?? 0
             Log.info("stream configuration: \(codec.uppercased()) \(width)x\(height) @\(fps)fps")
+        case WireMessage.power:
+            let action = (obj["action"] as? String).flatMap(PowerAction.init(rawValue:))
+            guard let action, powerActions.contains(action),
+                  let conn = connection, acceptsPowerActions(on: conn) else {
+                Log.info("ignored power \(obj["action"] ?? "?"): not offered on this session")
+                return
+            }
+            Log.info("power \(action.rawValue) requested by the sender")
+            DispatchQueue.main.async { self.onPowerAction?(action) }
         case WireMessage.updateRequired:
             // The Mac refuses this pairing until we update from the App Store.
             let message = obj["message"] as? String
@@ -953,6 +970,7 @@ final class StreamReceiver: ObservableObject {
         // false "upgrade" onto a bridged-LAN path that still crosses the
         // phone's radio — and then have the session classified as a cable
         // whose loss must end it instead of reconnecting.
+        if acceptsPowerActions(on: conn) { hello["power"] = powerActions.map(\.rawValue) }
         let addrs = advertisesAddresses ? Self.reachableAddresses() : []
         if !addrs.isEmpty { hello["addrs"] = addrs }
         lastAdvertisedAddrs = addrs
@@ -960,7 +978,16 @@ final class StreamReceiver: ObservableObject {
         // still active; it must not change bookkeeping for that live session.
         if connection === conn { cursorPortAnnounced = announcesCursorPort }
         sendControl(hello, on: conn)
-        Log.info("hello sent\(announcesCursorPort ? " (cursorPort \(cursorPort))" : "")")
+        let power = hello["power"] as? [String] ?? []
+        Log.info("hello sent\(announcesCursorPort ? " (cursorPort \(cursorPort))" : "")"
+                 + (power.isEmpty ? "" : " power \(power.joined(separator: ","))"))
+    }
+
+    /// The power gate (PROTOCOL.md 6.6): the session rides the direct
+    /// cable, judged from this side of the connection. A session that falls back to WiFi is a new connection with a
+    /// fresh hello, so the offer follows the live path.
+    private func acceptsPowerActions(on conn: NWConnection) -> Bool {
+        !powerActions.isEmpty && DirectCable.carries(conn)
     }
 
     /// Every IP address of an up, non-loopback interface, for hello.addrs.

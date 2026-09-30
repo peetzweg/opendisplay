@@ -35,6 +35,13 @@ enum WireMessage {
     static let sleeping = "sleeping"                // phone -> Mac: device locked, reconnect on wake
     static let closing = "closing"                  // phone -> Mac: app quit, end the session for good
     static let streamConfig = "streamConfig"        // Mac -> receiver: selected video operating point
+    static let power = "power"                      // Mac -> receiver: shut down (PROTOCOL.md 6.6)
+}
+
+/// What a `power` message asks the receiver to do (PROTOCOL.md 6.6). The
+/// wire says what, each receiver platform decides how.
+enum PowerAction: String, CaseIterable {
+    case shutdown
 }
 
 /// One receiver-supported operating envelope. Every non-nil limit in an

@@ -362,6 +362,7 @@ section 4.
 | `welcome` | pv 2 | `pv`, `min` | Sender's side of the version handshake |
 | `updateRequired` | pv 2 | `target`, `store`, `message` | Peer must update to continue |
 | `streamConfig` | pv 3 (additive) | `codec`, `width`, `height`, `framesPerSecond` | Selected video operating point |
+| `power` | pv 3 (additive) | `action` | Ask the receiver to power off (6.6) |
 
 **`pong`** echoes the `t` from the receiver's `ping` unchanged and adds
 `mt`: milliseconds since the Unix epoch on the sender's clock at the moment
@@ -569,6 +570,32 @@ legacy ceiling does not limit HEVC. Receiver limits do not replace sender
 validation: the sender must independently check that its encoder accepts the
 selected codec's raster and rate.
 
+### 6.6 Power actions (`hello.power`)
+
+A receiver used only as a screen often has no keyboard or mouse, so the
+sender can ask it to power off.
+
+* A receiver that can carry out power actions lists them in its `hello`:
+  `"power": ["shutdown"]`. It lists them **only on a session it would
+  obey them on**, and re-evaluates on every `hello`; absent means none.
+  Senders MUST NOT offer an action the current `hello` does not list.
+* The sender sends `{"type":"power","action":"shutdown"}`.
+* **Gate (normative).** Until the stream is authenticated, a receiver
+  MUST accept `power` only on a session that rides the direct host-to-host
+  cable, judged from its own side of the accepted connection: the path
+  uses no WiFi, cellular or loopback interface, and the remote address is
+  link-local (`169.254/16` or `fe80::/10`). Nothing the sender sends can
+  change this. A `power` message on any other session MUST be ignored.
+  Known gap: a LAN without a DHCP server also hands out `169.254`
+  addresses.
+* The message says **what**, the receiver decides **how** (the official
+  macOS receiver sends loginwindow `kAEShutDown`; a Linux receiver might
+  call `systemctl poweroff`). It powers off right away, without a
+  confirmation on the receiver; the sender confirms with its user first.
+* Before powering off, the receiver SHOULD announce `closing` (6.1) so the
+  sender ends the session instead of redialing.
+* Receivers that cannot power the device off (iOS, iPadOS) never list it.
+
 ## 7. Coordinate spaces and units
 
 The most common third-party bug is a unit mismatch, so here is every space
@@ -707,6 +734,7 @@ Mechanics at a glance (the policy behind them lives in COMPATIBILITY.md):
 | 3 | `pencil`, `proximity`; below pv 3 the receiver degrades stylus to `touch` |
 | 3 (additive) | `hello.cursorPort` and the UDP cursor side channel (6.3); optional, no bump |
 | 3 (additive) | `hello.videoCaps`, `displayMaxFrameRate`, and `streamConfig` (6.5); legacy peers remain implicit H.264 |
+| 3 (additive) | `hello.power` and `power` (6.6); direct cable only |
 | 4 (reserved) | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
 
 ---
@@ -762,3 +790,4 @@ This file is versioned by git; the authoritative change log is
 |---|---|
 | 2026-08-19 | Initial specification, written against `pv` 3 |
 | 2026-08-26 | Additive: `hello.cursorPort` and the UDP cursor side channel (section 6.3) |
+| 2026-09-30 | Additive: `hello.power` and `power`, direct cable only (section 6.6) |

@@ -42,6 +42,8 @@ struct PhoneInfo: Decodable {
     let maxEncodeHigh: Int?  //  6.5): caps the stream, and with it the desktop
     let displayMaxFrameRate: Int?       // presentation ceiling; absent = legacy 60
     let videoCaps: [VideoCapability]?   // codec-specific joint decode constraints
+    let power: [String]?  // power actions the receiver accepts on THIS session
+                          // (PROTOCOL.md 6.6); absent = none offered
 
     var kind: String { device ?? "device" }
     var protocolVersion: Int { pv ?? WireProtocol.assumedWhenAbsent }
@@ -2840,6 +2842,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Control messages on the video channel (pong etc.) — framed JSON without
     /// start codes; the receiver routes payloads starting with '{'.
     // MARK: - Version handshake (issue #132)
+
+    /// Ask the receiver to shut down (PROTOCOL.md 6.6). Only offered when
+    /// its current hello lists the action; the receiver says "closing" and
+    /// the existing handler ends the session, or the cable drop does if the
+    /// goodbye never arrives.
+    func requestPower(_ action: PowerAction) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            Log.info("asking the receiver to \(action.rawValue)")
+            self.sendJSONFrame("{\"type\":\"\(WireMessage.power)\",\"action\":\"\(action.rawValue)\"}")
+        }
+    }
 
     /// Identify ourselves to the receiver: our protocol version and the oldest
     /// receiver version we still support.

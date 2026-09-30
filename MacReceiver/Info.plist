@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>OpenDisplay Receiver shuts this Mac down when the connected Mac asks it to.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_opensidecar._tcp</string>
