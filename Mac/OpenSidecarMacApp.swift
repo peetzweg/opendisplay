@@ -245,13 +245,14 @@ final class SenderController: ObservableObject {
     // host-to-host cable. Plugging that cable in is a deliberate act, so a
     // record newly gaining such an interface connects like a cabled iPhone
     // does; plain WiFi discovery never grabs a (possibly shared) receiver
-    // after the launch window. Transition-based: Disconnect with the cable
-    // still in is respected until it is replugged.
+    // after the launch window. Transition-based, so a record that stays on
+    // the cable connects once, not on every browse update.
     private var onDirectCable: Set<String> = []
     // Service names the user disconnected while cabled. The record can
     // vanish and return without a replug (the receiver's display sleeps and
-    // wakes, it restarts), so the opt-out holds until the user connects by
-    // hand or the record is seen without the cable (actually unplugged).
+    // wakes, it restarts), and a cable-only receiver's unplug looks the
+    // same, so the opt-out simply holds until the user connects by hand.
+    // In memory: a relaunched sender starts fresh.
     private var cableOptOut: Set<String> = []
 
     init() {
@@ -390,14 +391,12 @@ final class SenderController: ObservableObject {
         })
         let plugged = nowOnCable.subtracting(onDirectCable)
         onDirectCable = nowOnCable
-        let listedOffCable = Set(discovered.compactMap(serviceName(of:))).subtracting(nowOnCable)
-        cableOptOut.subtract(listedOffCable)
         guard autoConnectEnabled, !plugged.isEmpty else { return }
         for result in discovered {
             guard let name = serviceName(of: result), plugged.contains(name),
                   !cableOptOut.contains(name),
                   activeSession(coveringWiFi: result) == nil,
-                  !servedByInstallID(result),
+                  !alreadyServedOnCable(result),
                   // A USB-attached phone belongs to the usbmux path and its
                   // own opt-out, never this one.
                   !usbDevices.contains(where: { sameDevice(result, $0) }) else { continue }
@@ -406,12 +405,18 @@ final class SenderController: ObservableObject {
         }
     }
 
-    /// A live session already talks to this receiver under another service
-    /// name (renamed while streaming). TXT is often missing from browse
-    /// results; without it the name checks in activeSession have to do.
-    private func servedByInstallID(_ result: NWBrowser.Result) -> Bool {
-        guard let id = txtID(of: result) else { return false }
-        return sessions.contains { !$0.failed && $0.deviceID == id }
+    /// A live session may already talk to this receiver under another
+    /// service name (renamed while streaming). Match the install id when the
+    /// browse result carries TXT; it often does not, so also treat any live
+    /// session already on the cable as covering it: a second cabled Mac
+    /// receiver at the same time is rare, and a click still connects it.
+    private func alreadyServedOnCable(_ result: NWBrowser.Result) -> Bool {
+        let id = txtID(of: result)
+        return sessions.contains { s in
+            guard !s.failed else { return false }
+            if let id, s.deviceID == id { return true }
+            return s.wired && s.deviceKind == "Mac"
+        }
     }
 
     /// Cable plugged in while the device streams over WiFi: migrate the live
@@ -700,7 +705,9 @@ final class SenderController: ObservableObject {
         case .usb: usbDisabled.insert(session.id)
         case .wifi:
             wifiRemembered.remove(session.id)
-            if let name = session.wifiServiceName { cableOptOut.insert(name) }
+            if let name = session.wifiServiceName, onDirectCable.contains(name) {
+                cableOptOut.insert(name)
+            }
         }
         // A migrated session is also reachable the other way — opt that side
         // out too, or auto-connect resurrects the device moments later.
