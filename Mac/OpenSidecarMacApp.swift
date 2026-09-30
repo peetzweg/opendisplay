@@ -248,6 +248,11 @@ final class SenderController: ObservableObject {
     // after the launch window. Transition-based: Disconnect with the cable
     // still in is respected until it is replugged.
     private var onDirectCable: Set<String> = []
+    // Service names the user disconnected while cabled. The record can
+    // vanish and return without a replug (the receiver's display sleeps and
+    // wakes, it restarts), so the opt-out holds until the user connects by
+    // hand or the record is seen without the cable (actually unplugged).
+    private var cableOptOut: Set<String> = []
 
     init() {
         startBrowsing()
@@ -385,13 +390,28 @@ final class SenderController: ObservableObject {
         })
         let plugged = nowOnCable.subtracting(onDirectCable)
         onDirectCable = nowOnCable
+        let listedOffCable = Set(discovered.compactMap(serviceName(of:))).subtracting(nowOnCable)
+        cableOptOut.subtract(listedOffCable)
         guard autoConnectEnabled, !plugged.isEmpty else { return }
         for result in discovered {
             guard let name = serviceName(of: result), plugged.contains(name),
-                  activeSession(coveringWiFi: result) == nil else { continue }
+                  !cableOptOut.contains(name),
+                  activeSession(coveringWiFi: result) == nil,
+                  !servedByInstallID(result),
+                  // A USB-attached phone belongs to the usbmux path and its
+                  // own opt-out, never this one.
+                  !usbDevices.contains(where: { sameDevice(result, $0) }) else { continue }
             Log.info("\(name) appeared on the direct cable — connecting")
             connect(to: .wifi(result))
         }
+    }
+
+    /// A live session already talks to this receiver under another service
+    /// name (renamed while streaming). TXT is often missing from browse
+    /// results; without it the name checks in activeSession have to do.
+    private func servedByInstallID(_ result: NWBrowser.Result) -> Bool {
+        guard let id = txtID(of: result) else { return false }
+        return sessions.contains { !$0.failed && $0.deviceID == id }
     }
 
     /// Cable plugged in while the device streams over WiFi: migrate the live
@@ -550,7 +570,9 @@ final class SenderController: ObservableObject {
         // Connecting a device clears its "don't auto-connect" state.
         switch target {
         case .usb: usbDisabled.remove(id)
-        case .wifi: wifiRemembered.insert(id)
+        case .wifi(let result):
+            wifiRemembered.insert(id)
+            if userInitiated, let name = serviceName(of: result) { cableOptOut.remove(name) }
         }
 
         let transport: SenderTransport
@@ -676,7 +698,9 @@ final class SenderController: ObservableObject {
     func disconnect(_ session: DeviceSession) {
         switch session.target {
         case .usb: usbDisabled.insert(session.id)
-        case .wifi: wifiRemembered.remove(session.id)
+        case .wifi:
+            wifiRemembered.remove(session.id)
+            if let name = session.wifiServiceName { cableOptOut.insert(name) }
         }
         // A migrated session is also reachable the other way — opt that side
         // out too, or auto-connect resurrects the device moments later.
