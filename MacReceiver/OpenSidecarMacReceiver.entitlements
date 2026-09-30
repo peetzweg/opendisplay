@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<!-- Hardened runtime: shutting down on the sender's request is an Apple
-	     event to loginwindow (PROTOCOL.md 6.7). -->
+	     event to loginwindow (PROTOCOL.md 6.6). -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 </dict>

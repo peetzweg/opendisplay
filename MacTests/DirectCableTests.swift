@@ -20,3 +20,18 @@ final class DirectCableTests: XCTestCase {
         XCTAssertFalse(DirectCable.isLinkLocal(nil))
     }
 }
+
+final class DirectCableInterfaceTests: XCTestCase {
+    func testCableInterfaceHasOnlyLinkLocal() {
+        // bridge0 on a Thunderbolt host-to-host link.
+        XCTAssertTrue(DirectCable.onlyLinkLocal(["fe80::c09:d6aa:173a:3ca8", "169.254.37.173"]))
+    }
+
+    func testOrdinaryNetworkHasARoutableAddress() {
+        // Office Ethernet: fe80 plus a DHCP lease, or plus an IPv6 prefix.
+        XCTAssertFalse(DirectCable.onlyLinkLocal(["fe80::847:a9b1:f90d:1777", "192.168.178.75"]))
+        XCTAssertFalse(DirectCable.onlyLinkLocal(["fe80::847:a9b1:f90d:1777", "2001:9e8:973:a400::1"]))
+        XCTAssertFalse(DirectCable.onlyLinkLocal(["fe80::1", "fd10:4a45:316d::2"]))
+        XCTAssertFalse(DirectCable.onlyLinkLocal([]))
+    }
+}

@@ -984,8 +984,9 @@ final class StreamReceiver: ObservableObject {
     }
 
     /// The power gate (PROTOCOL.md 6.6): the session rides the direct
-    /// cable, judged from this side of the connection. A session that falls back to WiFi is a new connection with a
-    /// fresh hello, so the offer follows the live path.
+    /// cable, judged from this side of the connection. A session that falls
+    /// back to WiFi is a new connection with a fresh hello, so the offer
+    /// follows the live path.
     private func acceptsPowerActions(on conn: NWConnection) -> Bool {
         !powerActions.isEmpty && DirectCable.carries(conn)
     }

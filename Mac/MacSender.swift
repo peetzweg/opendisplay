@@ -1227,24 +1227,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let wired = !path.usesInterfaceType(.wifi) && !path.usesInterfaceType(.loopback)
             && !path.usesInterfaceType(.cellular)
         currentPathDirectLink = wired
-            && Self.endpointIsLinkLocal(path.remoteEndpoint ?? conn.endpoint)
-    }
-
-    /// True when the far end of a connection is a link-local address
-    /// (fe80::/10 or 169.254/16). The USB-C/Thunderbolt host-to-host link
-    /// hands out nothing else — necessary for "riding the direct cable",
-    /// but not sufficient: see refreshDirectLinkClassification.
-    private static func endpointIsLinkLocal(_ endpoint: NWEndpoint?) -> Bool {
-        guard case .hostPort(let host, _)? = endpoint else { return false }
-        switch host {
-        case .ipv4(let addr): return addr.isLinkLocal
-        case .ipv6(let addr): return addr.isLinkLocal
-        case .name(let name, _):
-            // Literal probe targets dial as names ("fe80::1%en5").
-            let bare = name.lowercased()
-            return bare.hasPrefix("169.254.") || bare.hasPrefix("fe80:")
-        @unknown default: return false
-        }
+            && DirectCable.isLinkLocal(path.remoteEndpoint ?? conn.endpoint)
     }
 
     /// A dial was actively refused (must be called on `queue`). On a session
@@ -2841,7 +2824,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Control messages on the video channel (pong etc.) — framed JSON without
     /// start codes; the receiver routes payloads starting with '{'.
-    // MARK: - Version handshake (issue #132)
+    // MARK: - Power actions
 
     /// Ask the receiver to shut down (PROTOCOL.md 6.6). Only offered when
     /// its current hello lists the action; the receiver says "closing" and
@@ -2854,6 +2837,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self.sendJSONFrame("{\"type\":\"\(WireMessage.power)\",\"action\":\"\(action.rawValue)\"}")
         }
     }
+
+    // MARK: - Version handshake (issue #132)
 
     /// Identify ourselves to the receiver: our protocol version and the oldest
     /// receiver version we still support.

@@ -583,11 +583,13 @@ sender can ask it to power off.
 * **Gate (normative).** Until the stream is authenticated, a receiver
   MUST accept `power` only on a session that rides the direct host-to-host
   cable, judged from its own side of the accepted connection: the path
-  uses no WiFi, cellular or loopback interface, and the remote address is
-  link-local (`169.254/16` or `fe80::/10`). Nothing the sender sends can
-  change this. A `power` message on any other session MUST be ignored.
-  Known gap: a LAN without a DHCP server also hands out `169.254`
-  addresses.
+  uses no WiFi, cellular or loopback interface, the remote address is
+  link-local (`169.254/16` or `fe80::/10`), and the local interface
+  carrying the path holds no routable address (every Ethernet segment has
+  `fe80` addresses; only the host-to-host link has nothing else). Nothing
+  the sender sends can change this. A `power` message on any other session
+  MUST be ignored. Known gap: a switch with no DHCP server and no IPv6
+  router looks the same as the cable.
 * The message says **what**, the receiver decides **how** (the official
   macOS receiver sends loginwindow `kAEShutDown`; a Linux receiver might
   call `systemctl poweroff`). It powers off right away, without a
