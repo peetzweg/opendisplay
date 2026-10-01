@@ -54,8 +54,11 @@ private struct ReceiverStatusSection: View {
                     .fill(receiver.connected ? Color.green : Color.orange)
                     .frame(width: 9, height: 9)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(receiver.connected ? "Connected" : "Waiting for a Mac…")
-                    Text(receiver.status)
+                    Text(receiver.connected ? "Connected" : "Waiting for a computer…")
+                    // The port matters on a Mac (firewall prompts), so the
+                    // idle caption names it instead of repeating the status.
+                    Text(receiver.connected || receiver.status != "Ready to connect"
+                         ? receiver.status : "Listening on port 9000")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

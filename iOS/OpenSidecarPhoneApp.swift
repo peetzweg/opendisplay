@@ -8,7 +8,7 @@ import Combine
 let deviceKind = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
 
 /// Landing page — hosts the Mac app download and explains the two-app setup.
-let macAppURL = URL(string: "https://peetzweg.github.io/opendisplay/")!
+let macAppURL = URL(string: "https://opendisplay.app/")!
 
 @main
 struct OpenSidecarPhoneApp: App {
@@ -283,7 +283,7 @@ struct OnboardingView: View {
                         Text("One more app to go")
                             .font(.title2.bold())
                             .multilineTextAlignment(.center)
-                        Text("OpenDisplay turns this \(deviceKind) into a second screen for your computer. It needs the **OpenDisplay Mac app** running on a Mac connected by the same USB cable or on the same WiFi network.")
+                        Text("OpenDisplay turns this \(deviceKind) into a second screen for your Mac. It needs the **OpenDisplay Mac app** running on a Mac connected by the same USB cable or on the same WiFi network.")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -293,7 +293,7 @@ struct OnboardingView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         HintRow("Install the OpenDisplay Mac app on your Mac", systemImage: "1.circle.fill")
                         HintRow("Connect the \(deviceKind) by USB, or join the same WiFi", systemImage: "2.circle.fill")
-                        HintRow("Keep this app open. Streaming starts on its own.", systemImage: "3.circle.fill")
+                        HintRow("Keep this app open. Streaming starts automatically.", systemImage: "3.circle.fill")
                     }
                     .font(.subheadline)
                     .padding(20)
@@ -352,8 +352,11 @@ struct SettingsView: View {
                 if !rateAppTapped {
                     Section {
                         Button {
-                            rateAppTapped = true
-                            openURL(AppStore.reviewURL)
+                            // Hide only once the App Store actually opened
+                            // (it can be restricted by Screen Time).
+                            openURL(AppStore.reviewURL) { accepted in
+                                if accepted { rateAppTapped = true }
+                            }
                         } label: {
                             Label("Rate OpenDisplay on the App Store", systemImage: "star")
                         }
@@ -422,7 +425,7 @@ struct SettingsView: View {
                     Label("WiFi: both devices on the same network, then pick this \(deviceKind) in OpenDisplay on your computer.",
                           systemImage: "wifi")
                     Label("Rotate the \(deviceKind) for a vertical second monitor.",
-                          systemImage: "rectangle.portrait.rotate")
+                          systemImage: "rotate.right")
                     Label("Touch: tap to click, drag to drag, two-finger pan to scroll.",
                           systemImage: "hand.tap")
                 } header: {
