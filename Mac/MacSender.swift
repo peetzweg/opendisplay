@@ -420,7 +420,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             try await setupExtend(info)
             // A hello during setup (a rotation inside the identity retry or
             // promotion window) found no stream to reconfigure; apply it now.
-            if let latest = lastHello, streamSelectionInputsChanged(from: info, to: latest) {
+            // Same for a canvas rebuild requested before any stream existed
+            // (a 2x refusal or an HEVC failure during setup).
+            if let latest = lastHello,
+               streamSelectionInputsChanged(from: info, to: latest) || canvasNeedsRebuild {
+                canvasNeedsRebuild = false
                 await reconfigure(latest)
             }
 
@@ -455,7 +459,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                explicit: true, presentable: plan.presentable)
         }
         #endif
-        if refusedDesktops.contains(plan.desktop) {
+        if isRefused(plan.desktop) {
             plan = DesktopPolicy.oneXFallback(facts: info.facts)
         }
         return plan
@@ -477,7 +481,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             legacyCeiling: legacyEncodeCeiling(for: info),
             videoCaps: info.videoCaps,
             displayMaxFrameRate: info.displayMaxFrameRate)
-        if refusedDesktops.contains(canvas) {
+        if isRefused(canvas) {
             return DesktopPolicy.oneXFallback(facts: info.facts).desktop
         }
         if canvas != plan.desktop {
@@ -492,11 +496,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// 2x desktops macOS refused on this session's display (#292); the
     /// desktop policy runs the 1x fallback instead of any of them.
-    private var refusedDesktops: Set<VirtualCanvasSize> = []
+    /// Written from the display's enforcement loop, read from capture and
+    /// control paths, so it lives under `pipelineLock`.
+    private var refusedDesktopsStorage: Set<VirtualCanvasSize> = []
 
+    private func isRefused(_ desktop: VirtualCanvasSize) -> Bool {
+        pipelineLock.lock(); defer { pipelineLock.unlock() }
+        return refusedDesktopsStorage.contains(desktop)
+    }
+
+    /// Runs on `queue`, where `lastHello` lives.
     private func modeRefused(_ refused: VirtualCanvasSize, info: PhoneInfo) {
-        guard !refusedDesktops.contains(refused) else { return }
-        refusedDesktops.insert(refused)
+        pipelineLock.lock()
+        let inserted = refusedDesktopsStorage.insert(refused).inserted
+        pipelineLock.unlock()
+        guard inserted else { return }
         let fallback = DesktopPolicy.oneXFallback(facts: info.facts).desktop
         Log.info("macOS refused \(refused.pointsWide)x\(refused.pointsHigh) @2x, running "
             + "\(fallback.pointsWide)x\(fallback.pointsHigh) @1x")
@@ -699,8 +713,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 if let created {
                     await MainActor.run {
                         created.onModeRefused = { [weak self] refused in
-                            guard let self, let info = self.lastHello else { return }
-                            self.modeRefused(refused, info: info)
+                            self?.queue.async {
+                                guard let self, let info = self.lastHello else { return }
+                                self.modeRefused(refused, info: info)
+                            }
                         }
                     }
                     break
@@ -875,6 +891,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         Task {
             try? await Task.sleep(for: .milliseconds(300))
             guard let info = self.lastHello, self.canvasNeedsRebuild else { return }
+            // Still in setup: `start()` picks the flag up once setupExtend
+            // returns, so a second capture path never starts beside it.
+            guard self.stream != nil else { return }
             // A running reconfigure picks the flag up at the end of its pass.
             if !self.reconfiguring { self.canvasNeedsRebuild = false }
             await self.reconfigure(info)
