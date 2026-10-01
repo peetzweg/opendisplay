@@ -205,16 +205,16 @@ struct IdleView: View {
             }
 
             VStack(alignment: .leading, spacing: 14) {
-                Label("Plug in the USB cable and start the Mac app",
-                      systemImage: "cable.connector")
-                Label("Or choose this \(deviceKind) under WiFi in the Mac app",
-                      systemImage: "wifi")
-                Label("Keep this app open — streaming starts automatically",
-                      systemImage: "play.circle")
+                HintRow("Plug in the USB cable and open OpenDisplay on your computer",
+                        systemImage: "cable.connector")
+                HintRow("Or pick this \(deviceKind) under WiFi in OpenDisplay on your computer",
+                        systemImage: "wifi")
+                HintRow("Keep this app open. Streaming starts automatically.",
+                        systemImage: "play.circle")
             }
             .font(.subheadline)
             .padding(20)
-            .frame(maxWidth: 420)
+            .frame(maxWidth: 420, alignment: .leading)
             .background(Color(.secondarySystemBackground),
                         in: RoundedRectangle(cornerRadius: 16))
 
@@ -235,6 +235,30 @@ struct IdleView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
+    }
+}
+
+/// One hint line: the symbol centered in a fixed-width column, so every
+/// row's text starts at the same edge whatever the symbol's width, and the
+/// text wraps instead of truncating.
+struct HintRow: View {
+    let text: String
+    let systemImage: String
+    @ScaledMetric(relativeTo: .subheadline) private var iconWidth: CGFloat = 24
+
+    init(_ text: String, systemImage: String) {
+        self.text = text
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: systemImage)
+                .frame(width: iconWidth)
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -259,7 +283,7 @@ struct OnboardingView: View {
                         Text("One more app to go")
                             .font(.title2.bold())
                             .multilineTextAlignment(.center)
-                        Text("OpenDisplay turns this \(deviceKind) into a second screen for your Mac — but it needs the **OpenDisplay Mac app** running on a Mac connected by the same USB cable or on the same WiFi network.")
+                        Text("OpenDisplay turns this \(deviceKind) into a second screen for your computer. It needs the **OpenDisplay Mac app** running on a Mac connected by the same USB cable or on the same WiFi network.")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -267,9 +291,9 @@ struct OnboardingView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Install the OpenDisplay Mac app on your Mac", systemImage: "1.circle.fill")
-                        Label("Connect the \(deviceKind) by USB, or join the same WiFi", systemImage: "2.circle.fill")
-                        Label("Keep this app open — streaming starts on its own", systemImage: "3.circle.fill")
+                        HintRow("Install the OpenDisplay Mac app on your Mac", systemImage: "1.circle.fill")
+                        HintRow("Connect the \(deviceKind) by USB, or join the same WiFi", systemImage: "2.circle.fill")
+                        HintRow("Keep this app open. Streaming starts on its own.", systemImage: "3.circle.fill")
                     }
                     .font(.subheadline)
                     .padding(20)
@@ -339,7 +363,7 @@ struct SettingsView: View {
                 Section("Status") {
                     LabeledRow("Listening", value: "Port 9000")
                     LabeledRow("Connection",
-                               value: receiver.connected ? "Connected" : "Waiting for Mac")
+                               value: receiver.connected ? "Connected" : "Waiting for a computer")
                     if receiver.videoSize != .zero {
                         LabeledRow("Stream",
                                    value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
@@ -356,7 +380,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Name")
                 } footer: {
-                    Text("Shown in the Mac app's WiFi connection menu. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
+                    Text("Shown in the WiFi list of OpenDisplay on your computer. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
                 }
 
                 Section {
@@ -377,7 +401,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Permissions")
                 } footer: {
-                    Text("WiFi mode needs Local Network access. If your Mac can't find this \(deviceKind), enable it under Settings → Privacy & Security → Local Network → OpenDisplay. USB mode works without it.")
+                    Text("WiFi mode needs Local Network access. If your computer can't find this \(deviceKind), enable it under Settings → Privacy & Security → Local Network → OpenDisplay. USB mode works without it.")
                 }
 
                 Section {
@@ -393,9 +417,9 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Label("USB: plug in the cable, run the Mac app — it connects automatically through the wire (lowest latency).",
+                    Label("USB: plug in the cable and open OpenDisplay on your computer. It connects through the wire on its own (lowest latency).",
                           systemImage: "cable.connector")
-                    Label("WiFi: both devices on the same network, then pick this \(deviceKind) in the Mac app's Connection menu.",
+                    Label("WiFi: both devices on the same network, then pick this \(deviceKind) in OpenDisplay on your computer.",
                           systemImage: "wifi")
                     Label("Rotate the \(deviceKind) for a vertical second monitor.",
                           systemImage: "rectangle.portrait.rotate")
