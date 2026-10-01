@@ -121,7 +121,6 @@ final class DeviceSession: ObservableObject, Identifiable {
 
     @Published var status = "Starting…"
     @Published var framesSent = 0
-    @Published var mbps = 0.0
     // The sender's start() threw: the pipeline is freed, only this row's
     // error text remains. A failed session must never swallow a fresh
     // connect for its device the way a live one does.
@@ -658,9 +657,8 @@ final class SenderController: ObservableObject {
             // is cabled — take the upgrade opportunity right away.
             self.autoConnect()
         }
-        sender.onStats = { [weak session] frames, mbps in
+        sender.onStats = { [weak session] frames, _ in
             session?.framesSent = frames
-            session?.mbps = mbps
         }
         sender.onDisconnected = { [weak self, weak session] in
             // Device unplugged / left the network and stayed gone: end this
@@ -1145,11 +1143,6 @@ struct SessionRow: View {
                     .lineLimit(2)
             }
             Spacer()
-            if session.mbps > 0 {
-                Text("\(String(format: "%.1f", session.mbps)) Mbit/s")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
             // A live session recovers on its own (liveness watchdog, redial,
             // transport failover), so only a failed start gets a button.
             if session.failed {
