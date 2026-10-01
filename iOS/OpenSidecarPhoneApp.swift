@@ -421,6 +421,9 @@ struct SettingsView: View {
                     Link(destination: URL(string: "https://github.com/peetzweg/opendisplay")!) {
                         Label("GitHub: peetzweg/opendisplay", systemImage: "link")
                     }
+                    Link(destination: URL(string: "https://ko-fi.com/peetzweg")!) {
+                        Label("Support OpenDisplay on Ko-fi", systemImage: "cup.and.saucer")
+                    }
                 }
             }
             .navigationTitle("OpenDisplay")
