@@ -186,8 +186,9 @@ the same.
 
 *3. Display size,* per device, in the sender's device list (the arrows
 button next to Disconnect): **Larger Text**, **Default**, **More Space** or
-**Native (1x)**. Each choice shows the exact desktop it gives, and the video
-sent when it is not 1:1 ("scaled", a little softer). The choice is remembered
+**Native (1x)**. Each choice shows the exact desktop size it gives, like
+macOS's own Displays settings. More Space and Native look a little softer
+when the receiver cannot show that many pixels 1:1. The choice is remembered
 per device across reconnects, cable or WiFi, and rotation. Changing the
 virtual display's resolution in System Settings does not stick (OpenDisplay
 puts its own size back); use Display size instead.

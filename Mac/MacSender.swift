@@ -527,8 +527,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 codec: preferredCodec(for: info, source: plan.desktopPixels),
                 legacyCeiling: legacyEncodeCeiling(for: info),
                 videoCaps: info.videoCaps,
-                displayMaxFrameRate: info.displayMaxFrameRate,
-                panelScale: info.facts.scale)
+                displayMaxFrameRate: info.displayMaxFrameRate)
         }
     }
 

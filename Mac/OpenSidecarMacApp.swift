@@ -1211,7 +1211,7 @@ struct DisplaySizePicker: View {
             .labelsHidden()
         }
         .padding(14)
-        .frame(width: 300)
+        .fixedSize()
         .onAppear { session.refreshDisplaySize() }
     }
 

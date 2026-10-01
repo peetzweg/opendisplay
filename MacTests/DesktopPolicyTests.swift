@@ -209,15 +209,15 @@ final class DisplaySizeTests: XCTestCase {
         XCTAssertEqual(outcome(fiveK, .largerText, hevc: true).caption, "Looks like 2048 × 1152")
         XCTAssertEqual(outcome(fiveK, .default, hevc: true).caption, "Looks like 2560 × 1440")
         XCTAssertEqual(outcome(fiveK, .moreSpace, hevc: true).caption,
-                       "Looks like 3200 × 1800, sends 5120 × 2880 (scaled)")
-        XCTAssertEqual(outcome(fiveK, .native, hevc: true).caption, "Looks like 5120 × 2880 at 1x")
+                       "Looks like 3200 × 1800")
+        XCTAssertEqual(outcome(fiveK, .native, hevc: true).caption, "Looks like 5120 × 2880")
     }
 
     func testFiveKCaptionsOverH264() {
         // Default is capped to a 1:1 desktop; explicit sizes keep theirs, scaled.
         XCTAssertEqual(outcome(fiveK, .default, hevc: false).caption, "Looks like 2048 × 1152")
         XCTAssertEqual(outcome(fiveK, .native, hevc: false).caption,
-                       "Looks like 5120 × 2880 at 1x, sends 4096 × 2304 (scaled)")
+                       "Looks like 5120 × 2880")
     }
 
     func testIPadAir2Outcomes() {
@@ -241,17 +241,6 @@ final class DisplaySizeTests: XCTestCase {
         }
         defaults.set("custom", forKey: "k")
         XCTAssertEqual(DisplaySizeStore.load(key: "k", from: defaults), .default)
-    }
-
-    func testOneXFallbackOnARetinaPanelSaysSo() {
-        let fallback = DisplaySizeOutcome(choice: .default,
-                                          desktop: VirtualCanvasSize(pointsWide: 750, pointsHigh: 1334, scale: 1),
-                                          sent: PixelSize(width: 750, height: 1334), panelScale: 2)
-        XCTAssertEqual(fallback.caption, "Looks like 750 × 1334 at 1x")
-        let oneXPanel = DisplaySizeOutcome(choice: .default,
-                                           desktop: VirtualCanvasSize(pointsWide: 2560, pointsHigh: 1440, scale: 1),
-                                           sent: PixelSize(width: 2560, height: 1440), panelScale: 1)
-        XCTAssertEqual(oneXPanel.caption, "Looks like 2560 × 1440")
     }
 
     func testMoreSpaceOnPortraitFiveK() {
