@@ -313,6 +313,10 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    // Set once the user tapped "Rate on the App Store": the row is an
+    // invitation, not a permanent fixture.
+    @AppStorage("rateAppTapped") private var rateAppTapped = false
+    @Environment(\.openURL) private var openURL
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -321,6 +325,17 @@ struct SettingsView: View {
     var body: some View {
         AdaptiveNavigation {
             Form {
+                if !rateAppTapped {
+                    Section {
+                        Button {
+                            rateAppTapped = true
+                            openURL(AppStore.reviewURL)
+                        } label: {
+                            Label("Rate OpenDisplay on the App Store", systemImage: "star")
+                        }
+                    }
+                }
+
                 Section("Status") {
                     LabeledRow("Listening", value: "Port 9000")
                     LabeledRow("Connection",
@@ -400,11 +415,11 @@ struct SettingsView: View {
 
                 Section("About") {
                     LabeledRow("Version", value: version)
-                    Link(destination: URL(string: "https://github.com/peetzweg/opendisplay")!) {
-                        Label("GitHub — peetzweg/opendisplay", systemImage: "link")
+                    Link(destination: URL(string: "https://opendisplay.app")!) {
+                        Label("OpenDisplay.app", systemImage: "globe")
                     }
-                    Link(destination: macAppURL) {
-                        Label("Website", systemImage: "globe")
+                    Link(destination: URL(string: "https://github.com/peetzweg/opendisplay")!) {
+                        Label("GitHub: peetzweg/opendisplay", systemImage: "link")
                     }
                 }
             }
