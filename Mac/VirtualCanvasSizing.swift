@@ -1,6 +1,6 @@
 import Foundation
 
-struct VirtualCanvasSize: Equatable {
+struct VirtualCanvasSize: Hashable {
     let pointsWide: Int
     let pointsHigh: Int
     /// Backing scale of the virtual display: 2 (HiDPI) for Retina receivers,

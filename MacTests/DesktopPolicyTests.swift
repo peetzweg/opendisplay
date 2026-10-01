@@ -39,9 +39,40 @@ final class DesktopPolicyTests: XCTestCase {
         XCTAssertEqual(DesktopPolicy.canvas(for: plan), plan.desktop)
     }
 
-    func testIPhone8DefaultIsStillHalfItsPixels() {
-        // Below macOS's 2x minimum; step 2 clamps it.
-        XCTAssertEqual(DesktopPolicy.plan(facts: facts(750, 1334, 2)).desktop, size(374, 666, 2))
+    func testSmallPhonesAreRaisedToTheTwoXMinimum() {
+        // #292: macOS refuses 2x modes under 526 points on the short axis.
+        XCTAssertEqual(DesktopPolicy.plan(facts: facts(750, 1334, 2)).desktop, size(526, 936, 2))
+        XCTAssertEqual(DesktopPolicy.plan(facts: facts(1334, 750, 2)).desktop, size(936, 526, 2))
+        XCTAssertEqual(DesktopPolicy.plan(facts: facts(828, 1792, 2)).desktop, size(526, 1138, 2))
+        XCTAssertEqual(DesktopPolicy.plan(facts: facts(640, 1136, 2)).desktop, size(526, 934, 2))
+        XCTAssertEqual(DesktopPolicy.plan(facts: facts(1080, 1920, 2.608)).desktop, size(540, 960, 2))
+        // Nothing at 1x is clamped.
+        XCTAssertEqual(DesktopPolicy.plan(facts: facts(750, 1334, 2), choice: .native).desktop,
+                       size(750, 1334, 1))
+        XCTAssertEqual(DesktopPolicy.plan(facts: facts(640, 480, 1)).desktop, size(640, 480, 1))
+    }
+
+    func testRaisedPhoneDesktopIsStreamedAtThePanel() throws {
+        // Larger than the panel, so it is explicit: the stream cap must not
+        // shrink it back below the 2x minimum.
+        let plan = DesktopPolicy.plan(facts: facts(750, 1334, 2))
+        XCTAssertTrue(plan.explicit)
+        XCTAssertEqual(DesktopPolicy.canvas(for: plan), plan.desktop)
+        let stream = try VideoStreamConfiguration.makeForCanvas(
+            plan.desktopPixels, panel: plan.streamReference, quality: .best,
+            presentable: plan.presentable)
+        XCTAssertEqual(stream.encodedSize, PixelSize(width: 748, height: 1334))
+    }
+
+    func testLargerTextOnIPhone15ProIsRaisedToTheMinimum() {
+        let plan = DesktopPolicy.plan(facts: facts(2556, 1179, 3), choice: .largerText)
+        XCTAssertEqual(plan.desktop, size(1144, 526, 2))   // 1022x470 before D1
+    }
+
+    func testRefusedTwoXModeFallsBackToTheNativeDesktop() {
+        let fallback = DesktopPolicy.oneXFallback(facts: facts(750, 1334, 2))
+        XCTAssertEqual(fallback.desktop, size(750, 1334, 1))
+        XCTAssertTrue(fallback.explicit)
     }
 
     func testIPadAir2Presets() {
@@ -140,8 +171,10 @@ final class DesktopPolicyTests: XCTestCase {
     // MARK: Legacy equivalence
 
     func testLegacyFactsReproduceTodaysDesktop() throws {
-        let hellos: [(Int, Int)] = [(2556, 1179), (1179, 2556), (1334, 750), (1792, 828),
-                                    (2048, 1536), (1536, 2048), (2388, 1668), (5120, 2880)]
+        // Phones under the 2x minimum (750x1334, 828x1792) differ on purpose,
+        // see testSmallPhonesAreRaisedToTheTwoXMinimum.
+        let hellos: [(Int, Int)] = [(2556, 1179), (1179, 2556), (2048, 1536), (1536, 2048),
+                                    (2388, 1668), (2732, 2048), (5120, 2880)]
         for (w, h) in hellos {
             let info = try JSONDecoder().decode(
                 PhoneInfo.self, from: Data(#"{"pixelsWide":\#(w),"pixelsHigh":\#(h),"scale":2}"#.utf8))

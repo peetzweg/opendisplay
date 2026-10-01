@@ -48,6 +48,16 @@ enum DesktopPolicy {
     /// Largest pixel size per axis that a desktop may take, so a size change
     /// always fits the display's descriptor and stays an in-place resize.
     static let maxPixelsPerAxis = 8_192
+    /// The smallest short axis, in points, that macOS accepts for a 2x mode
+    /// on a virtual display (measured on macOS 26, both orientations, #292).
+    static let minimumTwoXPoints = 526
+
+    /// The desktop to run after macOS refused a 2x mode: the panel's own
+    /// pixels at 1x (the Native desktop), so capture, stream and the mode
+    /// macOS actually runs agree.
+    static func oneXFallback(facts: PanelFacts) -> DesktopPlan {
+        plan(facts: facts, choice: .native)
+    }
 
     static func plan(facts: PanelFacts, choice: DisplaySize = .default) -> DesktopPlan {
         // A: macOS virtual displays only do 1x and 2x.
@@ -78,6 +88,16 @@ enum DesktopPolicy {
         case .native:
             points = (even(facts.pixelsWide), even(facts.pixelsHigh))
             scale = 1
+        }
+
+        // D1: macOS refuses 2x modes under 526 points on the short axis
+        // (#292); raise the short axis to 526, keeping the aspect. The
+        // stream is still bounded by the panel (step E), so a small phone
+        // gets a once-downscaled 2x desktop instead of a 1x one.
+        if scale == 2, min(points.w, points.h) < minimumTwoXPoints {
+            let short = min(points.w, points.h), long = max(points.w, points.h)
+            let raised = even(Int((Double(long) * Double(minimumTwoXPoints) / Double(short)).rounded()))
+            points = points.w < points.h ? (minimumTwoXPoints, raised) : (raised, minimumTwoXPoints)
         }
 
         // D2: fit the descriptor.

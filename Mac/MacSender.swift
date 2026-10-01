@@ -445,7 +445,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// rotates (it re-sends hello with swapped dimensions).
     /// The desktop the sender decides for this receiver (`DesktopPolicy`).
     private func desktopPlan(for info: PhoneInfo) -> DesktopPlan {
-        DesktopPolicy.plan(facts: info.facts, choice: displaySize)
+        var plan = DesktopPolicy.plan(facts: info.facts, choice: displaySize)
+        #if DEBUG
+        // `-forceDesktopPoints 374x666` asks for a 2x desktop macOS refuses,
+        // to exercise the 1x fallback (#292).
+        if let forced = UserDefaults.standard.string(forKey: "forceDesktopPoints")?
+            .split(separator: "x").compactMap({ Int($0) }), forced.count == 2 {
+            plan = DesktopPlan(desktop: VirtualCanvasSize(pointsWide: forced[0], pointsHigh: forced[1]),
+                               explicit: true, presentable: plan.presentable)
+        }
+        #endif
+        if refusedDesktops.contains(plan.desktop) {
+            plan = DesktopPolicy.oneXFallback(facts: info.facts)
+        }
+        return plan
     }
 
     /// The virtual display for the receiver: the plan's desktop, a default
@@ -464,6 +477,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             legacyCeiling: legacyEncodeCeiling(for: info),
             videoCaps: info.videoCaps,
             displayMaxFrameRate: info.displayMaxFrameRate)
+        if refusedDesktops.contains(canvas) {
+            return DesktopPolicy.oneXFallback(facts: info.facts).desktop
+        }
         if canvas != plan.desktop {
             Log.info("canvas capped at the stream size: \(canvas.pointsWide)x\(canvas.pointsHigh)pt "
                 + "@\(canvas.scale)x for a \(plan.desktop.pointsWide)x\(plan.desktop.pointsHigh)pt desktop")
@@ -473,6 +489,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Per-device desktop size choice; `.default` until the sender offers one.
     private var displaySize: DisplaySize = .default
+
+    /// 2x desktops macOS refused on this session's display (#292); the
+    /// desktop policy runs the 1x fallback instead of any of them.
+    private var refusedDesktops: Set<VirtualCanvasSize> = []
+
+    private func modeRefused(_ refused: VirtualCanvasSize, info: PhoneInfo) {
+        guard !refusedDesktops.contains(refused) else { return }
+        refusedDesktops.insert(refused)
+        let fallback = DesktopPolicy.oneXFallback(facts: info.facts).desktop
+        Log.info("macOS refused \(refused.pointsWide)x\(refused.pointsHigh) @2x, running "
+            + "\(fallback.pointsWide)x\(fallback.pointsHigh) @1x")
+        scheduleCanvasRebuild()
+    }
 
     /// Log once per session that a receiver's `panel` failed validation.
     private var loggedInvalidPanel = false
@@ -667,7 +696,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                           })
                 }
                 if stopped { throw CancellationError() }
-                if created != nil { break }
+                if let created {
+                    await MainActor.run {
+                        created.onModeRefused = { [weak self] refused in
+                            guard let self, let info = self.lastHello else { return }
+                            self.modeRefused(refused, info: info)
+                        }
+                    }
+                    break
+                }
                 Log.info("virtual display creation failed (identity +\(totalOffset), attempt \(attempt + 1)) — retrying")
                 await status("Preparing virtual display…")
             }

@@ -27,6 +27,11 @@ final class VirtualDisplay {
     private var restoreUntil: Date
     private var lastReportedOrigin: CGPoint?
     private let onOriginChange: ((CGPoint, CGSize) -> Void)?
+    /// Called once on the main thread when macOS keeps refusing a 2x target
+    /// (or keeps dropping it from the mode list), with the refused size. The
+    /// display is then running some other mode, so the owner should resize
+    /// it to a 1x size that capture and the stream agree on (#292).
+    var onModeRefused: ((VirtualCanvasSize) -> Void)?
 
     var displayID: CGDirectDisplayID { display.displayID }
 
@@ -204,6 +209,7 @@ final class VirtualDisplay {
                            ? " (probing again every \(Int(Self.hidpiRetryInterval))s from now)" : ""))
                 }
                 _ = display.apply(settings)
+                if hidpiRefusals == Self.hidpiRefusalsBeforeBackoff { reportRefusal() }
                 if hidpiRefusals >= Self.hidpiRefusalsBeforeBackoff {
                     hidpiRetryAfter = Date().addingTimeInterval(Self.hidpiRetryInterval)
                     return true
@@ -235,9 +241,15 @@ final class VirtualDisplay {
             Log.info("macOS refused the @\(scale)x mode \(hidpi.width)x\(hidpi.height) "
                 + "\(hidpiRefusals) times (result \(err.rawValue)) — leaving display "
                 + "\(display.displayID) in its current mode, probing again every \(Int(Self.hidpiRetryInterval))s")
+            reportRefusal()
         }
         hidpiRetryAfter = Date().addingTimeInterval(Self.hidpiRetryInterval)
         return true
+    }
+
+    private func reportRefusal() {
+        guard scale == 2 else { return }
+        onModeRefused?(VirtualCanvasSize(pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale))
     }
 
     /// Consecutive `CGCompleteDisplayConfiguration` failures for the target mode.
