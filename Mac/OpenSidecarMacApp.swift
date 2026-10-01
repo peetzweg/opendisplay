@@ -155,6 +155,30 @@ final class DeviceSession: ObservableObject, Identifiable {
 
     var transportLabel: String { onUSB ? "USB" : wired ? "Cable" : "WiFi" }
 
+    // The Display size control (extend only): the choice for this device
+    // and what each choice gives on it, from the latest hello.
+    private var lastHello: PhoneInfo?
+    @Published private(set) var displaySize: DisplaySize = .default
+    @Published private(set) var displaySizeOutcomes: [DisplaySizeOutcome] = []
+
+    func helloArrived(_ info: PhoneInfo) {
+        lastHello = info
+        refreshDisplaySize()
+    }
+
+    func setDisplaySize(_ size: DisplaySize) {
+        guard let info = lastHello else { return }
+        sender.setDisplaySize(size, for: info)
+        refreshDisplaySize()
+    }
+
+    private func refreshDisplaySize() {
+        guard let info = lastHello else { return }
+        displaySize = DisplaySizeStore.load(key: sender.displaySizeKey(for: info))
+        let outcomes = sender.displaySizeOutcomes(for: info)
+        if outcomes != displaySizeOutcomes { displaySizeOutcomes = outcomes }
+    }
+
     init(id: String, target: ConnectionTarget, name: String, sender: MacSender) {
         self.id = id
         self.target = target
@@ -619,6 +643,7 @@ final class SenderController: ObservableObject {
             guard let self, let session else { return }
             session.deviceID = info.id
             session.deviceKind = info.device
+            session.helloArrived(info)
             let power = (info.power ?? []).compactMap(PowerAction.init(rawValue:))
             if power != session.powerActions {
                 Log.info("session \(session.id) power actions: "
@@ -1094,6 +1119,7 @@ struct SessionRow: View {
     @ObservedObject var session: DeviceSession
     let controller: SenderController
     @State private var confirmingShutdown = false
+    @State private var choosingDisplaySize = false
 
     private var statusColor: Color {
         if session.status.hasPrefix("Extending") || session.status.hasPrefix("Mirroring")
@@ -1145,9 +1171,62 @@ struct SessionRow: View {
                     Text("Apps on it with unsaved changes can still stop the shutdown.")
                 }
             }
+            if !session.displaySizeOutcomes.isEmpty {
+                Button {
+                    choosingDisplaySize = true
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .controlSize(.small)
+                .help("Display size of \(title)")
+                .popover(isPresented: $choosingDisplaySize, arrowEdge: .bottom) {
+                    DisplaySizePicker(session: session)
+                }
+            }
             Button("Disconnect") { controller.disconnect(session) }
                 .controlSize(.small)
         }
+    }
+}
+
+/// The per-device desktop size, macOS Displays style: each choice with the
+/// exact desktop it gives underneath, and the stream when it is not 1:1.
+@MainActor
+struct DisplaySizePicker: View {
+    @ObservedObject var session: DeviceSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Display size").font(.headline)
+            Picker("Display size", selection: Binding(
+                get: { session.displaySize },
+                set: { session.setDisplaySize($0) })) {
+                ForEach(session.displaySizeOutcomes, id: \.choice) { outcome in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(outcome.choice.title)
+                        Text(caption(for: outcome))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                    .tag(outcome.choice)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+            Text("Scaled means the picture is not 1:1, so text looks a little softer.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(width: 300)
+    }
+
+    private func caption(for outcome: DisplaySizeOutcome) -> String {
+        let sameAsDefault = outcome.choice != .default
+            && outcome.desktop == session.displaySizeOutcomes.first(where: { $0.choice == .default })?.desktop
+        return outcome.caption + (sameAsDefault ? " (same as Default)" : "")
     }
 }
 

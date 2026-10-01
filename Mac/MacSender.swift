@@ -449,7 +449,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// rotates (it re-sends hello with swapped dimensions).
     /// The desktop the sender decides for this receiver (`DesktopPolicy`).
     private func desktopPlan(for info: PhoneInfo) -> DesktopPlan {
-        var plan = DesktopPolicy.plan(facts: info.facts, choice: displaySize)
+        var plan = DesktopPolicy.plan(facts: info.facts, choice: displaySize(for: info))
         #if DEBUG
         // `-forceDesktopPoints 374x666` asks for a 2x desktop macOS refuses,
         // to exercise the 1x fallback (#292).
@@ -491,8 +491,45 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         return canvas
     }
 
-    /// Per-device desktop size choice; `.default` until the sender offers one.
-    private var displaySize: DisplaySize = .default
+    /// The user's per-device desktop size (the Display size control),
+    /// read on every hello so a reconnect, a transport switch and a rotation
+    /// all apply it.
+    private func displaySize(for info: PhoneInfo) -> DisplaySize {
+        DisplaySizeStore.load(key: displaySizeKey(for: info))
+    }
+
+    func displaySizeKey(for info: PhoneInfo) -> String {
+        DisplaySizeStore.key(installID: info.id, serial: displaySerial)
+    }
+
+    /// Store a new choice and resize this session's display in place.
+    func setDisplaySize(_ size: DisplaySize, for info: PhoneInfo) {
+        let key = displaySizeKey(for: info)
+        guard DisplaySizeStore.load(key: key) != size else { return }
+        DisplaySizeStore.save(size, key: key)
+        Log.info("display size set to \(size.rawValue) for \(key)")
+        guard mode == .extend else { return }
+        scheduleCanvasRebuild()
+    }
+
+    /// What every choice gives this receiver now (Best quality, so the
+    /// caption describes the size, not the quality setting). Empty when
+    /// mirroring: the desktop is this Mac's own display there.
+    func displaySizeOutcomes(for info: PhoneInfo) -> [DisplaySizeOutcome] {
+        guard mode == .extend else { return [] }
+        return DisplaySize.allCases.map { choice in
+            var plan = DesktopPolicy.plan(facts: info.facts, choice: choice)
+            if refusedDesktops.contains(plan.desktop) {
+                plan = DesktopPolicy.oneXFallback(facts: info.facts)
+            }
+            return DesktopPolicy.outcome(
+                of: plan, choice: choice,
+                codec: preferredCodec(for: info, source: plan.desktopPixels),
+                legacyCeiling: legacyEncodeCeiling(for: info),
+                videoCaps: info.videoCaps,
+                displayMaxFrameRate: info.displayMaxFrameRate)
+        }
+    }
 
     /// 2x desktops macOS refused on this session's display (#292); the
     /// desktop policy runs the 1x fallback instead of any of them.

@@ -191,3 +191,61 @@ final class DesktopPolicyTests: XCTestCase {
         }
     }
 }
+
+final class DisplaySizeTests: XCTestCase {
+    private let fiveK = PanelFacts(pixelsWide: 5120, pixelsHigh: 2880, scale: 2,
+                                   pointsWide: 2560, pointsHigh: 1440)
+    private let caps = [VideoCapability(codec: "h264", maxWidth: 4096, maxHeight: 2304, maxFrameRate: 60),
+                        VideoCapability(codec: "hevc", maxWidth: 5120, maxHeight: 2880, maxFrameRate: 60)]
+
+    private func outcome(_ facts: PanelFacts, _ choice: DisplaySize, hevc: Bool) -> DisplaySizeOutcome {
+        DesktopPolicy.outcome(of: DesktopPolicy.plan(facts: facts, choice: choice), choice: choice,
+                              codec: hevc ? "hevc" : "h264",
+                              legacyCeiling: PixelSize(width: 4096, height: 2304),
+                              videoCaps: caps, displayMaxFrameRate: 60)
+    }
+
+    func testFiveKCaptionsOverHEVC() {
+        XCTAssertEqual(outcome(fiveK, .largerText, hevc: true).caption, "Looks like 2048 × 1152")
+        XCTAssertEqual(outcome(fiveK, .default, hevc: true).caption, "Looks like 2560 × 1440")
+        XCTAssertEqual(outcome(fiveK, .moreSpace, hevc: true).caption,
+                       "Looks like 3200 × 1800, sends 5120 × 2880 (scaled)")
+        XCTAssertEqual(outcome(fiveK, .native, hevc: true).caption, "Looks like 5120 × 2880 at 1x")
+    }
+
+    func testFiveKCaptionsOverH264() {
+        // Default is capped to a 1:1 desktop; explicit sizes keep theirs, scaled.
+        XCTAssertEqual(outcome(fiveK, .default, hevc: false).caption, "Looks like 2048 × 1152")
+        XCTAssertEqual(outcome(fiveK, .native, hevc: false).caption,
+                       "Looks like 5120 × 2880 at 1x, sends 4096 × 2304 (scaled)")
+    }
+
+    func testIPadAir2Outcomes() {
+        let iPad = PanelFacts(pixelsWide: 2048, pixelsHigh: 1536, scale: 2, pointsWide: nil, pointsHigh: nil)
+        let more = outcome(iPad, .moreSpace, hevc: false)
+        XCTAssertEqual(more.desktop, VirtualCanvasSize(pointsWide: 1280, pointsHigh: 960, scale: 2))
+        XCTAssertEqual(more.sent, PixelSize(width: 2048, height: 1536))
+        XCTAssertTrue(more.scaled)
+        XCTAssertFalse(outcome(iPad, .native, hevc: false).scaled)
+    }
+
+    func testPersistenceRoundTripAndKeys() {
+        let defaults = UserDefaults(suiteName: "DisplaySizeTests")!
+        defaults.removePersistentDomain(forName: "DisplaySizeTests")
+        XCTAssertEqual(DisplaySizeStore.key(installID: "ABC", serial: 7), "displaySize.ABC")
+        XCTAssertEqual(DisplaySizeStore.key(installID: nil, serial: 0x4f53), "displaySize.serial-00004f53")
+        for size in DisplaySize.allCases {
+            DisplaySizeStore.save(size, key: "k", to: defaults)
+            XCTAssertEqual(DisplaySizeStore.load(key: "k", from: defaults), size)
+        }
+        defaults.set("custom", forKey: "k")
+        XCTAssertEqual(DisplaySizeStore.load(key: "k", from: defaults), .default)
+    }
+
+    func testMoreSpaceOnPortraitFiveK() {
+        let portrait = PanelFacts(pixelsWide: 2880, pixelsHigh: 5120, scale: 2,
+                                  pointsWide: 1440, pointsHigh: 2560)
+        XCTAssertEqual(DesktopPolicy.plan(facts: portrait, choice: .moreSpace).desktop,
+                       VirtualCanvasSize(pointsWide: 1800, pointsHigh: 3200, scale: 2))
+    }
+}

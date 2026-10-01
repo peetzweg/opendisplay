@@ -20,6 +20,56 @@ struct PanelFacts: Equatable {
 /// default desktop. Presets only: every choice shows the exact size it gives.
 enum DisplaySize: String, CaseIterable {
     case largerText, `default`, moreSpace, native
+
+    var title: String {
+        switch self {
+        case .largerText: return "Larger Text"
+        case .default: return "Default"
+        case .moreSpace: return "More Space"
+        case .native: return "Native (1x)"
+        }
+    }
+}
+
+/// The per-device choice, persisted under the same key as the arrangement
+/// record: the receiver's install id, or the session serial for receivers
+/// without one. Presets are relative to the receiver's default desktop, so
+/// one record serves both orientations and every transport.
+enum DisplaySizeStore {
+    static func key(installID: String?, serial: UInt32) -> String {
+        "displaySize." + (installID ?? String(format: "serial-%08x", serial))
+    }
+
+    static func load(key: String, from defaults: UserDefaults = .standard) -> DisplaySize {
+        defaults.string(forKey: key).flatMap(DisplaySize.init(rawValue:)) ?? .default
+    }
+
+    static func save(_ size: DisplaySize, key: String, to defaults: UserDefaults = .standard) {
+        if size == .default {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(size.rawValue, forKey: key)
+        }
+    }
+}
+
+/// What a choice gives on this receiver right now, for the Display size
+/// control: the desktop it runs and the stream it sends.
+struct DisplaySizeOutcome: Equatable {
+    let choice: DisplaySize
+    let desktop: VirtualCanvasSize
+    let sent: PixelSize
+
+    /// The stream is smaller than the desktop's pixels: not 1:1.
+    var scaled: Bool { sent.width < desktop.pixelsWide || sent.height < desktop.pixelsHigh }
+
+    /// "Looks like 2560 × 1440", plus the stream when it is not 1:1.
+    var caption: String {
+        var text = "Looks like \(desktop.pointsWide) × \(desktop.pointsHigh)"
+        if desktop.scale == 1, choice == .native { text += " at 1x" }
+        if scaled { text += ", sends \(sent.width) × \(sent.height) (scaled)" }
+        return text
+    }
 }
 
 struct DesktopPlan: Equatable {
@@ -134,6 +184,25 @@ enum DesktopPolicy {
         return VirtualCanvasSize(pointsWide: even(best.width / scale),
                                  pointsHigh: even(best.height / scale),
                                  scale: scale)
+    }
+
+    /// The desktop and stream a plan gives with these stream inputs, as the
+    /// sender would build them (D3, then the stream for the canvas).
+    static func outcome(of plan: DesktopPlan, choice: DisplaySize,
+                        quality: StreamQuality = .best,
+                        codec: String = VideoStreamConfiguration.h264Codec,
+                        legacyCeiling: PixelSize? = nil,
+                        videoCaps: [VideoCapability]? = nil,
+                        displayMaxFrameRate: Int? = nil) -> DisplaySizeOutcome {
+        let canvas = self.canvas(for: plan, codec: codec, legacyCeiling: legacyCeiling,
+                                 videoCaps: videoCaps, displayMaxFrameRate: displayMaxFrameRate)
+        let pixels = PixelSize(width: canvas.pixelsWide, height: canvas.pixelsHigh)
+        let stream = try? VideoStreamConfiguration.makeForCanvas(
+            pixels, panel: plan.streamReference, quality: quality, codec: codec,
+            legacyCeiling: legacyCeiling, receiverCapabilities: videoCaps,
+            displayMaxFrameRate: displayMaxFrameRate, presentable: plan.presentable)
+        return DisplaySizeOutcome(choice: choice, desktop: canvas,
+                                  sent: stream?.encodedSize ?? pixels)
     }
 
     private static func even(_ value: Int) -> Int { max(2, value & ~1) }
