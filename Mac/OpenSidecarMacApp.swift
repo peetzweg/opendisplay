@@ -1209,10 +1209,6 @@ struct DisplaySizePicker: View {
             }
             .pickerStyle(.radioGroup)
             .labelsHidden()
-            Text("Scaled means the picture is not 1:1, so text looks a little softer.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(width: 300)
