@@ -342,6 +342,36 @@ final class StreamConfigurationTests: XCTestCase {
         XCTAssertEqual(config.encodedSize, PixelSize(width: 3000, height: 1688))
     }
 
+    func testPresentableBoundsTheStream() throws {
+        let phone = try VideoStreamConfiguration.make(
+            source: PixelSize(width: 1052, height: 1872), quality: .best,
+            presentable: PixelSize(width: 750, height: 1334))
+        // Aspect kept: 1052x1872 is a hair narrower than the panel.
+        XCTAssertEqual(phone.encodedSize, PixelSize(width: 748, height: 1334))
+        let hevc = [VideoCapability(codec: "hevc", maxWidth: 5120, maxHeight: 2880)]
+        let moreSpace = try VideoStreamConfiguration.make(
+            source: PixelSize(width: 6400, height: 3600), quality: .best, codec: "hevc",
+            receiverCapabilities: hevc, presentable: PixelSize(width: 5120, height: 2880))
+        XCTAssertEqual(moreSpace.encodedSize, PixelSize(width: 5120, height: 2880))
+    }
+
+    func testPresentableKeepsLowerPresetsOnFiveKAndLargerText() throws {
+        let presentable = PixelSize(width: 5120, height: 2880)
+        let ceiling = PixelSize(width: 4096, height: 2304)
+        let cases: [(PixelSize, PixelSize, StreamQuality, PixelSize)] = [
+            (PixelSize(width: 4096, height: 2304), presentable, .balanced, PixelSize(width: 3840, height: 2160)),
+            (PixelSize(width: 4096, height: 2304), presentable, .fast, PixelSize(width: 2560, height: 1440)),
+            (PixelSize(width: 4096, height: 2304), ceiling, .balanced, PixelSize(width: 3072, height: 1728)),
+            (PixelSize(width: 4096, height: 2304), ceiling, .fast, PixelSize(width: 2048, height: 1152)),
+        ]
+        for (canvas, panel, quality, expected) in cases {
+            let config = try VideoStreamConfiguration.makeForCanvas(
+                canvas, panel: panel, quality: quality, legacyCeiling: ceiling,
+                presentable: presentable)
+            XCTAssertEqual(config.encodedSize, expected, "\(quality) from \(panel)")
+        }
+    }
+
     func testInvalidSourceFailsClearly() {
         XCTAssertThrowsError(try VideoStreamConfiguration.make(
             source: PixelSize(width: 0, height: 1080), quality: .best))

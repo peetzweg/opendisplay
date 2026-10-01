@@ -194,9 +194,14 @@ allows:
   most Intel Macs from 2017 on).
 - **H.264**: up to 4096×2304, used otherwise. On a 5K iMac that means a
   2048×1152-point desktop even at Default.
+- **Non-Retina panels** (a 2013 iMac at 2560×1440, a 1080p display): the
+  desktop is the panel's own size at 1x and goes out 1:1 at 60 fps with
+  either codec, exactly like that Mac's own desktop.
 
-**More Space** never adds room beyond those caps, so it only makes text
-smaller. Settings toward **Larger Text** send fewer pixels and are smoother.
+**More Space** gives the extended desktop that much room too, but beyond
+those caps the picture is no longer 1:1: it is scaled once on the sender, so
+text is a little softer. Settings toward **Larger Text** send fewer pixels
+and are smoother.
 
 Measured with an M5 Pro MacBook Pro sending to a 2017 5K iMac over a cable
 (HEVC, moving content; latency is capture to display):
@@ -208,6 +213,7 @@ Measured with an M5 Pro MacBook Pro sending to a 2017 5K iMac over a cable
 | Default | Fast | 2560×1440 | 2560×1440 | ~58 fps | ~12 ms |
 | 2048×1152 | Best | 2048×1152 | 4096×2304, 1:1 | ~31 fps | ~20 ms |
 | 1600×900 | Best | 1600×900 | 3200×1800, 1:1 | ~55 fps | ~15 ms |
+| 3200×1800 | Best | 3200×1800 | 5120×2880, scaled | ~29 fps | ~33 ms |
 
 So on that pair:
 

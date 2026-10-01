@@ -24,31 +24,6 @@ enum CaptureMode: String {
     case extend   // virtual display (Milestone 2)
 }
 
-struct PhoneInfo: Decodable {
-    let pixelsWide: Int   // landscape-oriented (long edge)
-    let pixelsHigh: Int
-    let scale: Double
-    let device: String?   // "iPad" / "iPhone" (older receivers omit it)
-    let id: String?       // per-install identity (older receivers omit it) —
-                          // lets the controller match the same physical device
-                          // across USB and WiFi
-    let pv: Int?          // receiver protocol version (issue #132); absent on
-                          // every pre-handshake install → treat as protocol 1
-    let cursorPort: Int?  // UDP port for the cursor side channel (PROTOCOL.md
-                          // 6.3); absent = cursor stays on TCP
-    let addrs: [String]?  // every address the receiver is reachable on
-                          // (PROTOCOL.md 6.4); probed for a cable upgrade
-    let maxEncodeWide: Int?  // receiver's decode ceiling in pixels (PROTOCOL.md
-    let maxEncodeHigh: Int?  //  6.5): caps the stream, and with it the desktop
-    let displayMaxFrameRate: Int?       // presentation ceiling; absent = legacy 60
-    let videoCaps: [VideoCapability]?   // codec-specific joint decode constraints
-    let power: [String]?  // power actions the receiver accepts on THIS session
-                          // (PROTOCOL.md 6.6); absent = none offered
-
-    var kind: String { device ?? "device" }
-    var protocolVersion: Int { pv ?? WireProtocol.assumedWhenAbsent }
-}
-
 /// How the sender reaches the receiver. Reconnects re-dial from scratch, so
 /// a USB device that was replugged (new usbmuxd DeviceID) is found again.
 enum SenderTransport {
@@ -443,6 +418,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }
             let info = try await waitForHello()
             try await setupExtend(info)
+            // A hello during setup (a rotation inside the identity retry or
+            // promotion window) found no stream to reconfigure; apply it now.
+            if let latest = lastHello, streamSelectionInputsChanged(from: info, to: latest) {
+                await reconfigure(latest)
+            }
 
             // Touch back-channel (Milestone 3). Needs Accessibility trust;
             // streaming works without it, so don't interrupt with a prompt —
@@ -463,44 +443,55 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Build (or rebuild) the virtual display + capture for the announced
     /// phone dimensions. Called at startup and again whenever the phone
     /// rotates (it re-sends hello with swapped dimensions).
-    /// Canvas pixels for the receiver's panel: capped at the stream size so
-    /// capture is 1:1 (see `VideoStreamConfiguration.canvasPixels`).
-    /// Debug builds: `-canvasAtStreamSize NO` restores a panel-sized canvas for A/B tests.
-    private func canvasPixels(for info: PhoneInfo) -> PixelSize {
-        let panel = PixelSize(width: info.pixelsWide, height: info.pixelsHigh)
+    /// The desktop the sender decides for this receiver (`DesktopPolicy`).
+    private func desktopPlan(for info: PhoneInfo) -> DesktopPlan {
+        DesktopPolicy.plan(facts: info.facts, choice: displaySize)
+    }
+
+    /// The virtual display for the receiver: the plan's desktop, a default
+    /// one capped at the stream size so capture is 1:1 (`DesktopPolicy.canvas`).
+    /// Debug builds: `-canvasAtStreamSize NO` keeps the uncapped desktop for A/B tests.
+    private func desktopCanvas(for info: PhoneInfo) -> VirtualCanvasSize {
+        let plan = desktopPlan(for: info)
         #if DEBUG
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "canvasAtStreamSize") != nil,
-           !defaults.bool(forKey: "canvasAtStreamSize") { return panel }
+           !defaults.bool(forKey: "canvasAtStreamSize") { return plan.desktop }
         #endif
-        let canvas = VideoStreamConfiguration.canvasPixels(
-            forReceiver: panel,
-            codec: preferredCodec(for: info),
+        let canvas = DesktopPolicy.canvas(
+            for: plan,
+            codec: preferredCodec(for: info, source: plan.desktopPixels),
             legacyCeiling: legacyEncodeCeiling(for: info),
-            receiverCapabilities: info.videoCaps,
+            videoCaps: info.videoCaps,
             displayMaxFrameRate: info.displayMaxFrameRate)
-        if canvas != panel {
-            Log.info("canvas capped at the stream size: \(canvas.width)x\(canvas.height) "
-                + "for a \(panel.width)x\(panel.height) panel")
+        if canvas != plan.desktop {
+            Log.info("canvas capped at the stream size: \(canvas.pointsWide)x\(canvas.pointsHigh)pt "
+                + "@\(canvas.scale)x for a \(plan.desktop.pointsWide)x\(plan.desktop.pointsHigh)pt desktop")
         }
         return canvas
     }
+
+    /// Per-device desktop size choice; `.default` until the sender offers one.
+    private var displaySize: DisplaySize = .default
+
+    /// Log once per session that a receiver's `panel` failed validation.
+    private var loggedInvalidPanel = false
 
     /// HEVC when the receiver offers it and this Mac can encode that stream
     /// in hardware (see `VideoStreamConfiguration.preferredCodec`). The encoder
     /// is probed at the real stream size before the canvas is sized, so a Mac
     /// that cannot encode it gets an H.264-sized desktop from the start. A
     /// failed HEVC encoder later switches this session to H.264.
-    private func preferredCodec(for info: PhoneInfo) -> String {
+    private func preferredCodec(for info: PhoneInfo, source: PixelSize) -> String {
         let codec = VideoStreamConfiguration.preferredCodec(
             receiverCapabilities: info.videoCaps,
             senderEncodesHEVC: Self.hardwareHEVCEncoder && !hevcEncoderFailed)
         guard codec == VideoStreamConfiguration.hevcCodec else { return codec }
-        let panel = PixelSize(width: info.pixelsWide, height: info.pixelsHigh)
         guard let best = try? VideoStreamConfiguration.make(
-            source: panel, quality: .best, codec: codec,
+            source: source, quality: .best, codec: codec,
             receiverCapabilities: info.videoCaps,
-            displayMaxFrameRate: info.displayMaxFrameRate) else { return codec }
+            displayMaxFrameRate: info.displayMaxFrameRate,
+            presentable: info.facts.pixels) else { return codec }
         if Self.canEncodeHEVC(best.encodedSize) { return codec }
         Log.info("HEVC encoder unavailable at \(best.encodedSize.width)x\(best.encodedSize.height); using H.264")
         return VideoStreamConfiguration.h264Codec
@@ -575,14 +566,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func setupExtend(_ info: PhoneInfo) async throws {
-        Log.info("phone hello: \(info.pixelsWide)x\(info.pixelsHigh) @\(info.scale)x")
+        let facts = info.facts
+        Log.info("phone hello: " + (info.panel?.facts != nil
+            ? "panel \(facts.pixelsWide)x\(facts.pixelsHigh) @\(facts.scale)"
+                + (facts.pointsWide.map { " points \($0)x\(facts.pointsHigh ?? 0)" } ?? "")
+            : "legacy \(info.pixelsWide)x\(info.pixelsHigh) @\(info.scale)x"))
+        noteInvalidPanel(info)
 
-        // The virtual display runs @2x HiDPI. Large modes are applied only
-        // after a conservative bootstrap mode is online; some saved macOS
-        // display states reject the same mode when it is present at creation.
-        let canvas = canvasPixels(for: info)
+        // The desktop comes from `DesktopPolicy` (2x HiDPI for Retina-like
+        // panels, 1x otherwise). Large modes are applied only after a
+        // conservative bootstrap mode is online; some saved macOS display
+        // states reject the same mode when it is present at creation.
+        let canvas = desktopCanvas(for: info)
         guard let canvasPlan = VirtualCanvasSizing.plan(
-            pixelsWide: canvas.width, pixelsHigh: canvas.height) else {
+            pixelsWide: canvas.pixelsWide, pixelsHigh: canvas.pixelsHigh,
+            scale: canvas.scale) else {
             throw NSError(domain: "MacSender", code: 7,
                           userInfo: [NSLocalizedDescriptionKey: "the receiver reported an invalid display size"])
         }
@@ -591,7 +589,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let pointsWide = bootstrapCanvas.pointsWide
         let pointsHigh = bootstrapCanvas.pointsHigh
         // Rough physical size so macOS picks a sane default UI scale.
-        let mm = info.pixelsWide >= info.pixelsHigh
+        let mm = canvas.pointsWide >= canvas.pointsHigh
             ? CGSize(width: 147, height: 68)
             : CGSize(width: 68, height: 147)
 
@@ -657,6 +655,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     // either keying.
                     return VirtualDisplay(name: displayName,
                                           pointsWide: pointsWide, pointsHigh: pointsHigh,
+                                          scale: bootstrapCanvas.scale,
                                           descriptorMaxPixelsPerAxis: canvasPlan.descriptorMaxPixelsPerAxis,
                                           sizeInMillimeters: mm,
                                           serialNum: serial &+ totalOffset,
@@ -755,8 +754,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         try ensureActiveDisplay(vd)
         inputInjector = InputInjector(displayID: vd.displayID)
         try await startCapture(display: captureDisplay,
-                               sourcePixelsWide: vd.pointsWide * 2,
-                               sourcePixelsHigh: vd.pointsHigh * 2,
+                               sourcePixelsWide: vd.pixelsWide,
+                               sourcePixelsHigh: vd.pixelsHigh,
                                receiver: info)
         try ensureActiveDisplay(vd)
 
@@ -779,7 +778,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         defer { reconfiguring = false }
         var target = info
         while !stopped {
-            Log.info("reconfiguring stream for a \(target.pixelsWide)x\(target.pixelsHigh) panel")
+            let facts = target.facts
+            Log.info("reconfiguring stream for a \(facts.pixelsWide)x\(facts.pixelsHigh) panel")
             // A cached frame is valid for a network reconnect to the same
             // display, but never for a rotation: it belongs to the retired
             // desktop and can otherwise be replayed onto the new one.
@@ -850,8 +850,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             || old.maxEncodeHigh != new.maxEncodeHigh
             || old.displayMaxFrameRate != new.displayMaxFrameRate
             || old.videoCaps != new.videoCaps
+            || old.facts.pixels != new.facts.pixels
+        // The derived desktop, not the raw fields: a hello that changes
+        // nothing the policy reads keeps the display as it is.
         let desktopChanged = mode == .extend
-            && (old.pixelsWide != new.pixelsWide || old.pixelsHigh != new.pixelsHigh)
+            && desktopPlan(for: old) != desktopPlan(for: new)
         return receiverConstraintsChanged || desktopChanged
     }
 
@@ -864,18 +867,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard let vd = virtualDisplay else { return false }
         try ensureActiveDisplay(vd)
 
-        let canvas = canvasPixels(for: info)
-        let pointsWide = (canvas.width / 2) & ~1
-        let pointsHigh = (canvas.height / 2) & ~1
+        let canvas = desktopCanvas(for: info)
+        let scale = canvas.scale
+        let pointsWide = canvas.pointsWide
+        let pointsHigh = canvas.pointsHigh
         let arrangementKey = info.id ?? String(format: "serial-%08x", displaySerial)
         let size = CGSize(width: pointsWide, height: pointsHigh)
         let previous = VirtualCanvasSize(pointsWide: vd.pointsWide,
-                                         pointsHigh: vd.pointsHigh)
+                                         pointsHigh: vd.pointsHigh,
+                                         scale: vd.scale)
         let dimensionsChanged = vd.pointsWide != pointsWide || vd.pointsHigh != pointsHigh
+            || vd.scale != scale
         let didResize = if dimensionsChanged {
             await MainActor.run {
                 guard !self.stopped, self.virtualDisplay === vd else { return false }
-                return vd.resize(pointsWide: pointsWide, pointsHigh: pointsHigh,
+                return vd.resize(pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale,
                                  movingTo: DisplayArrangement.origin(for: size,
                                                                      device: arrangementKey))
             }
@@ -884,7 +890,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         try ensureActiveDisplay(vd)
         guard didResize else {
-            Log.info("virtual display mode \(info.pixelsWide)x\(info.pixelsHigh) was rejected — "
+            Log.info("virtual display mode \(canvas.pixelsWide)x\(canvas.pixelsHigh) was rejected — "
                 + "resuming the existing \(previous.pixelsWide)x\(previous.pixelsHigh) desktop canvas")
             return try await resumeExistingCanvas(vd, canvas: previous,
                                                   receiver: info)
@@ -900,12 +906,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let nsError = error as NSError
             guard dimensionsChanged,
                   !(nsError.domain == "MacSender" && nsError.code == 4) else { throw error }
-            Log.info("virtual display mode \(info.pixelsWide)x\(info.pixelsHigh) did not come online "
+            Log.info("virtual display mode \(canvas.pixelsWide)x\(canvas.pixelsHigh) did not come online "
                 + "(\(error)) — rolling back to \(previous.pixelsWide)x\(previous.pixelsHigh)")
             let rolledBack = await MainActor.run {
                 guard !self.stopped, self.virtualDisplay === vd else { return false }
                 return vd.resize(pointsWide: previous.pointsWide,
                                  pointsHigh: previous.pointsHigh,
+                                 scale: previous.scale,
                                  movingTo: DisplayArrangement.origin(for: previous.cgSize,
                                                                      device: arrangementKey))
             }
@@ -916,8 +923,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         try ensureActiveDisplay(vd)
         try await startCapture(display: display,
-                               sourcePixelsWide: pointsWide * 2,
-                               sourcePixelsHigh: pointsHigh * 2,
+                               sourcePixelsWide: pointsWide * scale,
+                               sourcePixelsHigh: pointsHigh * scale,
                                receiver: info)
         try ensureActiveDisplay(vd)
         if dimensionsChanged {
@@ -934,6 +941,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Resume capture on the last known-good mode without replacing the
     /// virtual monitor. Returning false tells the caller that this identity
     /// really is unavailable and a rebuild is the remaining recovery path.
+    private func noteInvalidPanel(_ info: PhoneInfo) {
+        guard info.hasInvalidPanel, !loggedInvalidPanel else { return }
+        loggedInvalidPanel = true
+        Log.info("receiver sent an invalid hello.panel (\(String(describing: info.panel))); "
+            + "using the legacy \(info.pixelsWide)x\(info.pixelsHigh) fields")
+    }
+
     private func resumeExistingCanvas(_ vd: VirtualDisplay, canvas: VirtualCanvasSize,
                                       receiver info: PhoneInfo) async throws -> Bool {
         do {
@@ -1004,27 +1018,32 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard !stopped else { throw CancellationError() }
         let legacyCeiling = legacyEncodeCeiling(for: info)
         let source = PixelSize(width: sourcePixelsWide, height: sourcePixelsHigh)
-        // Extend captures our own virtual display, whose canvas may be capped
-        // below the panel; presets keep scaling from the panel (#322).
+        // Every stream is bounded by the receiver's physical panel. Extend
+        // captures our own virtual display, whose canvas may be capped below
+        // the desktop; presets keep scaling from the desktop as the receiver
+        // presents it (#322).
+        let presentable = info.facts.pixels
         func select(_ codec: String) throws -> VideoStreamConfiguration {
             mode == .extend
                 ? try VideoStreamConfiguration.makeForCanvas(
                     source,
-                    panel: PixelSize(width: info.pixelsWide, height: info.pixelsHigh),
+                    panel: desktopPlan(for: info).streamReference,
                     quality: quality,
                     codec: codec,
                     legacyCeiling: legacyCeiling,
                     receiverCapabilities: info.videoCaps,
-                    displayMaxFrameRate: info.displayMaxFrameRate)
+                    displayMaxFrameRate: info.displayMaxFrameRate,
+                    presentable: presentable)
                 : try VideoStreamConfiguration.make(
                     source: source,
                     quality: quality,
                     codec: codec,
                     legacyCeiling: legacyCeiling,
                     receiverCapabilities: info.videoCaps,
-                    displayMaxFrameRate: info.displayMaxFrameRate)
+                    displayMaxFrameRate: info.displayMaxFrameRate,
+                    presentable: presentable)
         }
-        var selected = try select(preferredCodec(for: info))
+        var selected = try select(preferredCodec(for: info, source: source))
         var pixelsWide = selected.encodedSize.width
         var pixelsHigh = selected.encodedSize.height
         let sourceDescription = "\(sourcePixelsWide)x\(sourcePixelsHigh)"
@@ -1325,11 +1344,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             Task {
                 do {
                     let display = try await self.findSCDisplay(id: vd.displayID)
-                    // Capture at the display's pixel resolution (points ×2 @2x),
-                    // not SCDisplay.width (logical points) — matches setupExtend.
+                    // Capture at the display's pixel resolution (points × its
+                    // scale), not SCDisplay.width (logical points) — matches setupExtend.
                     try await self.startCapture(display: display,
-                                                sourcePixelsWide: vd.pointsWide * 2,
-                                                sourcePixelsHigh: vd.pointsHigh * 2,
+                                                sourcePixelsWide: vd.pixelsWide,
+                                                sourcePixelsHigh: vd.pixelsHigh,
                                                 receiver: hello)
                     self.needsKeyframe = true
                 } catch {

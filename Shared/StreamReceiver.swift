@@ -224,6 +224,10 @@ final class StreamReceiver: ObservableObject {
     private(set) var devicePixelsWide = 0
     private(set) var devicePixelsHigh = 0
     var deviceScale: Double = 2
+    /// `hello.panel` (PROTOCOL.md 6.7): physical pixels, real scale and, on a
+    /// Mac, its own desktop size, in the current orientation. nil derives it
+    /// from the legacy fields above, which are the panel's facts on iOS.
+    private var panelOverride: PanelAnnouncement?
     private var displayMaxFrameRate = 60
     // Name advertised over Bonjour for the Mac's WiFi picker. iOS 16+ returns
     // a generic "iPhone" from UIDevice.current.name (the user-assigned name
@@ -241,9 +245,11 @@ final class StreamReceiver: ObservableObject {
     // nothing about. nil = advertise nothing (sender streams full size).
     /// HEVC decode offer (PROTOCOL.md 6.6); nil advertises H.264 only. The
     /// platform app decides, from its hardware decoder and tested limits.
-    private let hevcCapability: VideoCapability?
-    private let maxEncodeWide: Int?
-    private let maxEncodeHigh: Int?
+    /// In the current orientation (PROTOCOL.md 6.5): a rotating receiver
+    /// swaps them through `setDecodeLimits`.
+    private var hevcCapability: VideoCapability?
+    private var maxEncodeWide: Int?
+    private var maxEncodeHigh: Int?
     /// Decoder throughput ceiling advertised in `hello.videoCaps`
     /// (PROTOCOL.md 6.5). The sender keeps the raster and lowers the frame
     /// rate to stay under it. nil = advertise none.
@@ -308,13 +314,38 @@ final class StreamReceiver: ObservableObject {
     /// and again whenever it changes (iOS rotation via setOrientation, macOS
     /// display-mode changes) — a live connection re-sends hello so the sender
     /// rebuilds the virtual display for the new dimensions.
-    func setPanel(pixelsWide w: Int, pixelsHigh h: Int, scale: Double) {
-        deviceScale = scale
-        guard w > 0, h > 0, w != devicePixelsWide || h != devicePixelsHigh else { return }
+    /// `panel` is announced as `hello.panel` when the legacy fields are not
+    /// the panel's facts (a Mac receiver); a change of any value re-sends.
+    /// `limitsChanged` re-sends even when the panel did not change (see
+    /// `setDecodeLimits`).
+    func setPanel(pixelsWide w: Int, pixelsHigh h: Int, scale: Double,
+                  panel: PanelAnnouncement? = nil, limitsChanged: Bool = false) {
+        guard w > 0, h > 0,
+              w != devicePixelsWide || h != devicePixelsHigh || scale != deviceScale
+                || panel != panelOverride || limitsChanged
+        else { return }
         devicePixelsWide = w
         devicePixelsHigh = h
-        Log.info("panel changed -> \(w)x\(h) @\(scale)x")
+        deviceScale = scale
+        panelOverride = panel
+        Log.info("panel changed -> \(w)x\(h) @\(scale)x"
+            + (panel.map { " (panel \($0))" } ?? ""))
         if let connection { sendHello(on: connection) }
+    }
+
+    /// Decode limits in the current orientation (PROTOCOL.md 6.5). Does not
+    /// send: a rotation changes the limits and the panel together, so the
+    /// caller passes the result to `setPanel`, which sends one consistent
+    /// hello. Returns whether anything changed.
+    @discardableResult
+    func setDecodeLimits(maxEncodeWide wide: Int?, maxEncodeHigh high: Int?,
+                         hevc: VideoCapability?) -> Bool {
+        guard wide != maxEncodeWide || high != maxEncodeHigh || hevc != hevcCapability
+        else { return false }
+        maxEncodeWide = wide
+        maxEncodeHigh = high
+        hevcCapability = hevc
+        return true
     }
 
     /// Hardware decode budget in encoded pixels per second, for silicon that
@@ -932,6 +963,9 @@ final class StreamReceiver: ObservableObject {
             "pv": WireProtocol.version,   // issue #132 — absent on old receivers
             "displayMaxFrameRate": displayMaxFrameRate,
         ]
+        let panel = panelOverride ?? PanelAnnouncement(
+            pixelsWide: devicePixelsWide, pixelsHigh: devicePixelsHigh, scale: deviceScale)
+        hello["panel"] = panel.json
         // Additive joint capability. The legacy rectangle below stays on the
         // wire while independently updated senders remain in the field.
         var h264: [String: Any] = ["codec": "h264", "maxFrameRate": 60]
@@ -1567,5 +1601,33 @@ final class StreamReceiver: ObservableObject {
                 UserDefaults.standard.set(true, forKey: "hasConnectedBefore")
             }
         }
+    }
+}
+
+/// `hello.panel` (PROTOCOL.md 6.7): facts about the panel in its current
+/// orientation. The sender decides the desktop from them.
+struct PanelAnnouncement: Equatable, CustomStringConvertible {
+    /// Physical pixels shown 1:1 (minus any strip never shown, like a notch).
+    let pixelsWide: Int
+    let pixelsHigh: Int
+    /// Real backing scale; may be fractional.
+    let scale: Double
+    /// The desktop size a Mac receiver currently runs; nil elsewhere.
+    var pointsWide: Int? = nil
+    var pointsHigh: Int? = nil
+
+    var json: [String: Any] {
+        var panel: [String: Any] = ["pixelsWide": pixelsWide, "pixelsHigh": pixelsHigh,
+                                    "scale": scale]
+        if let pointsWide, let pointsHigh {
+            panel["pointsWide"] = pointsWide
+            panel["pointsHigh"] = pointsHigh
+        }
+        return panel
+    }
+
+    var description: String {
+        "\(pixelsWide)x\(pixelsHigh) @\(scale)"
+            + (pointsWide.map { " points \($0)x\(pointsHigh ?? 0)" } ?? "")
     }
 }

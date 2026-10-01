@@ -26,7 +26,7 @@ Run `tools/quality/build.sh` once. It compiles the test page and the benchmark h
 | `score_seq.py <capdir> [--scroll]` | Per-frame scores for a sequence. Scroll frames are aligned automatically. |
 | `crops.py <quality dir> <out dir>` | 3x zoomed side-by-side crops of the page only; safe to publish. |
 | `measure.sh <label>` | Runs `motion.swift` (moving bars at 60 Hz) for 35 s, then averages the sender's stats: fps, median encode time, latency p50/p95, and dropped frames. |
-| `mode.swift` (on the receiver, `/tmp/od-mode`) | Lists the receiving Mac's Retina modes, or switches to one, e.g. `od-mode 2560x1440`. |
+| `mode.swift` (on the receiver, `/tmp/od-mode`) | Lists the receiving Mac's Retina modes, or switches to one, e.g. `od-mode 2560x1440`; add `1x` for the 1x modes (`od-mode 2560x1440 1x`), the non-Retina case. |
 | `decbench.swift` | `decbench encode hevc\|h264 <file> <png...>` on the sender, then `od-decbench decode <file>` on the receiver: the receiver's hardware decode throughput. |
 
 ## Debug switches used with the suite

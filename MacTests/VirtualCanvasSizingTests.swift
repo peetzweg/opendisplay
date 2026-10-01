@@ -30,3 +30,18 @@ final class VirtualCanvasSizingTests: XCTestCase {
         XCTAssertEqual(plan.descriptorMaxPixelsPerAxis, 10_240)
     }
 }
+
+final class VirtualCanvasOneXTests: XCTestCase {
+    func testOneXCanvasUsesPixelsAsPoints() {
+        let requested = VirtualCanvasSizing.requested(pixelsWide: 2_560, pixelsHigh: 1_440, scale: 1)!
+        XCTAssertEqual(requested, VirtualCanvasSize(pointsWide: 2_560, pointsHigh: 1_440, scale: 1))
+        XCTAssertEqual(requested.pixelsWide, 2_560)
+    }
+
+    func testBootstrapEnvelopeIsInPixelsForEitherScale() {
+        // 3200x1800 pixels: 1600x900 points at 2x, 3200x1800 points at 1x.
+        let oneX = VirtualCanvasSizing.requested(pixelsWide: 3_840, pixelsHigh: 2_160, scale: 1)!
+        XCTAssertEqual(VirtualCanvasSizing.bootstrap(for: oneX),
+                       VirtualCanvasSize(pointsWide: 3_200, pointsHigh: 1_800, scale: 1))
+    }
+}

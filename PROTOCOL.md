@@ -250,7 +250,7 @@ Coordinates use the conventions of section 7.
 
 | `type` | Since | Fields | Purpose |
 |---|---|---|---|
-| `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `device`?, `id`?, `pv`?, `displayMaxFrameRate`?, `videoCaps`? | Identify the panel and receiver video capabilities; (re)sent on connect and on rotation |
+| `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `device`?, `id`?, `pv`?, `displayMaxFrameRate`?, `videoCaps`?, `panel`? | Identify the panel and receiver video capabilities; (re)sent on connect and on rotation |
 | `ping` | pv 1 | `t` | Liveness + clock sync probe |
 | `touch` | pv 1 | `phase`, `x`, `y`, `t`? | Finger input |
 | `scroll` | pv 1 | `dx`, `dy` | Two-finger scroll |
@@ -265,11 +265,18 @@ Coordinates use the conventions of section 7.
 connection, because the sender sizes its virtual display from it and can do
 nothing before it arrives.
 
-* `pixelsWide`, `pixelsHigh` (int): the panel size in **physical pixels**,
-  in the panel's **current orientation** (portrait swaps them).
-* `scale` (number): the device's UI scale factor (2 or 3 on Apple
-  hardware). The sender uses it to pick a sensible point-size for the
-  virtual display.
+* `pixelsWide`, `pixelsHigh` (int): **deprecated**, superseded by `panel`
+  (section 6.7) and removed at the next `pv` bump. The desktop the receiver
+  wants, as pixels of a 2x desktop, in the **current orientation**
+  (portrait swaps them). On iOS these are the physical pixels; the Mac
+  receiver sends its point size x 2, which is its physical pixels only on
+  a Retina panel. A sender that receives a valid `panel` ignores them.
+* `scale` (number): **deprecated** with them. The device's UI scale
+  factor (2 or 3 on Apple hardware, at least 2 from the Mac receiver).
+  Senders MUST NOT size the desktop from it; use `panel.scale`.
+* `panel` (object, optional): facts about the panel in its current
+  orientation, from which the sender decides the desktop (section 6.7).
+  Additive at `pv` 3, no bump.
 * `device` (string, optional): device kind for UI text, `"iPhone"` or
   `"iPad"` from the official receiver. Free-form.
 * `id` (string, optional): stable per-install UUID. MUST match the Bonjour
@@ -564,6 +571,11 @@ behavior (stream size follows the announced pixels and the sender's
 quality setting). Derive advertised ceilings from measured playback: a
 decode session that merely creates successfully proves nothing.
 
+All limits, `videoCaps` and the legacy ceiling alike, are the raster as
+presented **in the current orientation**. A receiver that rotates MUST
+re-send `hello` with its limits swapped (the Mac receiver does for a
+portrait display). A square envelope is valid in either orientation.
+
 During migration, a receiver MAY send both the legacy ceiling and
 `videoCaps`. For H.264, a sender that understands both MUST satisfy both. The
 legacy ceiling does not limit HEVC. Receiver limits do not replace sender
@@ -598,6 +610,51 @@ sender can ask it to power off.
   sender ends the session instead of redialing.
 * Receivers that cannot power the device off (iOS, iPadOS) never list it.
 
+### 6.7 Panel facts (`hello.panel`)
+
+The **sender decides the size of the extended desktop**: the user's
+keyboard and mouse are on the sender, so the user's choice lives there.
+The receiver reports facts only:
+
+```json
+"panel": { "pixelsWide": 5120, "pixelsHigh": 2880, "scale": 2, "pointsWide": 2560, "pointsHigh": 1440 }
+```
+
+All values describe the panel in its **current orientation** (portrait
+swaps every pair).
+
+* `pixelsWide`, `pixelsHigh` (int, required): the **physical** pixels the
+  receiver can light up 1:1, minus any strip it never shows (the menu-bar
+  strip beside a notch). No stream needs to be larger. This is not the
+  backing store of a scaled mode: a 5K Mac at "More Space" (3200x1800
+  points) renders 6400x3600 pixels but still reports 5120x2880.
+* `scale` (number, required): the device's real backing scale: 1 on a
+  non-Retina Mac, 2 on Retina Macs and iPads, 3 on most iPhones. MAY be
+  fractional. A fact, not a request.
+* `pointsWide`, `pointsHigh` (int, optional, both or neither): the desktop
+  size the receiver itself currently runs (a Mac's "looks like" display
+  setting). Absent means the receiver has no such setting.
+
+The receiver MUST re-send `hello` whenever any `panel` value changes
+(rotation, a display-mode change on a Mac), even if the deprecated fields
+did not change.
+
+A sender uses `panel` only when `pixelsWide/High` are integers of at least
+2, `scale` is a finite number above 0, and `pointsWide/High` are both
+absent or both integers of at least 2. Otherwise it ignores the whole
+object (never part of it) and falls back to the deprecated fields. A
+malformed `panel` MUST NOT fail the `hello`.
+
+What the official sender builds from it (non-normative): a 2x desktop for
+`scale` 1.5 and above, else 1x; of `points` when present, else half the
+pixels at 2x, else the pixels at 1x. A default desktop larger than the best
+stream is shrunk to that stream so capture is 1:1 (6.5); every stream,
+mirror included, is bounded by `pixelsWide/High`. A receiver needs no
+change for any of this: `streamConfig` announces the stream.
+
+In mirror sessions `panel` only bounds the stream; the desktop is the
+sender's own display.
+
 ## 7. Coordinate spaces and units
 
 The most common third-party bug is a unit mismatch, so here is every space
@@ -609,8 +666,11 @@ sender).
 
 | What | Space | Units | Origin / sign |
 |---|---|---|---|
-| `hello.pixelsWide/High` | physical panel | pixels | current orientation |
-| `hello.scale` | none | UI scale factor | n/a |
+| `hello.pixelsWide/High` (deprecated) | desired desktop | pixels of a 2x desktop | current orientation |
+| `hello.scale` (deprecated) | none | UI scale factor | n/a |
+| `hello.panel.pixelsWide/High` | physical panel | pixels | current orientation |
+| `hello.panel.pointsWide/High` | receiver's own desktop | points | current orientation |
+| `hello.panel.scale` | none | real backing scale, may be fractional | n/a |
 | `touch.x/y`, `pencil.x/y`, `proximity.x/y` | video | normalized 0..1 | top-left, x right, y down |
 | `scroll.dx/dy` | video | **pixels** (not normalized) | natural-scrolling sign |
 | `cursor.x/y` | video | normalized 0..1 | top-left |
@@ -737,6 +797,7 @@ Mechanics at a glance (the policy behind them lives in COMPATIBILITY.md):
 | 3 (additive) | `hello.cursorPort` and the UDP cursor side channel (6.3); optional, no bump |
 | 3 (additive) | `hello.videoCaps`, `displayMaxFrameRate`, and `streamConfig` (6.5); legacy peers remain implicit H.264 |
 | 3 (additive) | `hello.power` and `power` (6.6); direct cable only |
+| 3 (additive) | `hello.panel` (6.7); `pixelsWide/High/scale` deprecated, removed at the next bump |
 | 4 (reserved) | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
 
 ---
@@ -793,3 +854,4 @@ This file is versioned by git; the authoritative change log is
 | 2026-08-19 | Initial specification, written against `pv` 3 |
 | 2026-08-26 | Additive: `hello.cursorPort` and the UDP cursor side channel (section 6.3) |
 | 2026-09-30 | Additive: `hello.power` and `power`, direct cable only (section 6.6) |
+| 2026-10-01 | Additive: `hello.panel`, the sender decides the desktop (section 6.7); limits are in the current orientation (6.5); `pixelsWide/High/scale` deprecated |

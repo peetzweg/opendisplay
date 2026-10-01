@@ -95,18 +95,23 @@ struct VideoStreamConfiguration: Equatable {
         return hevcCodec
     }
 
+    /// `presentable` is the receiver's physical panel (PROTOCOL.md 6.7): the
+    /// source is fitted inside it before the quality preset scales it, so no
+    /// stream is larger than the receiver can show 1:1.
     static func make(source: PixelSize,
                      quality: StreamQuality,
                      codec: String = h264Codec,
                      legacyCeiling: PixelSize? = nil,
                      receiverCapabilities: [VideoCapability]? = nil,
                      displayMaxFrameRate: Int? = nil,
+                     presentable: PixelSize? = nil,
                      requestedFramesPerSecond: Int = defaultFramesPerSecond) throws -> Self {
         guard source.width > 0, source.height > 0 else { throw SelectionError.invalidSource }
 
+        let shown = fit(source, inside: presentable)
         let scaled = PixelSize(
-            width: even(Int(Double(source.width) * quality.scale)),
-            height: even(Int(Double(source.height) * quality.scale)))
+            width: even(Int(Double(shown.width) * quality.scale)),
+            height: even(Int(Double(shown.height) * quality.scale)))
         let targetFPS = max(1, min(requestedFramesPerSecond,
                                    displayMaxFrameRate.flatMap { $0 > 0 ? $0 : nil }
                                        ?? requestedFramesPerSecond))
@@ -194,12 +199,14 @@ struct VideoStreamConfiguration: Equatable {
     static func canvasPixels(forReceiver panel: PixelSize,
                              codec: String = h264Codec,
                              legacyCeiling: PixelSize? = nil,
+                             presentable: PixelSize? = nil,
                              receiverCapabilities: [VideoCapability]? = nil,
                              displayMaxFrameRate: Int? = nil) -> PixelSize {
         guard let best = try? make(source: panel, quality: .best, codec: codec,
                                    legacyCeiling: legacyCeiling,
                                    receiverCapabilities: receiverCapabilities,
-                                   displayMaxFrameRate: displayMaxFrameRate)
+                                   displayMaxFrameRate: displayMaxFrameRate,
+                                   presentable: presentable)
         else { return panel }
         return best.encodedSize
     }
@@ -215,16 +222,19 @@ struct VideoStreamConfiguration: Equatable {
                               codec: String = h264Codec,
                               legacyCeiling: PixelSize? = nil,
                               receiverCapabilities: [VideoCapability]? = nil,
-                              displayMaxFrameRate: Int? = nil) throws -> Self {
+                              displayMaxFrameRate: Int? = nil,
+                              presentable: PixelSize? = nil) throws -> Self {
         let fromCanvas = try make(source: canvas, quality: quality, codec: codec,
                                   legacyCeiling: legacyCeiling,
                                   receiverCapabilities: receiverCapabilities,
-                                  displayMaxFrameRate: displayMaxFrameRate)
+                                  displayMaxFrameRate: displayMaxFrameRate,
+                                  presentable: presentable)
         guard panel != canvas,
               let fromPanel = try? make(source: panel, quality: quality, codec: codec,
                                         legacyCeiling: legacyCeiling,
                                         receiverCapabilities: receiverCapabilities,
-                                        displayMaxFrameRate: displayMaxFrameRate),
+                                        displayMaxFrameRate: displayMaxFrameRate,
+                                        presentable: presentable),
               fromPanel.encodedSize.width <= canvas.width,
               fromPanel.encodedSize.height <= canvas.height,
               fromPanel.encodedSize.width * fromPanel.encodedSize.height
@@ -265,7 +275,7 @@ struct VideoStreamConfiguration: Equatable {
         return fitted
     }
 
-    private static func fit(_ size: PixelSize, inside ceiling: PixelSize?) -> PixelSize {
+    static func fit(_ size: PixelSize, inside ceiling: PixelSize?) -> PixelSize {
         guard let ceiling else { return size }
         return fit(size, maxWidth: ceiling.width, maxHeight: ceiling.height)
     }

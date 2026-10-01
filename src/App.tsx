@@ -475,7 +475,8 @@ export default function App() {
               <p>On a Mac receiver, the display setting sets the desktop's size, sent 1:1 up to what the codec
               allows. With an Apple silicon sender and a receiver that decodes HEVC (Apple silicon, most Intel
               Macs from 2017 on) that is up to 5120×2880, so a 5K iMac at Default gets its full 2560×1440 desktop.
-              Otherwise H.264 tops out at 4096×2304 (a 2048×1152 desktop). More Space never adds room beyond that.
+              Otherwise H.264 tops out at 4096×2304 (a 2048×1152 desktop). More Space gives more room, scaled once on the sender, so a little softer.
+              A non-Retina receiver, such as a 2013 iMac, gets its own 2560×1440 desktop at 1x, sent 1:1 at 60 fps.
               Measured from an M5 Pro to a 5K iMac: Default + Best is the sharpest at about 30 fps; one or two
               steps toward Larger Text (1600×900) keeps text crisp at about 55 fps; Default + Fast is soft but
               about 58 fps for video. The README has the full table.</p>
