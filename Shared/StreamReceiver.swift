@@ -649,7 +649,7 @@ final class StreamReceiver: ObservableObject {
             switch state {
             case .ready:
                 self.listenerHealthy = true
-                self.setStatus("Listening on :\(self.port)")
+                self.setStatus("Ready to connect")
             case .failed(let error):
                 Log.info("listener failed: \(error) — restarting in 1s")
                 self.listenerHealthy = false
@@ -832,7 +832,7 @@ final class StreamReceiver: ObservableObject {
                 self.macProtocolVersion = macPV
             }
             if macPV < WireProtocol.minSupportedPeer {
-                let msg = "The OpenDisplay app on your Mac is too old for this \(deviceKind) app. Update OpenDisplay on your Mac to reconnect."
+                let msg = "OpenDisplay on the connecting computer is too old for this \(deviceKind) app. Update it there to reconnect."
                 DispatchQueue.main.async { self.peerSignal = .updateMac(message: msg) }
             }
         case WireMessage.streamConfig:
@@ -1558,7 +1558,7 @@ final class StreamReceiver: ObservableObject {
                 self.macProtocolVersion = WireProtocol.assumedWhenAbsent
             }
         }
-        if !value { setStatus("Listening on :9000") }
+        if !value { setStatus("Ready to connect") }
         else {
             setStatus("Connected")
             // Remember the first ever successful connection to a Mac so the
