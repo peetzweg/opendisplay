@@ -59,6 +59,8 @@ struct DisplaySizeOutcome: Equatable {
     let choice: DisplaySize
     let desktop: VirtualCanvasSize
     let sent: PixelSize
+    /// The receiver's real scale: a 1x desktop on a Retina panel says so.
+    var panelScale: Double = 2
 
     /// The stream is smaller than the desktop's pixels: not 1:1.
     var scaled: Bool { sent.width < desktop.pixelsWide || sent.height < desktop.pixelsHigh }
@@ -66,7 +68,7 @@ struct DisplaySizeOutcome: Equatable {
     /// "Looks like 2560 × 1440", plus the stream when it is not 1:1.
     var caption: String {
         var text = "Looks like \(desktop.pointsWide) × \(desktop.pointsHigh)"
-        if desktop.scale == 1, choice == .native { text += " at 1x" }
+        if desktop.scale == 1, choice == .native || panelScale >= 1.5 { text += " at 1x" }
         if scaled { text += ", sends \(sent.width) × \(sent.height) (scaled)" }
         return text
     }
@@ -193,7 +195,8 @@ enum DesktopPolicy {
                         codec: String = VideoStreamConfiguration.h264Codec,
                         legacyCeiling: PixelSize? = nil,
                         videoCaps: [VideoCapability]? = nil,
-                        displayMaxFrameRate: Int? = nil) -> DisplaySizeOutcome {
+                        displayMaxFrameRate: Int? = nil,
+                        panelScale: Double = 2) -> DisplaySizeOutcome {
         let canvas = self.canvas(for: plan, codec: codec, legacyCeiling: legacyCeiling,
                                  videoCaps: videoCaps, displayMaxFrameRate: displayMaxFrameRate)
         let pixels = PixelSize(width: canvas.pixelsWide, height: canvas.pixelsHigh)
@@ -202,7 +205,7 @@ enum DesktopPolicy {
             legacyCeiling: legacyCeiling, receiverCapabilities: videoCaps,
             displayMaxFrameRate: displayMaxFrameRate, presentable: plan.presentable)
         return DisplaySizeOutcome(choice: choice, desktop: canvas,
-                                  sent: stream?.encodedSize ?? pixels)
+                                  sent: stream?.encodedSize ?? pixels, panelScale: panelScale)
     }
 
     private static func even(_ value: Int) -> Int { max(2, value & ~1) }

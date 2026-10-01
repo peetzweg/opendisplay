@@ -232,6 +232,7 @@ final class DisplaySizeTests: XCTestCase {
     func testPersistenceRoundTripAndKeys() {
         let defaults = UserDefaults(suiteName: "DisplaySizeTests")!
         defaults.removePersistentDomain(forName: "DisplaySizeTests")
+        defer { defaults.removePersistentDomain(forName: "DisplaySizeTests") }
         XCTAssertEqual(DisplaySizeStore.key(installID: "ABC", serial: 7), "displaySize.ABC")
         XCTAssertEqual(DisplaySizeStore.key(installID: nil, serial: 0x4f53), "displaySize.serial-00004f53")
         for size in DisplaySize.allCases {
@@ -240,6 +241,17 @@ final class DisplaySizeTests: XCTestCase {
         }
         defaults.set("custom", forKey: "k")
         XCTAssertEqual(DisplaySizeStore.load(key: "k", from: defaults), .default)
+    }
+
+    func testOneXFallbackOnARetinaPanelSaysSo() {
+        let fallback = DisplaySizeOutcome(choice: .default,
+                                          desktop: VirtualCanvasSize(pointsWide: 750, pointsHigh: 1334, scale: 1),
+                                          sent: PixelSize(width: 750, height: 1334), panelScale: 2)
+        XCTAssertEqual(fallback.caption, "Looks like 750 × 1334 at 1x")
+        let oneXPanel = DisplaySizeOutcome(choice: .default,
+                                           desktop: VirtualCanvasSize(pointsWide: 2560, pointsHigh: 1440, scale: 1),
+                                           sent: PixelSize(width: 2560, height: 1440), panelScale: 1)
+        XCTAssertEqual(oneXPanel.caption, "Looks like 2560 × 1440")
     }
 
     func testMoreSpaceOnPortraitFiveK() {

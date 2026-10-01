@@ -171,7 +171,9 @@ final class DeviceSession: ObservableObject, Identifiable {
         refreshDisplaySize()
     }
 
-    private func refreshDisplaySize() {
+    /// Also called when the picker opens: the outcomes can change without a
+    /// hello (an HEVC failure, a refused 2x mode).
+    func refreshDisplaySize() {
         guard let info = lastHello else { return }
         displaySize = DisplaySizeStore.load(key: sender.displaySizeKey(for: info))
         let outcomes = sender.displaySizeOutcomes(for: info)
@@ -1214,6 +1216,7 @@ struct DisplaySizePicker: View {
         }
         .padding(14)
         .frame(width: 300)
+        .onAppear { session.refreshDisplaySize() }
     }
 
     private func caption(for outcome: DisplaySizeOutcome) -> String {

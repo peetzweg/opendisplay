@@ -519,7 +519,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard mode == .extend else { return [] }
         return DisplaySize.allCases.map { choice in
             var plan = DesktopPolicy.plan(facts: info.facts, choice: choice)
-            if refusedDesktops.contains(plan.desktop) {
+            if isRefused(plan.desktop) {
                 plan = DesktopPolicy.oneXFallback(facts: info.facts)
             }
             return DesktopPolicy.outcome(
@@ -527,7 +527,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 codec: preferredCodec(for: info, source: plan.desktopPixels),
                 legacyCeiling: legacyEncodeCeiling(for: info),
                 videoCaps: info.videoCaps,
-                displayMaxFrameRate: info.displayMaxFrameRate)
+                displayMaxFrameRate: info.displayMaxFrameRate,
+                panelScale: info.facts.scale)
         }
     }
 
@@ -573,7 +574,6 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             displayMaxFrameRate: info.displayMaxFrameRate,
             presentable: info.facts.pixels) else { return codec }
         if Self.canEncodeHEVC(best.encodedSize) { return codec }
-        Log.info("HEVC encoder unavailable at \(best.encodedSize.width)x\(best.encodedSize.height); using H.264")
         return VideoStreamConfiguration.h264Codec
     }
 
@@ -636,6 +636,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if let session { VTCompressionSessionInvalidate(session) }
         let ok = status == noErr && session != nil
         hevcProbeResults[key] = ok
+        // Logged once per size, however often the Display size captions ask.
+        if !ok { Log.info("HEVC encoder unavailable at \(key); using H.264") }
         return ok
     }
 
