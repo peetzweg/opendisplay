@@ -1,0 +1,12 @@
+# Static x86_64 builds of the pure-Rust crates (proto, session, fake sender)
+# from any host, no cross toolchain needed:
+#   cargo build --release --target x86_64-unknown-linux-musl -p od-fake-sender
+# The media binaries (receiver, sender) link GStreamer/libva and are built
+# natively per architecture instead; see .github/workflows/linux.yml.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "target-feature=+crt-static"]

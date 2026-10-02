@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/opendisplay-proto",
+    "crates/opendisplay-session",
+    "crates/od-fake-sender",
+    "crates/od-receiver",
+    "crates/od-sender",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/peetzweg/opendisplay"
+rust-version = "1.85"
+
+[workspace.dependencies]
+opendisplay-proto = { path = "crates/opendisplay-proto" }
+opendisplay-session = { path = "crates/opendisplay-session" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+proptest = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "fs", "signal", "sync"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4"] }
+mdns-sd = "0.21"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+openh264 = { version = "0.9", features = ["source"] }
+
+# OpenH264 is C++ compiled by `cc` at the profile's opt-level; at -O0 it is
+# ~10x slower than release, which makes debug-build sender tests misleading.
+[profile.dev.package.openh264-sys2]
+opt-level = 3
+[profile.dev.package.openh264]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

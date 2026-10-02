@@ -1,0 +1,70 @@
+# Maintainer: Philip Poloczek <839848+peetzweg@users.noreply.github.com>
+#
+# Source build of the Linux OpenDisplay tools from a checkout:
+#   cd linux/packaging/arch && makepkg -si
+# pacman resolves every build- and run-time dependency. A `-bin` variant for
+# the AUR fetches the CI-built binaries instead; see linux/PLAN.md §3.9.
+
+pkgname=opendisplay
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="OpenDisplay receiver and sender for Linux/Wayland: use a Linux box as an extra display, or extend a Linux desktop onto one"
+arch=('x86_64' 'aarch64')
+url="https://github.com/peetzweg/opendisplay"
+license=('GPL-3.0-only')
+
+# Run-time. GStreamer plugins are loaded by name at run time, so they must be
+# real dependencies; headers for the build ship inside these same packages.
+depends=(
+  'gstreamer'
+  'gst-plugins-base-libs'
+  'gst-plugins-good'          # queue/videoconvert family, shm helpers
+  'gst-plugins-bad-libs'      # waylandsink, h264parse
+  'gst-plugins-bad'
+  'gst-libav'                 # avdec_h264: software decode everywhere
+  'wayland'
+)
+optdepends=(
+  'gst-plugin-va: hardware H.264 decode/encode via VA-API (Intel/AMD)'
+  'libva-utils: vainfo for diagnosing the VA-API path'
+  'gst-plugin-pipewire: portal-based capture on non-wlroots compositors (future)'
+)
+makedepends=('cargo' 'pkgconf' 'gcc')
+options=('!lto')  # cargo profile handles LTO
+
+# Built from the enclosing git checkout; the AUR package pins a release tarball.
+source=()
+sha256sums=()
+
+_workspace="$(cd "${startdir}/../.." && pwd)"
+
+prepare() {
+  cd "${_workspace}"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "${_workspace}"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --workspace
+}
+
+check() {
+  cd "${_workspace}"
+  export RUSTUP_TOOLCHAIN=stable
+  # The fake-sender/receiver end-to-end tests need loopback only.
+  cargo test --frozen --release --workspace
+}
+
+package() {
+  cd "${_workspace}"
+  install -Dm755 target/release/od-receiver    "${pkgdir}/usr/bin/od-receiver"
+  install -Dm755 target/release/od-sender      "${pkgdir}/usr/bin/od-sender"
+  install -Dm755 target/release/od-fake-sender "${pkgdir}/usr/bin/od-fake-sender"
+  install -Dm644 "${startdir}/od-receiver.desktop" "${pkgdir}/usr/share/applications/od-receiver.desktop"
+  install -Dm644 "${startdir}/od-receiver.service" "${pkgdir}/usr/lib/systemd/user/od-receiver.service"
+  install -Dm644 "${_workspace}/../LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 "${_workspace}/../PROTOCOL.md" "${pkgdir}/usr/share/doc/${pkgname}/PROTOCOL.md"
+}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenDisplay Receiver
+Comment=Use this screen as an extra display for a Mac running OpenDisplay
+Exec=od-receiver
+Icon=video-display
+Terminal=false
+Categories=Utility;
+Keywords=display;sidecar;screen;

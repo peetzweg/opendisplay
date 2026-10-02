@@ -1,0 +1,17 @@
+[package]
+name = "od-fake-sender"
+description = "Fake OpenDisplay sender: replays an Annex B H.264 file over the wire protocol to exercise receivers without a Mac."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+opendisplay-proto = { workspace = true }
+opendisplay-session = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
