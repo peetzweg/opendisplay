@@ -15,6 +15,7 @@ enum AppPresentation: String, CaseIterable {
         case .background: return "Background only"
         }
     }
+
 }
 
 @main
@@ -282,6 +283,8 @@ final class SenderController: ObservableObject {
     // Every service seen on the cable this run: a Disconnect counts as a
     // cable opt-out even while the record is briefly gone (receiver asleep).
     private var everOnCable: Set<String> = []
+    private var displayUnitCollisionRecoveryAttempted = false
+    private var displayUnitCollisionClearTask: Task<Void, Never>?
 
     init() {
         startBrowsing()
@@ -699,6 +702,9 @@ final class SenderController: ObservableObject {
             Log.info("display identity for \(session.id) moved to offset \(totalOffset) — "
                 + "macOS saved hostile state for the old one")
         }
+        sender.onDisplayUnitCollisionChange = { [weak self] hasCollision in
+            self?.displayUnitCollisionChanged(hasCollision)
+        }
         sender.onTransportPath = { [weak session] wired in
             session?.wired = wired
         }
@@ -771,6 +777,32 @@ final class SenderController: ObservableObject {
         sessions.removeAll()
         targets.forEach { connect(to: $0) }
         autoConnect()   // a rebuilt WiFi session may deserve its cable back
+    }
+
+    private func displayUnitCollisionChanged(_ hasCollision: Bool) {
+        displayUnitCollisionClearTask?.cancel()
+        guard hasCollision else {
+            displayUnitCollisionClearTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled else { return }
+                displayUnitCollisionRecoveryAttempted = false
+            }
+            return
+        }
+        guard !displayUnitCollisionRecoveryAttempted else { return }
+        let targets = sessions.map(\.target)
+        guard targets.count > 1 else { return }
+
+        displayUnitCollisionRecoveryAttempted = true
+        Log.info("OpenDisplay virtual displays share a CoreGraphics unit number — "
+            + "restarting all display sessions to restore distinct capture identities")
+        sessions.forEach { $0.sender.stop() }
+        sessions.removeAll()
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            targets.forEach { connect(to: $0) }
+            autoConnect()
+        }
     }
 
     // MARK: - Device list (one row per physical device)
@@ -1221,4 +1253,3 @@ struct DisplaySizePicker: View {
         return outcome.caption + (sameAsDefault ? " (same as Default)" : "")
     }
 }
-
