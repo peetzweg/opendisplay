@@ -15,6 +15,7 @@ enum AppPresentation: String, CaseIterable {
         case .background: return "Background only"
         }
     }
+
 }
 
 @main
@@ -561,10 +562,10 @@ final class SenderController: ObservableObject {
         return hash == 0 ? 1 : hash
     }
 
-    // A display identity macOS saved hostile state for (see
-    // MacSender.setupExtend) is abandoned permanently: the validated offset
-    // from the device's base identity is persisted per session id and every
-    // future session starts from it.
+    // A display identity that did not become available (see
+    // MacSender.setupExtend) can be abandoned: the validated offset from the
+    // device's base identity is persisted per session id and every future
+    // session starts from it.
     private static func identityOffsetKey(for id: String) -> String { "displaySerialBump.\(id)" }
     private func identityOffset(for id: String) -> UInt32 {
         UInt32(clamping: UserDefaults.standard.integer(forKey: Self.identityOffsetKey(for: id)))
@@ -693,11 +694,11 @@ final class SenderController: ObservableObject {
         sender.onDisplayIdentityBumped = { [weak session] totalOffset in
             // The sender reports the validated absolute offset — store it
             // as-is. Adding would double-count when a rotation rebuild
-            // re-discovers the same poisoned identity within one session.
+            // re-discovers the same unavailable identity within one session.
             guard let session else { return }
             UserDefaults.standard.set(Int(totalOffset), forKey: Self.identityOffsetKey(for: session.id))
             Log.info("display identity for \(session.id) moved to offset \(totalOffset) — "
-                + "macOS saved hostile state for the old one")
+                + "the previous identity did not become available")
         }
         sender.onTransportPath = { [weak session] wired in
             session?.wired = wired

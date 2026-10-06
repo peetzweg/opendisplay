@@ -61,12 +61,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // the session — teardown plus auto-connect opt-out — so the app honors
     // the stop instead of fighting it.
     @MainActor var onCaptureStoppedByUser: (() -> Void)?
-    // Fired when the device's display identity had to be abandoned (macOS
-    // saved hostile state for it — see setupExtend) and a bumped identity
-    // came online instead: carries the validated TOTAL offset from the
-    // device's base identity, for the controller to store as-is. Absolute,
-    // not a delta — repeated bumps in one session must not accumulate into
-    // an offset nothing ever validated.
+    // Fired when the device's display identity had to be abandoned and a
+    // bumped identity came online instead: carries the validated TOTAL offset
+    // from the device's base identity, for the controller to store as-is.
+    // Absolute, not a delta — repeated bumps in one session must not
+    // accumulate into an offset nothing ever validated.
     @MainActor var onDisplayIdentityBumped: ((UInt32) -> Void)?
 
     private var stream: SCStream?
@@ -86,10 +85,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // multiple OpenDisplay monitors apart and persist their arrangement.
     private let displaySerial: UInt32
     // How far this device's identity has already moved off its base serial
-    // and productID (identities macOS saved hostile state for are abandoned
-    // permanently — see setupExtend). Advanced in-session when a fallback
-    // identity is validated, so a rotation rebuild doesn't re-probe the
-    // poisoned one.
+    // and productID. Advanced in-session when a fallback identity is
+    // validated, so a rotation rebuild doesn't re-probe the unavailable one.
     private var baseIdentityOffset: UInt32
 
     // ── Encoder parallelism limiter ─────────────────────────────────────────
@@ -175,7 +172,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var awaitingWake: Bool
 
     // A capture that keeps dying is not coming back on its own (capture
-    // authorization revoked, or saved display state blocks the identity) —
+    // authorization revoked, or display discovery keeps failing) —
     // retrying forever spams WindowServer with create/destroy cycles and,
     // after a user-initiated stop, amounts to defying the user. Counted per
     // failed recovery round, reset by a capture that comes back up. On
@@ -695,25 +692,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // after the process dies. Retry through that window instead of
         // parking the session on "Failed" until a manual reconnect.
         //
-        // macOS also keys SAVED display state on this identity, and that
-        // state can be hostile: the system UI's "Stop Extending" records a
-        // config under which the identity never comes online again —
-        // creation "succeeds" but the display joins neither the active
-        // display list nor shareable content (#206, #221). Unlike the saved
-        // mirror-set (#100) and 1x-mode variants, no post-creation
-        // enforcement can undo that, so an identity that never surfaces is
-        // abandoned for a fresh serial. The controller persists the working
-        // offset, so the device skips its poisoned identities from then on.
+        // A display can be created without becoming available to CoreGraphics
+        // or ScreenCaptureKit. Since its cause is not necessarily saved
+        // identity state (it can also be a mode or discovery failure), log
+        // both discovery stages before trying a fresh identity.
         var vd: VirtualDisplay?
         var display: SCDisplay?
         var identityError = NSError(domain: "MacSender", code: 2,
                                     userInfo: [NSLocalizedDescriptionKey: "CGVirtualDisplay creation failed"])
-        // Only a created-but-never-surfaced display proves the identity is
-        // poisoned. Creation refusing outright usually means a twin still
-        // holds the serial (just-quit instance, parallel debug build) —
+        // Only a created-but-unavailable display is evidence for trying a
+        // different identity. Creation refusing outright usually means a twin
+        // still holds the serial (just-quit instance, parallel debug build) —
         // moving to a fallback identity is fine for THIS session, but the
         // move must not be persisted over a merely-transient condition.
-        var sawPoisonedIdentity = false
+        var sawUnavailableIdentity = false
         identities: for probe in 0..<UInt32(3) {
             let totalOffset = baseIdentityOffset &+ probe
             // A lingering serial belongs to a just-quit twin of the CURRENT
@@ -730,10 +722,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 created = await MainActor.run {
                     guard !self.stopped else { return nil }
                     let restoreOrigin = DisplayArrangement.origin(for: sizeInPoints, device: arrangementKey)
-                    // The productID moves with the serial: field data in #206
-                    // suggests some macOS versions key the hostile state on
-                    // the product, not the serial — bumping both escapes
-                    // either keying.
+                    // Move productID with serial so each fallback identity is
+                    // distinct regardless of which field macOS uses to key it.
                     return VirtualDisplay(name: displayName,
                                           pointsWide: pointsWide, pointsHigh: pointsHigh,
                                           scale: bootstrapCanvas.scale,
@@ -768,9 +758,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 display = try await findSCDisplay(id: candidate.displayID)
                 try ensureActiveDisplay(candidate)
                 vd = candidate
-                if probe > 0, sawPoisonedIdentity {
-                    Log.info("display identity +\(totalOffset) came online — the previous one is "
-                        + "poisoned by saved system state; persisting the offset")
+                if probe > 0, sawUnavailableIdentity {
+                    Log.info("display identity +\(totalOffset) came online after an earlier identity "
+                        + "failed discovery; persisting the working offset")
                     baseIdentityOffset = totalOffset   // rebuilds skip the dead probe
                     Task { @MainActor in self.onDisplayIdentityBumped?(totalOffset) }
                 }
@@ -785,17 +775,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // a different identity cannot help there.
                 if (error as NSError).domain == "MacSender", (error as NSError).code == 4 { throw error }
                 identityError = error as NSError
-                sawPoisonedIdentity = true
+                sawUnavailableIdentity = true
                 if stopped { return }
+                Log.info("virtual display identity +\(totalOffset) discovery failed: \(error)")
                 Log.info("virtual display (identity +\(totalOffset)) never came online — trying a fresh identity")
-                await status("Display blocked by saved macOS state — trying a fresh identity…")
+                await status("Virtual display unavailable — trying a fresh identity…")
             }
         }
         guard let vd, let display else {
-            if sawPoisonedIdentity {
+            if sawUnavailableIdentity {
                 throw NSError(domain: "MacSender", code: 5, userInfo: [
-                    NSLocalizedDescriptionKey: "saved display state in macOS is blocking "
-                        + "OpenDisplay's displays — log out and back in (or restart the Mac), then reconnect"])
+                    NSLocalizedDescriptionKey: "the virtual display did not become available after "
+                        + "three identities — inspect the CoreGraphics and ScreenCaptureKit diagnostics"])
             }
             throw identityError
         }
@@ -1072,26 +1063,79 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard !stopped, virtualDisplay === display else { throw CancellationError() }
     }
 
+    private func displayListStatus(id: CGDirectDisplayID, online: Bool) -> (Bool?, String) {
+        var count: UInt32 = 0
+        let initialResult = online
+            ? CGGetOnlineDisplayList(0, nil, &count)
+            : CGGetActiveDisplayList(0, nil, &count)
+        guard initialResult == .success else {
+            return (nil, "query failed (\(initialResult.rawValue))")
+        }
+        guard count > 0 else { return (false, "no displays") }
+
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        let result = online
+            ? CGGetOnlineDisplayList(count, &ids, &count)
+            : CGGetActiveDisplayList(count, &ids, &count)
+        guard result == .success else { return (nil, "query failed (\(result.rawValue))") }
+        let containsDisplay = ids.prefix(Int(count)).contains(id)
+        return (containsDisplay, "\(containsDisplay ? "present" : "absent") among \(count)")
+    }
+
+    private func displayDiscoverySnapshot(
+        id: CGDirectDisplayID,
+        shareableContentDisplayCount: Int,
+        shareableDisplaySize: DisplayDiscoverySize?
+    ) -> (DisplayDiscoverySnapshot, String) {
+        let online = displayListStatus(id: id, online: true)
+        let active = displayListStatus(id: id, online: false)
+        return (
+            DisplayDiscoverySnapshot(
+                coreGraphicsOnline: online.0,
+                coreGraphicsActive: active.0,
+                shareableContentDisplayCount: shareableContentDisplayCount,
+                shareableDisplaySize: shareableDisplaySize),
+            "CoreGraphics online list: \(online.1); active list: \(active.1)"
+        )
+    }
+
     /// The virtual display takes a moment to show up in shareable content.
     private func findSCDisplay(id: CGDirectDisplayID, expectedSize: CGSize? = nil) async throws -> SCDisplay {
         var lastDisplayCount = 0
+        var lastDisplaySize: DisplayDiscoverySize?
+        let expected = expectedSize.map {
+            DisplayDiscoverySize(width: Int($0.width), height: Int($0.height))
+        }
         for _ in 0..<20 {
             try Task.checkCancellation()
             guard !stopped else { throw CancellationError() }
-            let content = try await SCShareableContent.current
+            let content: SCShareableContent
+            do {
+                content = try await SCShareableContent.current
+            } catch {
+                let (snapshot, coreGraphicsLists) = displayDiscoverySnapshot(
+                    id: id, shareableContentDisplayCount: lastDisplayCount,
+                    shareableDisplaySize: lastDisplaySize)
+                Log.info("ScreenCaptureKit query failed for virtual display \(id): \(error); "
+                    + "\(snapshot.summary(expectedSize: expected)); \(coreGraphicsLists)")
+                throw error
+            }
             try Task.checkCancellation()
             guard !stopped else { throw CancellationError() }
             lastDisplayCount = content.displays.count
-            if let display = content.displays.first(where: {
-                $0.displayID == id
-                    && (expectedSize == nil
-                        || ($0.width == Int(expectedSize!.width)
-                            && $0.height == Int(expectedSize!.height)))
-            }) {
-                return display
+            if let display = content.displays.first(where: { $0.displayID == id }) {
+                lastDisplaySize = DisplayDiscoverySize(width: display.width, height: display.height)
+                if expected == nil || lastDisplaySize == expected {
+                    return display
+                }
             }
             try await Task.sleep(for: .milliseconds(250))
         }
+        let (snapshot, coreGraphicsLists) = displayDiscoverySnapshot(
+            id: id, shareableContentDisplayCount: lastDisplayCount,
+            shareableDisplaySize: lastDisplaySize)
+        Log.info("virtual display \(id) discovery timed out: \(snapshot.summary(expectedSize: expected)); "
+            + "\(coreGraphicsLists)")
         // An empty display list is a different disease from "ours is
         // missing": capture authorization is broken app-wide, and callers
         // must not burn fallback identities on it.
