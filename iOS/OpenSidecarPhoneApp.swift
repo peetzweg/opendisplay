@@ -750,6 +750,7 @@ struct VideoLayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> VideoView {
         let view = VideoView()
         view.backgroundColor = .black
+        view.clipsToBounds = true   // a held frame can be larger than a folded screen
         view.isMultipleTouchEnabled = true
         view.receiver = receiver
 
@@ -831,18 +832,87 @@ struct VideoLayerView: UIViewRepresentable {
 
         private var lastLoggedLayout = ""
 
+        // Between a resize (rotation, fold, Split View) and the first frame of
+        // the desktop the Mac rebuilds for it, the last frame is scaled to
+        // cover the new shape and blurred; once the new desktop arrives it
+        // swaps in under the blur, which then clears to reveal it.
+        private var lastVideoSize = CGSize.zero
+        private var settledBounds = CGRect.zero   // the bounds the current video was sized for
+        private var holdingStaleFrame = false
+        private var holdRelease: DispatchWorkItem?
+        private let blurView: UIVisualEffectView = {
+            let view = UIVisualEffectView(effect: nil)
+            view.isUserInteractionEnabled = false
+            view.layer.zPosition = 20   // above the video and the cursor
+            return view
+        }()
+
+        /// Returns whether a hold just began, so the caller animates into it.
+        private func updateHold() -> Bool {
+            let video = receiver?.videoSize ?? .zero
+            if video != lastVideoSize || video == .zero || settledBounds == .zero
+                || bounds == settledBounds {
+                lastVideoSize = video
+                settledBounds = bounds
+                releaseHold()
+                return false
+            }
+            let began = !holdingStaleFrame
+            holdingStaleFrame = true
+            // A Mac that never sends a new desktop (an older sender, or the
+            // size settled back on one it already streams) must not leave the
+            // picture blurred: reveal what there is.
+            holdRelease?.cancel()
+            let release = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.settledBounds = self.bounds
+                self.releaseHold()
+                self.setNeedsLayout()
+            }
+            holdRelease = release
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: release)
+            if began {
+                UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState]) {
+                    self.blurView.effect = UIBlurEffect(style: .dark)
+                }
+            }
+            return began
+        }
+
+        private func releaseHold() {
+            holdRelease?.cancel()
+            holdRelease = nil
+            guard holdingStaleFrame else { return }
+            holdingStaleFrame = false
+            // A beat for the first new frame to decode under the blur.
+            UIView.animate(withDuration: 0.4, delay: 0.08,
+                           options: [.beginFromCurrentState, .curveEaseOut]) {
+                self.blurView.effect = nil
+            }
+        }
+
         override func layoutSubviews() {
             super.layoutSubviews()
+            let holdBegan = updateHold()
+            if blurView.superview == nil { addSubview(blurView) }
+            blurView.frame = bounds
             CATransaction.begin()
-            CATransaction.setDisableActions(true)
+            if holdBegan {
+                CATransaction.setAnimationDuration(0.25)
+                CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+            } else {
+                CATransaction.setDisableActions(true)
+            }
+            // Both renderers draw into the video rect; the metal layer scales
+            // its drawable to fill its frame, AVSBDL aspect-fits.
             if let renderer = metalRenderer {
-                // The metal layer scales its drawable to fill its frame, so
-                // the frame itself must be the aspect-fit rect.
                 renderer.metalLayer.frame = videoRect() ?? bounds
             } else {
-                // AVSBDL aspect-fits internally (videoGravity) — full bounds.
-                layer.sublayers?.first?.frame = bounds
+                layer.sublayers?.first?.frame = videoRect() ?? bounds
             }
+            CATransaction.commit()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             if cursorLayer.superlayer == nil { layer.addSublayer(cursorLayer) }
             updateCursorLayout()
             CATransaction.commit()
@@ -857,11 +927,14 @@ struct VideoLayerView: UIViewRepresentable {
             }
         }
 
-        /// Aspect-fit rect of the video inside the view (inverse of normalized()).
+        /// Aspect-fit rect of the video inside the view (inverse of normalized()),
+        /// or, while a stale frame is held, the rect that covers the view.
         private func videoRect() -> CGRect? {
             guard let video = receiver?.videoSize, video != .zero,
                   bounds.width > 0, bounds.height > 0 else { return nil }
-            let scale = min(bounds.width / video.width, bounds.height / video.height)
+            let fit = min(bounds.width / video.width, bounds.height / video.height)
+            let cover = max(bounds.width / video.width, bounds.height / video.height)
+            let scale = holdingStaleFrame ? cover : fit
             let size = CGSize(width: video.width * scale, height: video.height * scale)
             return CGRect(x: (bounds.width - size.width) / 2,
                           y: (bounds.height - size.height) / 2,
@@ -901,14 +974,9 @@ struct VideoLayerView: UIViewRepresentable {
         // The video is aspect-fit inside the view; map view coords into the
         // displayed video rect and normalize to [0,1].
         fileprivate func normalized(_ point: CGPoint) -> (x: Double, y: Double)? {
-            guard let video = receiver?.videoSize, video != .zero,
-                  bounds.width > 0, bounds.height > 0 else { return nil }
-            let scale = min(bounds.width / video.width, bounds.height / video.height)
-            let size = CGSize(width: video.width * scale, height: video.height * scale)
-            let origin = CGPoint(x: (bounds.width - size.width) / 2,
-                                 y: (bounds.height - size.height) / 2)
-            let x = (point.x - origin.x) / size.width
-            let y = (point.y - origin.y) / size.height
+            guard let rect = videoRect() else { return nil }
+            let x = (point.x - rect.minX) / rect.width
+            let y = (point.y - rect.minY) / rect.height
             return (min(max(x, 0), 1), min(max(y, 0), 1))
         }
 
@@ -945,7 +1013,7 @@ struct VideoLayerView: UIViewRepresentable {
                 }
             case .changed:
                 let t = recognizer.translation(in: self)
-                let scale = min(bounds.width / video.width, bounds.height / video.height)
+                let scale = (videoRect()?.width ?? bounds.width) / video.width
                 // Deltas in video pixels, natural-scrolling direction.
                 receiver?.sendScroll(dx: (t.x - lastPan.x) / scale,
                                      dy: (t.y - lastPan.y) / scale)

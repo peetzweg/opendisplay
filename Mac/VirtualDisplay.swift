@@ -135,7 +135,10 @@ final class VirtualDisplay {
         newSettings.modes = [
             CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
         ]
-        guard display.apply(newSettings) else {
+        Log.info("TIMING apply begin")
+        let applied = display.apply(newSettings)
+        Log.info("TIMING apply end")
+        guard applied else {
             Log.info("virtual display \(display.displayID) applySettings FAILED during resize")
             return false
         }
@@ -151,7 +154,9 @@ final class VirtualDisplay {
             var config: CGDisplayConfigRef?
             if CGBeginDisplayConfiguration(&config) == .success {
                 CGConfigureDisplayOrigin(config, display.displayID, Int32(origin.x), Int32(origin.y))
+                Log.info("TIMING origin begin")
                 let err = CGCompleteDisplayConfiguration(config, .permanently)
+                Log.info("TIMING origin end")
                 // A mode change is a display reconfiguration, so macOS may
                 // restore ITS arrangement for this identity a moment later,
                 // exactly as it does after creation. Re-arm the same window so

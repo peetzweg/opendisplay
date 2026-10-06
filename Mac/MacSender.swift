@@ -863,6 +863,31 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// constraints. Loops until the stream matches the latest hello, so a
     /// capability update that arrives mid-rebuild is not lost.
     private var reconfiguring = false
+    /// The rebuild waiting out a burst of hellos; replaced by each new one.
+    private var pendingReconfigure: Task<Void, Never>?
+    private var lastSelectionChange: ContinuousClock.Instant?
+
+    /// A lone change (a fold, a single rotation) rebuilds at once: every
+    /// millisecond here is a stale picture on the receiver. A burst (a quick
+    /// double rotation, a live window resize) waits until it settles.
+    /// `reconfigure` itself picks up hellos that land while it runs.
+    private func scheduleReconfigure() {
+        let now = ContinuousClock.now
+        let isolated = lastSelectionChange.map { now - $0 > .milliseconds(500) } ?? true
+        lastSelectionChange = now
+        pendingReconfigure?.cancel()
+        pendingReconfigure = Task {
+            if !isolated {
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+            }
+            guard let current = self.lastHello else { return }
+            // Its own task: cancelling the wait must never abort a rebuild
+            // that already tore the old stream down.
+            Task { await self.reconfigure(current) }
+        }
+    }
+
     private func reconfigure(_ info: PhoneInfo) async {
         guard !reconfiguring, !stopped else { return }
         reconfiguring = true
@@ -876,6 +901,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // desktop and can otherwise be replayed onto the new one.
             invalidateCapturePipeline(discardingLastFrame: true)
             if let stream { try? await stream.stopCapture() }
+            Log.info("TIMING capture stopped")
             stream = nil
             if let encoder { VTCompressionSessionInvalidate(encoder) }
             encoder = nil
@@ -1232,6 +1258,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stop() {
         stopped = true
+        pendingReconfigure?.cancel()
+        pendingReconfigure = nil
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
         cursorImageTimer?.cancel()
@@ -2348,15 +2376,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     continuation.resume(returning: info)
                 } else if stream != nil, let previous,
                           streamSelectionInputsChanged(from: previous, to: info) {
-                    // Rebuild after a short debounce so a flurry of rotations
-                    // or capability updates settles into one selection.
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(300))
-                        guard let current = self.lastHello,
-                              !self.streamSelectionInputsChanged(from: info,
-                                                                 to: current) else { return }
-                        await self.reconfigure(info)
-                    }
+                    scheduleReconfigure()
                 }
             }
         case "touch":
