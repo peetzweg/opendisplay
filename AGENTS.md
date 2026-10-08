@@ -20,3 +20,20 @@ Debug receiver to `~/Applications/OpenDisplay Receiver Dev.app`; do not replace
 the release receiver app. A windowed receiver is sufficient for protocol,
 encode, and decode validation. Use its fullscreen video window for end-to-end
 latency, presentation, scaling, and visual-quality measurements.
+
+# Linux development (`linux/` workspace)
+
+The Rust workspace builds natively per architecture; see `linux/PLAN.md`.
+
+- Omarchy build/runtime packages: `pkgconf gst-libav gst-plugins-good
+  gst-plugins-bad gst-plugin-va gst-plugin-pipewire libva-utils` (headers ship
+  with the main `gstreamer`/`gst-plugins-base-libs` packages). Without
+  `pkgconf`, build with `--no-default-features` and use `--sink none`.
+- Protocol-only loop, no display needed:
+  `od-receiver --listen 127.0.0.1:9100 --sink none` and
+  `od-fake-sender --connect 127.0.0.1:9100 --clip linux/testdata/clip-320x180-30.h264 --fps 60`.
+- Hyprland >= 0.55 is Lua-configured: `hyprctl keyword` is rejected; use
+  `hyprctl eval 'hl.monitor({...})'` and verify with `hyprctl monitors -j`.
+- The dev VM is behind QEMU user-mode NAT (`10.0.2.x`): a Mac sender on the LAN
+  needs a UTM port forward to guest 9000 plus the sender's `-host`/`-port`
+  manual endpoint, or the VM switched to bridged networking for Bonjour.

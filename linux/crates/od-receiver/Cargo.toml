@@ -1,0 +1,32 @@
+[package]
+name = "od-receiver"
+description = "OpenDisplay receiver for Linux: turns a Wayland output into an OpenDisplay display (PROTOCOL.md pv 3)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["gstreamer"]
+# Decode and present through GStreamer. Without it only `--sink none` works,
+# which is enough for protocol testing on a machine without the dev packages.
+gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
+
+[dependencies]
+opendisplay-proto = { workspace = true }
+opendisplay-session = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+mdns-sd = { workspace = true }
+wayland-client = { workspace = true }
+gstreamer = { workspace = true, optional = true }
+gstreamer-app = { workspace = true, optional = true }
+
+[dev-dependencies]
+od-fake-sender = { path = "../od-fake-sender" }
