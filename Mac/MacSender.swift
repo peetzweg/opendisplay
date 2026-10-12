@@ -1232,6 +1232,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stop() {
         stopped = true
+        inputInjector?.reset()
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
         cursorImageTimer?.cancel()
@@ -1304,6 +1305,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func reportGone(_ reason: String) {
         guard !goneReported, !stopped else { return }
         goneReported = true
+        inputInjector?.reset()
         Log.info(reason)
         Task { @MainActor in self.onDisconnected?() }
     }
@@ -1522,6 +1524,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Bookkeeping shared by both transports once a connection is live.
     private func becomeReady(_ conn: NWConnection) {
+        inputInjector?.reset()
         Log.info("connection ready to \(endpointName)")
         connectionGeneration &+= 1
         let readyGeneration = connectionGeneration
@@ -2363,7 +2366,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
-                inputInjector?.handleTouch(phase: phase, x: x, y: y)
+                let button = obj["button"] as? String ?? "left"
+                inputInjector?.handleTouch(phase: phase, x: x, y: y, button: button)
                 if let t = obj["t"] as? Double {
                     let delta = Date().timeIntervalSince1970 * 1000 - t
                     if delta > -50, delta < 1000 {
@@ -3086,6 +3090,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Invalidate the retired ScreenCaptureKit/VideoToolbox callbacks before
     /// changing the display or encoder they feed.
     private func invalidateCapturePipeline(discardingLastFrame: Bool = false) {
+        inputInjector?.reset()
         pipelineLock.lock()
         captureGeneration &+= 1
         activeStreamConfiguration = nil

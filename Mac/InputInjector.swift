@@ -25,8 +25,8 @@ private enum SystemClickMetrics {
 final class InputInjector {
 
     private let displayID: CGDirectDisplayID
-    private var isDown = false
-    private var penDown = false
+    private(set) var isDown = false
+    private(set) var penDown = false
     // A real event source (vs nil) plus non-zero clickState on down/up: menu
     // tracking treats sourceless/zero-click synthetic clicks as malformed — menus
     // open but their tracking session breaks, leaving zombie menu windows
@@ -40,23 +40,24 @@ final class InputInjector {
     private let pointerID: Int64 = 0x0D02              // pen tip
     private let vendorPointerType: Int64 = 0x0802    // Grip Pen (what apps expect)
     private let capabilityMask: Int64 = 0x05C7       // pressure + tilt + rotation + buttons
-    private var inRange = false
+    private(set) var inRange = false
 
-    // Pencil-only synthetic click counting — tablet events don't get click
-    // state from the Window Server, so we mirror macOS double-click prefs here.
-    private struct PenClickSession {
+    // Synthetic click counting — mirror macOS double-click prefs for both finger touch and pencil.
+    private struct ClickSession {
         let downLocation: CGPoint
         let clickState: Int
     }
 
-    private struct PenCompletedClick {
+    private struct CompletedClick {
         let upTime: CFAbsoluteTime
         let downLocation: CGPoint
         let clickState: Int
     }
 
-    private var penClickSession: PenClickSession?
-    private var penLastClick: PenCompletedClick?
+    private var touchClickSession: ClickSession?
+    private var touchLastClick: CompletedClick?
+    private var penClickSession: ClickSession?
+    private var penLastClick: CompletedClick?
 
     init(displayID: CGDirectDisplayID) {
         self.displayID = displayID
@@ -71,44 +72,69 @@ final class InputInjector {
         return trusted
     }
 
+    /// Resets all input state on client disconnect or session reset:
+    /// releases held mouse/touch buttons, releases held pen state,
+    /// exits tablet proximity, and clears click sessions.
+    func reset() {
+        let p = currentCursor()
+        if isDown {
+            if let ev = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                                mouseCursorPosition: p, mouseButton: .left) {
+                ev.setIntegerValueField(.mouseEventClickState, value: 0)
+                ev.post(tap: .cghidEventTap)
+            }
+            isDown = false
+        }
+        if penDown {
+            postTabletPoint(phase: .up, x: nil, y: nil, pressure: 0, tiltX: 0, tiltY: 0, rotation: 0)
+            penDown = false
+        }
+        if inRange {
+            setProximity(entering: false, at: p)
+        }
+        touchClickSession = nil
+        touchLastClick = nil
+        penClickSession = nil
+        penLastClick = nil
+    }
+
     /// x/y are normalized [0,1] in video space (origin top-left).
-    func handleTouch(phase: String, x: Double, y: Double) {
+    func handleTouch(phase: String, x: Double, y: Double, button: String = "left") {
         let bounds = CGDisplayBounds(displayID)   // global CG coords, y-down
         let point = CGPoint(
             x: bounds.origin.x + x * bounds.width,
             y: bounds.origin.y + y * bounds.height
         )
 
+        let isRight = (button == "right")
+        let btn: CGMouseButton = isRight ? .right : .left
         let type: CGEventType
-        // Click count on the release. A cancel means "a second finger joined,
-        // this was a scroll, not a tap" — but there is no CGEvent for undoing a
-        // press, and a plain up over the press point is indistinguishable from a
-        // click, so every two-finger scroll opened whatever was under finger one.
-        // Releasing with clickCount 0 keeps the button state honest while telling
-        // AppKit and WebKit not to synthesize a click. Only the cancel path gets
-        // 0: a zero-click *down* is what breaks menu tracking (see above).
         var clickState = 1
         switch phase {
         case "began":
-            type = .leftMouseDown
+            type = isRight ? .rightMouseDown : .leftMouseDown
             isDown = true
+            clickState = beginTouchClickSession(at: point)
         case "moved":
-            type = isDown ? .leftMouseDragged : .mouseMoved
+            type = isDown ? (isRight ? .rightMouseDragged : .leftMouseDragged) : .mouseMoved
         case "ended":
             guard isDown else { return }   // spurious up without a down
-            type = .leftMouseUp
+            type = isRight ? .rightMouseUp : .leftMouseUp
             isDown = false
+            clickState = finishTouchClickSession(at: point)
         case "cancelled":
             guard isDown else { return }
-            type = .leftMouseUp
+            type = isRight ? .rightMouseUp : .leftMouseUp
             isDown = false
+            touchClickSession = nil
+            touchLastClick = nil
             clickState = 0
         default:
             return
         }
 
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
-                                  mouseCursorPosition: point, mouseButton: .left) else { return }
+                                  mouseCursorPosition: point, mouseButton: btn) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
         event.post(tap: .cghidEventTap)
     }
@@ -140,7 +166,7 @@ final class InputInjector {
         if phase == "down", !inRange {
             setProximity(entering: true, at: p)
         }
-        let (tiltX, tiltY) = deriveTilt(azimuth: azimuth, altitude: altitude)
+        let (tiltX, tiltY) = Self.deriveTilt(azimuth: azimuth, altitude: altitude)
 
         switch phase {
         case "down":
@@ -237,9 +263,9 @@ final class InputInjector {
         ev.post(tap: .cghidEventTap)
     }
 
-    private func penClickStateForMouseDown(at point: CGPoint) -> Int {
+    private func clickStateForMouseDown(at point: CGPoint, lastClick: CompletedClick?) -> Int {
         let now = CFAbsoluteTimeGetCurrent()
-        guard let last = penLastClick,
+        guard let last = lastClick,
               now - last.upTime <= SystemClickMetrics.interval else {
             return 1
         }
@@ -249,9 +275,33 @@ final class InputInjector {
         return last.clickState + 1
     }
 
+    private func beginTouchClickSession(at point: CGPoint) -> Int {
+        let state = clickStateForMouseDown(at: point, lastClick: touchLastClick)
+        touchClickSession = ClickSession(downLocation: point, clickState: state)
+        return state
+    }
+
+    private func finishTouchClickSession(at upLocation: CGPoint) -> Int {
+        guard let session = touchClickSession else { return 1 }
+        touchClickSession = nil
+
+        let dx = upLocation.x - session.downLocation.x
+        let dy = upLocation.y - session.downLocation.y
+        if hypot(dx, dy) <= SystemClickMetrics.distance {
+            touchLastClick = CompletedClick(
+                upTime: CFAbsoluteTimeGetCurrent(),
+                downLocation: session.downLocation,
+                clickState: session.clickState
+            )
+        } else {
+            touchLastClick = nil
+        }
+        return session.clickState
+    }
+
     private func beginPenClickSession(at point: CGPoint) -> Int {
-        let state = penClickStateForMouseDown(at: point)
-        penClickSession = PenClickSession(downLocation: point, clickState: state)
+        let state = clickStateForMouseDown(at: point, lastClick: penLastClick)
+        penClickSession = ClickSession(downLocation: point, clickState: state)
         return state
     }
 
@@ -264,7 +314,7 @@ final class InputInjector {
         let dx = upLocation.x - session.downLocation.x
         let dy = upLocation.y - session.downLocation.y
         if hypot(dx, dy) <= SystemClickMetrics.distance {
-            penLastClick = PenCompletedClick(
+            penLastClick = CompletedClick(
                 upTime: CFAbsoluteTimeGetCurrent(),
                 downLocation: session.downLocation,
                 clickState: session.clickState
@@ -279,7 +329,7 @@ final class InputInjector {
     /// is a unit vector in -1...1, so normalize rather than pass radians through
     /// (unnormalized, a flat pen reads 1.57 and apps that scale tilt by 90 report
     /// impossible angles).
-    private func deriveTilt(azimuth: Double, altitude: Double) -> (Double, Double) {
+    static func deriveTilt(azimuth: Double, altitude: Double) -> (Double, Double) {
         let mag = min(max(0, Double.pi / 2 - altitude) / (Double.pi / 2), 1)
         return (sin(azimuth) * mag, cos(azimuth) * mag)
     }
