@@ -156,6 +156,7 @@ targets:
       - Mac/VirtualCanvasSizing.swift
       - Mac/PhoneInfo.swift
       - Mac/DesktopPolicy.swift
+      - Mac/InputInjector.swift
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/Protocol.swift
