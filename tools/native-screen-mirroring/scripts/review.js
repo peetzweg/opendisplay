@@ -38,8 +38,28 @@ export function review({ mode = 'run', env = process.env, root = projectRoot,
   let host;
   if (mode === 'run' || mode === 'install') {
     const action = mode === 'install' ? 'Install' : 'Start Review';
-    const answer = env.IPHONE_HOST || command('/usr/bin/osascript', ['-e',
-      `text returned of (display dialog "Open OpenDisplay on your iPhone. Enter its Wi-Fi or Tailscale IP address (Settings > Wi-Fi > your network)." with title "iPhone Native Mirror" default answer "" buttons {"Cancel", "${action}"} default button "${action}")`],
+    let discovered = [];
+    if (!env.IPHONE_HOST) {
+      console.log('Looking for OpenDisplay receivers on this network. Keep the phone app open.');
+      const scan = run(process.execPath, ['scripts/discover.js'], { cwd: root, env, encoding: 'utf8', timeout: 55000, stdio: ['ignore', 'pipe', 'pipe'] });
+      if (scan.status === 0) {
+        try { discovered = JSON.parse(scan.stdout); } catch { /* Manual fallback below. */ }
+      }
+    }
+    let answer = env.IPHONE_HOST;
+    if (!answer && discovered.length === 1) {
+      answer = discovered[0].host;
+      console.log(`Found OpenDisplay: ${discovered[0].name}`);
+    } else if (!answer && discovered.length > 1) {
+      const labels = discovered.map((device, i) => `${i + 1}. ${device.name}`);
+      const selected = command('/usr/bin/osascript', ['-e',
+        `set chosen to choose from list {${labels.map(label => JSON.stringify(label)).join(', ')}} with title "iPhone Native Mirror" with prompt "Choose the phone running OpenDisplay:"\nif chosen is false then error number -128\nreturn item 1 of chosen`],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).stdout.trim();
+      answer = discovered[labels.indexOf(selected)]?.host;
+      if (!answer) throw new Error('No OpenDisplay receiver selected.');
+    }
+    answer ||= command('/usr/bin/osascript', ['-e',
+      `text returned of (display dialog "No OpenDisplay receiver was found. Keep the app open on an unlocked phone on the same Wi-Fi. If discovery is blocked, enter its address from iPhone Settings > Wi-Fi > your network, or from the Tailscale app." with title "iPhone Native Mirror" default answer "" buttons {"Cancel", "${action}"} default button "${action}")`],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).stdout;
     host = phoneAddress(answer);
   }

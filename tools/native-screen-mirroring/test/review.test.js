@@ -48,7 +48,7 @@ test('review stops when prerequisites are missing or the address prompt is cance
   assert.throws(() => review({ platform: 'darwin', env: {}, run: (binary) => {
     cancelled.push(binary); return { status: binary === '/usr/bin/osascript' ? 1 : 0 };
   } }), /osascript failed/);
-  assert.deepEqual(cancelled, ['cmake', 'pkg-config', 'pkg-config', '/usr/bin/osascript']);
+  assert.deepEqual(cancelled, ['cmake', 'pkg-config', 'pkg-config', process.execPath, '/usr/bin/osascript']);
 });
 
 test('temporary review reuses its identity without registering a login service', () => {

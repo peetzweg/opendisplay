@@ -12,8 +12,9 @@ available without this helper or its dependencies.
    OpenSSL 3. With Homebrew, `brew install node cmake pkgconf libplist openssl@3`
    installs the runtime and build libraries. `xcode-select --install` installs
    Apple's compiler tools if missing.
-2. Double-click **Review.command** in this folder and enter the phone's Wi-Fi
-   or Tailscale IP address. The first run builds the helper. Keep OpenDisplay
+2. Double-click **Review.command** in this folder. It finds an open OpenDisplay
+   receiver on the same network automatically; choose by name if several appear.
+   The first run builds the helper. Keep OpenDisplay
    visible on the unlocked iPhone. If macOS blocks the downloaded command,
    review its source and run `zsh Review.command` from Terminal in this folder.
 3. Select **OpenDisplay Review** in native Screen Mirroring, choose Extended
@@ -34,7 +35,7 @@ instructions: https://github.com/therealjosemaria/iphone-native-mirror.
 
 From this folder, run `zsh Install.command` or double-click Install.command.
 It checks Apple's compiler tools, installs missing prerequisites with Homebrew,
-asks for the phone address, packages the source, and installs the persistent
+detects the open phone through Bonjour, packages the source, and installs the persistent
 login service. Homebrew and Xcode Command Line Tools are needed for automatic
 setup. The package install uses a local archive and does not contact npm's
 registry. Re-running the command upgrades the service while retaining its
@@ -42,7 +43,10 @@ saved identity. The installed service runs independently of this checkout.
 
 The address is a LAN address on home Wi-Fi. Tailscale is optional for restrictive
 networks; it is not required for ordinary home Wi-Fi. `IPHONE_HOST` can supply
-an address instead of the dialog. `zsh Install.command --check` checks
+an explicit address, including a Tailscale address, instead of local discovery.
+If no receiver is found, setup offers manual entry with directions to find the
+address on the phone itself. No router access is needed. Bonjour discovery may
+be blocked on restrictive networks and does not enumerate Tailscale peers. `zsh Install.command --check` checks
 prerequisites without changing the installed service.
 
 For a temporary trial, use Review.command instead; it never registers a service.
@@ -97,8 +101,10 @@ Current limits:
   connected. Other device sizes require physical validation.
 - Video only: no forwarded touch input or audio, no USB transport or automatic
   target selection. The receiver app must remain visible and unlocked.
-- Manual target address; Tailscale is optional and used only for a Tailscale
-  address. Bonjour discovery is for the AirPlay endpoint, not phone selection.
+- Phone setup uses Bonjour on the local network and saves its hostname.
+  Tailscale targets can be supplied explicitly through IPHONE_HOST or the manual
+  fallback. Automatic transport switching and remote Tailscale discovery are
+  not implemented. Tailscale is used only when the target is a Tailscale address.
 - A TV icon is used because the tested MacBook AirPlay identity failed negotiation.
 - Physical left/right placement is not sensed. Use System Settings > Displays >
   Arrange. macOS may remember different positions for portrait and landscape.

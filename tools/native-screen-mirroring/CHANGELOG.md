@@ -2,6 +2,9 @@
 
 ## 0.0.13 — 2026-10-17
 
+- Detect open OpenDisplay receivers through Bonjour during setup; select multiple
+  receivers by name, ignore Mac-local aliases, and retain manual address fallback.
+
 - Disable the advertised audio-support capability so this video-only bridge
   does not take over the Mac sound output. Live reconnect retained the selected
   output while the phone desktop continued working.
