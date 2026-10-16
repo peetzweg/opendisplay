@@ -2,6 +2,9 @@
 
 ## 0.0.13 — 2026-10-17
 
+- Dial discovered .local names through IPv4, matching the receiver transport
+  checked by discovery; retain explicit Tailscale and IPv6 target behavior.
+
 - Detect open OpenDisplay receivers through Bonjour during setup; select multiple
   receivers by name, ignore Mac-local aliases, and retain manual address fallback.
 

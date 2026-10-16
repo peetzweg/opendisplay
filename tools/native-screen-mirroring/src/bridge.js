@@ -7,6 +7,7 @@ import { ReadinessGuard } from './readiness.js';
 import { prepareTailscale } from './tailscale.js';
 import { AirPlayEvents } from './airplay-events.js';
 import { NetworkMonitor } from './network-monitor.js';
+import { receiverEndpoint } from './endpoint.js';
 
 const host = process.env.IPHONE_HOST;
 if (!host) throw new Error('Set IPHONE_HOST to the iPhone LAN or Tailscale address');
@@ -111,7 +112,7 @@ function connect() {
   clearInterval(startupProbe); startupProbe = undefined;
   ready = false;
   let handshaken = false;
-  const connection = net.createConnection({ host, port: Number(process.env.IPHONE_PORT || 9000) });
+  const connection = net.createConnection(receiverEndpoint(host, Number(process.env.IPHONE_PORT || 9000)));
   socket = connection;
   connection.setNoDelay(true);
   connection.on('drain', () => receiver.stdout.resume());

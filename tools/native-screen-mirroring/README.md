@@ -92,7 +92,7 @@ Current limits:
 - This installed revision was tested on one Apple Silicon Mac/iPhone 14 Pro Max
   pair over home Wi-Fi with Tailscale stopped: portrait reconnect, landscape and
   portrait resizing, and automatic resume after a brief app switch passed.
-  All 39 automated tests passed from both source and the installed package.
+  All 45 automated tests passed from both source and the installed package.
   Tailscale-address playback and reconnect also passed on the home network.
   After disabling advertised audio support, live reconnect retained the selected
   Mac sound output while video worked. University Wi-Fi, Intel and other phones
@@ -104,7 +104,8 @@ Current limits:
 - Phone setup uses Bonjour on the local network and saves its hostname.
   Tailscale targets can be supplied explicitly through IPHONE_HOST or the manual
   fallback. Automatic transport switching and remote Tailscale discovery are
-  not implemented. Tailscale is used only when the target is a Tailscale address.
+  not implemented. Discovered .local names are dialed over IPv4, matching
+  discovery checks. Tailscale is used only when the target is a Tailscale address.
 - A TV icon is used because the tested MacBook AirPlay identity failed negotiation.
 - Physical left/right placement is not sensed. Use System Settings > Displays >
   Arrange. macOS may remember different positions for portrait and landscape.
