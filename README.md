@@ -300,6 +300,15 @@ please report issues with them in their own repositories. Listing them here
 also says nothing about our own plans: an official OpenDisplay app may still
 ship for any of these platforms later.
 
+### Optional native Screen Mirroring sender (experimental)
+
+An opt-in [native Screen Mirroring helper](tools/native-screen-mirroring/README.md)
+lets macOS Control Center drive the existing iPhone receiver without the Mac
+sender app. It uses a separate UxPlay/Node bridge, is video-only, and currently
+requires a manually configured phone address. See its review launcher, build
+requirements and limitations before testing. The standard apps do not require
+this helper or its dependencies.
+
 ## How it works
 
 ```

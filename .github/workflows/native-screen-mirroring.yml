@@ -1,0 +1,32 @@
+name: Optional native Screen Mirroring
+
+on:
+  pull_request:
+    paths:
+      - 'tools/native-screen-mirroring/**'
+      - '.github/workflows/native-screen-mirroring.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/native-screen-mirroring/**'
+      - '.github/workflows/native-screen-mirroring.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: tools/native-screen-mirroring
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install native build dependencies
+        run: brew install cmake pkgconf libplist openssl@3
+      - name: Build and run all bridge tests
+        run: zsh Review.command --verify

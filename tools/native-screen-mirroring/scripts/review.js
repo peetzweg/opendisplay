@@ -1,0 +1,70 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { isIP } from 'node:net';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { installationIdentity } from '../src/installer.js';
+
+const projectRoot = fileURLToPath(new URL('..', import.meta.url));
+
+export function phoneAddress(value) {
+  const host = String(value || '').trim();
+  if (isIP(host) || (host.length <= 253 && host.split('.').every(label =>
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)))) return host;
+  throw new Error('Enter an IP address or hostname, without a URL or port.');
+}
+
+export function review({ mode = 'run', env = process.env, root = projectRoot,
+  platform = process.platform, run = spawnSync } = {}) {
+  if (platform !== 'darwin') throw new Error('macOS is required.');
+  if (!['run', 'check', 'verify'].includes(mode)) throw new Error('Use --check or --verify, or no option to run.');
+  if (Number(process.versions.node.split('.')[0]) < 20) throw new Error('Node 20+ is required.');
+  function command(binary, args, options = {}) {
+    const result = run(binary, args, { cwd: root, env, stdio: 'inherit', ...options });
+    if (result.error || result.status !== 0)
+      throw new Error(`${binary} failed${result.error ? `: ${result.error.message}` : ` (exit ${result.status})`}.`);
+    return result;
+  }
+  console.log('Checking CMake, pkg-config, libplist and OpenSSL.');
+  try {
+    command('cmake', ['--version'], { stdio: 'ignore' });
+    command('pkg-config', ['--exists', 'libplist-2.0'], { stdio: 'ignore' });
+    command('pkg-config', ['--exists', 'openssl'], { stdio: 'ignore' });
+  } catch (error) {
+    throw new Error(`${error.message}\nInstall prerequisites with: brew install cmake pkgconf libplist openssl@3\nThis installs the compiler tools and libraries used by the AirPlay receiver.`);
+  }
+  if (mode === 'check') { console.log('Prerequisites are ready.'); return; }
+  let host;
+  if (mode === 'run') {
+    const answer = env.IPHONE_HOST || command('/usr/bin/osascript', ['-e',
+      'text returned of (display dialog "Open OpenDisplay on your iPhone. Enter its Wi-Fi or Tailscale IP address (Settings > Wi-Fi > your network)." default answer "" buttons {"Cancel", "Start Review"} default button "Start Review")'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).stdout;
+    host = phoneAddress(answer);
+  }
+  console.log('Building the native receiver and error dialog.');
+  command('cmake', ['-S', '.', '-B', 'build', '-DMIRROR_INTERNAL_MDNS=ON']);
+  command('cmake', ['--build', 'build', '-j', '4']);
+  if (mode === 'verify') {
+    console.log('Running all automated tests, including local native/network checks.');
+    command(process.execPath, ['--test'], { env: { ...env, RUN_NATIVE_TESTS: '1' } });
+    return;
+  }
+  const identityFile = path.join(root, 'build', 'review-identity.json');
+  const saved = existsSync(identityFile) ? JSON.parse(readFileSync(identityFile, 'utf8')) : {};
+  const identity = installationIdentity(saved);
+  mkdirSync(path.dirname(identityFile), { recursive: true });
+  writeFileSync(identityFile, JSON.stringify(identity) + '\n', { mode: 0o600 });
+  console.log('Open macOS Screen Mirroring and select OpenDisplay Review.');
+  console.log('Use Extended Display. Press Control-C here to stop; nothing starts at login.');
+  command(process.execPath, ['src/bridge.js'], { env: { ...env, IPHONE_HOST: host,
+    MIRROR_NAME: 'OpenDisplay Review', MIRROR_LOCAL_ONLY: '1',
+    MIRROR_HOST_LABEL: identity.hostLabel, MIRROR_DEVICE_ID: identity.deviceId } });
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    const args = process.argv.slice(2);
+    const mode = args.length === 0 ? 'run' : args.length === 1 ? args[0].replace(/^--/, '') : 'invalid';
+    review({ mode });
+  } catch (error) { console.error(error.message); process.exitCode = 1; }
+}

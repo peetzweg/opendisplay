@@ -1,0 +1,116 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+import { frame, Decoder } from '../src/protocol.js';
+
+test('AirPlay disconnect closes the phone session, stays idle, and reconnects on selection', {
+  skip: process.env.RUN_NATIVE_TESTS !== '1', timeout: 15000,
+}, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'mirror-lifecycle-'));
+  const control = path.join(dir, 'active'); writeFileSync(control, 'false');
+  const fixture = fileURLToPath(new URL('../scripts/fake-airplay-receiver.cjs', import.meta.url));
+  chmodSync(fixture, 0o755);
+  const connections = [], welcomes = [], videos = [];
+  const server = net.createServer(socket => {
+    connections.push(socket);
+    setTimeout(() => { if (!socket.destroyed) socket.write(frame({ type: 'hello', pv: 3 })); }, 150);
+    const decoder = new Decoder(body => {
+      if (body[0] === 0) { videos.push(body); socket.write(frame({ type: 'stats', fps: 1 })); }
+      else if (JSON.parse(body).type === 'welcome') welcomes.push(socket);
+    });
+    socket.on('data', data => decoder.push(data));
+    socket.on('error', () => {});
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/bridge.js', import.meta.url))], {
+    env: { ...process.env, IPHONE_HOST: '127.0.0.1', IPHONE_PORT: String(server.address().port), AIRPLAY_BINARY: fixture, SESSION_CONTROL_FILE: control, SESSION_PREFLIGHT: '1' },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let log = ''; child.stderr.on('data', data => { log += data; });
+  async function until(predicate) {
+    const deadline = Date.now() + 3000;
+    while (!predicate()) {
+      assert.equal(child.exitCode, null, log);
+      if (Date.now() >= deadline) throw new Error(`Timed out: ${log}`);
+      await delay(20);
+    }
+  }
+  try {
+    await until(() => log.includes('FIXTURE-READY'));
+    await delay(100); assert.equal(connections.length, 0, 'Idle service must not connect to the phone');
+    writeFileSync(control, 'true'); await until(() => welcomes.length === 1);
+    await until(() => videos.length === 1);
+    assert.ok(log.indexOf('IPHONE-READY') < log.indexOf('FIXTURE-STREAM-STARTED'), 'AirPlay starts only after the phone handshake');
+    assert.equal(videos[0][4] & 31, 7, 'Startup video retains SPS before the first IDR');
+    connections[0].write(frame({ type: 'hello', pv: 3, pixelsWide: 2796, pixelsHigh: 1290 }));
+    await until(() => welcomes.length === 2);
+    assert.equal(connections.length, 1, 'Rotation hello is acknowledged on the existing connection');
+    assert.equal((log.match(/FIXTURE-STREAM-STARTED/g) || []).length, 1, 'Rotation must not restart AirPlay');
+    const closed = once(connections[0], 'close');
+    writeFileSync(control, 'false'); await closed;
+    await delay(3200); assert.equal(connections.length, 1, 'Disconnect must cancel phone retries');
+    writeFileSync(control, 'true'); await until(() => welcomes.length === 3);
+    await until(() => videos.length === 2);
+    assert.equal(connections.length, 2);
+  } finally {
+    const exited = child.exitCode === null ? once(child, 'exit') : Promise.resolve();
+    child.kill(); await exited;
+    for (const socket of connections) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+    rmSync(dir, { recursive: true });
+  }
+});
+
+for (const scenario of [
+  { name: 'background-like receiver handshakes but no playback triggers teardown', hello: true },
+  { name: 'silent receiver fails the shorter answer deadline without waiting for playback', hello: false },
+]) test(scenario.name, {
+  skip: process.env.RUN_NATIVE_TESTS !== '1', timeout: 10000,
+}, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'mirror-not-ready-'));
+  const control = path.join(dir, 'active'), marker = path.join(dir, 'error');
+  writeFileSync(control, 'true');
+  const fixture = fileURLToPath(new URL('../scripts/fake-airplay-receiver.cjs', import.meta.url));
+  const errorFixture = fileURLToPath(new URL('../scripts/fake-readiness-error.cjs', import.meta.url));
+  chmodSync(fixture, 0o755); chmodSync(errorFixture, 0o755);
+  let connection, closed = false;
+  const server = net.createServer(socket => {
+    connection = socket;
+    socket.on('error', () => {}); socket.on('data', () => {});
+    socket.on('close', () => { closed = true; });
+    if (scenario.hello) {
+      socket.write(frame({ type: 'hello', pv: 3 }));
+      socket.write(frame({ type: 'stats', fps: 0 }));
+    }
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/bridge.js', import.meta.url))], {
+    env: { ...process.env, IPHONE_HOST: '127.0.0.1', IPHONE_PORT: String(server.address().port), AIRPLAY_BINARY: fixture,
+      SESSION_CONTROL_FILE: control, SESSION_PREFLIGHT: '1', MIRROR_READY_TIMEOUT_MS: '600', MIRROR_HELLO_TIMEOUT_MS: '200', MIRROR_ERROR_BINARY: errorFixture, ERROR_MARKER: marker },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let log = ''; child.stderr.on('data', data => { log += data; });
+  try {
+    await once(child, 'exit');
+    const deadline = Date.now() + 2000;
+    while (((scenario.hello && !existsSync(marker)) || !closed) && Date.now() < deadline) await delay(20);
+    if (!scenario.hello) await delay(200);
+    if (scenario.hello) assert.match(log, /IPHONE-READY/);
+    else { assert.doesNotMatch(log, /IPHONE-READY|FIXTURE-STREAM-STARTED/); assert.match(log, /receiver did not answer/); }
+    assert.match(log, /IPHONE-NOT-READY/);
+    assert.ok(closed, 'Unready phone socket closes');
+    assert.equal(existsSync(marker), scenario.hello, 'Only playback failure launches the custom dialog; preflight rejection uses the macOS error');
+    if (!scenario.hello) assert.match(log, /skipping duplicate dialog/);
+  } finally {
+    child.kill(); connection?.destroy();
+    await new Promise(resolve => server.close(resolve));
+    rmSync(dir, { recursive: true });
+  }
+});
