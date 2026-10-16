@@ -1,0 +1,92 @@
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { installationIdentity, launchAgent } from '../src/installer.js';
+import { discover } from './discover.js';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const label = 'local.iphone-native-mirror';
+export function setupPaths(home) {
+  const support = path.join(home, 'Library/Application Support/iphone-native-mirror');
+  return { support, runtime: path.join(support, 'runtime'), config: path.join(support, 'config.json'),
+    agent: path.join(home, 'Library/LaunchAgents', `${label}.plist`),
+    log: path.join(home, 'Library/Logs/iphone-native-mirror.log') };
+}
+
+export function chooseReceiver({ run = spawnSync, scan = discover, env = process.env } = {}) {
+  if (env.IPHONE_HOST) return env.IPHONE_HOST;
+  const devices = scan();
+  if (!devices.length) throw new Error('No phone found. Open OpenDisplay on your unlocked iPhone, allow Local Network access, connect both devices to the same Wi-Fi, then click Install again.');
+  if (devices.length === 1) return devices[0].host;
+  const labels = devices.map((d, i) => `${i + 1}. ${d.name}`);
+  const selected = run('/usr/bin/osascript', ['-e',
+    `set chosen to choose from list {${labels.map(s => JSON.stringify(s)).join(', ')}} with title "iPhone Native Mirror" with prompt "Choose your OpenDisplay phone:"\nif chosen is false then error number -128\nreturn item 1 of chosen`], { encoding: 'utf8' });
+  if (selected.status !== 0) throw new Error('Installation cancelled.');
+  const host = devices[labels.indexOf(selected.stdout.trim())]?.host;
+  if (!host) throw new Error('No phone selected.');
+  return host;
+}
+
+export function installBundle({ source = root, home = homedir(), uid = process.getuid(), host,
+  run = spawnSync } = {}) {
+  if (!host || !/^[a-z0-9.:%_-]+$/i.test(host)) throw new Error('Invalid phone address.');
+  for (const file of ['node', 'build/airplay-bridge', 'build/iphone-display-error', 'src/bridge.js'])
+    if (!existsSync(path.join(source, file))) throw new Error(`Incomplete installer: ${file} is missing.`);
+  const p = setupPaths(home), domain = `gui/${uid}`;
+  const saved = existsSync(p.config) ? JSON.parse(readFileSync(p.config, 'utf8')) : {};
+  const identity = installationIdentity(saved);
+  const previousConfig = existsSync(p.config) ? readFileSync(p.config) : undefined;
+  const previousAgent = existsSync(p.agent) ? readFileSync(p.agent) : undefined;
+  mkdirSync(p.support, { recursive: true, mode: 0o700 });
+  const staging = path.join(p.support, `runtime-staging-${process.pid}`);
+  const backup = path.join(p.support, `runtime-backup-${process.pid}`);
+  if (existsSync(staging) || existsSync(backup)) throw new Error('An unfinished installation exists. Close the installer and retry.');
+  cpSync(source, staging, { recursive: true });
+  mkdirSync(path.dirname(p.agent), { recursive: true });
+  mkdirSync(path.dirname(p.log), { recursive: true });
+  const result = run('/bin/launchctl', ['bootout', domain, p.agent], { encoding: 'utf8' });
+  if (result.error) { rmSync(staging, { recursive: true, force: true }); throw result.error; }
+  let moved = false, installed = false;
+  try {
+    if (existsSync(p.runtime)) { renameSync(p.runtime, backup); moved = true; }
+    renameSync(staging, p.runtime); installed = true;
+    writeFileSync(p.config, JSON.stringify({ ...saved, host, ...identity }, null, 2) + '\n', { mode: 0o600 });
+    writeFileSync(p.agent, launchAgent({ node: path.join(p.runtime, 'node'), script: path.join(p.runtime, 'src/bridge.js'),
+      host, log: p.log, ...identity }), { mode: 0o600 });
+    const registered = run('/bin/launchctl', ['bootstrap', domain, p.agent], { encoding: 'utf8' });
+    if (registered.error || registered.status !== 0) throw new Error(`Could not start the service: ${registered.stderr || registered.error?.message || 'launchctl failed'}`);
+  } catch (error) {
+    run('/bin/launchctl', ['bootout', domain, p.agent], { encoding: 'utf8' });
+    if (installed) rmSync(p.runtime, { recursive: true, force: true });
+    if (moved) renameSync(backup, p.runtime);
+    for (const [file, contents] of [[p.config, previousConfig], [p.agent, previousAgent]]) {
+      if (contents) writeFileSync(file, contents, { mode: 0o600 }); else rmSync(file, { force: true });
+    }
+    if (previousAgent) run('/bin/launchctl', ['bootstrap', domain, p.agent], { encoding: 'utf8' });
+    throw error;
+  } finally { rmSync(staging, { recursive: true, force: true }); }
+  rmSync(backup, { recursive: true, force: true });
+  return p;
+}
+
+export function removeBundle({ home = homedir(), uid = process.getuid(), run = spawnSync } = {}) {
+  const p = setupPaths(home);
+  run('/bin/launchctl', ['bootout', `gui/${uid}`, p.agent], { encoding: 'utf8' });
+  rmSync(p.agent, { force: true });
+  rmSync(p.runtime, { recursive: true, force: true });
+  // Retain the small saved phone configuration so a reinstall keeps its identity.
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    if (process.argv.includes('--remove')) { removeBundle(); console.log('Removed the background service. Your saved phone settings were retained.'); }
+    else {
+      console.log('Finding OpenDisplay on your network…');
+      const host = chooseReceiver();
+      installBundle({ host });
+      console.log('Installed. Select iPhone in Mac Control Center → Screen Mirroring. Keep OpenDisplay visible on the phone.');
+    }
+  } catch (error) { console.error(error.message); process.exitCode = 1; }
+}

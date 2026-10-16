@@ -1,17 +1,38 @@
 {
   "name": "iphone-native-mirror",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "private": true,
   "description": "Experimental native AirPlay to OpenDisplay bridge",
-  "repository": { "type": "git", "url": "https://github.com/therealjosemaria/iphone-native-mirror.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/therealjosemaria/iphone-native-mirror.git"
+  },
   "homepage": "https://github.com/therealjosemaria/iphone-native-mirror#readme",
   "license": "GPL-3.0-or-later",
   "type": "module",
-  "files": ["CMakeLists.txt", "native/receiver.c", "native/show-error.m", "src", "scripts", "test", "Review.command", "Install.command", "vendor/uxplay/lib", "vendor/uxplay/LICENSE", "vendor/uxplay/PATCHES.md", "README.md", "CHANGELOG.md", "LICENSE"],
-  "engines": { "node": ">=20" },
+  "files": [
+    "CMakeLists.txt",
+    "native/receiver.c",
+    "native/show-error.m",
+    "src",
+    "scripts",
+    "test",
+    "Review.command",
+    "Install.command",
+    "vendor/uxplay/lib",
+    "vendor/uxplay/LICENSE",
+    "vendor/uxplay/PATCHES.md",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "native/setup.m"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "cmake -S . -B build && cmake --build build -j 4",
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "dev": "node src/bridge.js",
     "postinstall": "node src/installer.js"
   }

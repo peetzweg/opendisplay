@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,7 +73,8 @@ export function review({ mode = 'run', env = process.env, root = projectRoot,
   command('cmake', ['--build', 'build', '-j', '4']);
   if (mode === 'verify') {
     console.log('Running all automated tests, including local native/network checks.');
-    command(process.execPath, ['--test'], { env: { ...env, RUN_NATIVE_TESTS: '1' } });
+    const tests = readdirSync(path.join(root, 'test')).filter(name => name.endsWith('.test.js')).sort().map(name => path.join('test', name));
+    command(process.execPath, ['--test', ...tests], { env: { ...env, RUN_NATIVE_TESTS: '1' } });
     return;
   }
   const identityFile = path.join(root, 'build', 'review-identity.json');

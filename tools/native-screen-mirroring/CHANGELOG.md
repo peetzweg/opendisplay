@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.14 — 2026-10-17
+
+- Add a self-contained Mac installer app with bundled Node and native helpers.
+- Install the background service without Homebrew, npm or compiler tools.
+- Add per-user upgrades, failure rollback and removal from the installer window.
+- Audit native dependencies and architecture; include third-party notices.
+- Support Developer ID signing during packaging; local review builds are ad-hoc
+  signed and are not notarized.
+
+
 ## 0.0.13 — 2026-10-17
 
 - Dial discovered .local names through IPv4, matching the receiver transport

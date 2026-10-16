@@ -75,6 +75,8 @@ test('verification builds before running the full suite and never starts a phone
     calls.push({ binary, args, options }); return { status: 0 };
   } });
   assert.equal(calls.at(-1).args[0], '--test');
+  assert.ok(calls.at(-1).args.slice(1).every(name => name.startsWith('test/') && !name.includes('build/')));
+  assert.ok(calls.at(-1).args.includes('test/bundle.test.js'));
   assert.equal(calls.at(-1).options.env.RUN_NATIVE_TESTS, '1');
   assert.deepEqual(calls[3].args, ['-S', '.', '-B', 'build', '-DMIRROR_INTERNAL_MDNS=ON']);
   assert.deepEqual(calls[4].args, ['--build', 'build', '-j', '4']);

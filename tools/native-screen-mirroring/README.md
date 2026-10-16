@@ -6,6 +6,46 @@ to extend the Mac desktop onto it. The OpenDisplay Mac sender is not required
 for this mode. The existing Mac sender, USB, input and receiver paths remain
 available without this helper or its dependencies.
 
+## Double-click installation (self-contained build)
+
+The self-contained installer ZIP contains **Install iPhone Native Mirror.app**.
+Unzip it, keep OpenDisplay visible on your unlocked phone on the same Wi-Fi,
+then open the app and click **Install**. It discovers the phone and copies its
+bundled Node runtime and native helpers into your user account. No Homebrew,
+npm, compiler tools, Terminal command or administrator password is needed.
+Select **iPhone** in macOS Control Center > Screen Mirroring afterward.
+
+The installer can be closed or removed after setup. To upgrade, open a newer
+installer and click Install; the discovery identity is retained. To uninstall,
+open the installer and click **Remove**. Removal keeps saved phone settings.
+The app installs only for the current user; the background service starts at
+login. Reboot/login behavior still needs a physical test.
+
+Current binary coverage is **Apple Silicon (arm64), macOS 14+ declared target**;
+the physical test host runs macOS 26. The local review build is ad-hoc signed,
+**not Developer ID signed or notarized**. macOS may block a downloaded copy.
+A warning-free public release requires the maintainer's Developer ID signing
+and Apple notarization; the project does not disable Gatekeeper or remove
+quarantine. Intel builds require an x86_64 runtime/build and physical validation.
+
+### Build the installer (developers only)
+
+After installing the source-build prerequisites below, run:
+
+```sh
+node scripts/build-installer.js
+```
+
+This compiles the bridge and native setup UI, bundles the current Node binary,
+checks every executable for external dylib dependencies and matching CPU
+architecture, includes license notices and produces a ZIP in build/distribution.
+The Node distribution LICENSE must be present beside its bin directory.
+Set DEVELOPER_ID_APPLICATION to an Application signing identity to sign with
+hardened runtime instead of ad-hoc signing. Notarize the ZIP with Apple's
+notarytool, staple the app, verify it with spctl, and recreate the ZIP before
+publishing a normal public release. Credentials are never stored by this tool.
+CI produces ad-hoc review artifacts; it does not publish a notarized release.
+
 ## Review in three steps
 
 1. Install Node 20+, Xcode Command Line Tools, CMake, pkgconf, libplist and
@@ -92,7 +132,7 @@ Current limits:
 - This installed revision was tested on one Apple Silicon Mac/iPhone 14 Pro Max
   pair over home Wi-Fi with Tailscale stopped: portrait reconnect, landscape and
   portrait resizing, and automatic resume after a brief app switch passed.
-  All 45 automated tests passed from both source and the installed package.
+  All 51 automated tests passed from both source and the installed package.
   Tailscale-address playback and reconnect also passed on the home network.
   After disabling advertised audio support, live reconnect retained the selected
   Mac sound output while video worked. University Wi-Fi, Intel and other phones

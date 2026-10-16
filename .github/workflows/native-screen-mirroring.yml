@@ -30,3 +30,10 @@ jobs:
         run: brew install cmake pkgconf libplist openssl@3
       - name: Build and run all bridge tests
         run: zsh Review.command --verify
+      - name: Build self-contained review installer
+        run: node scripts/build-installer.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-mirror-installer-${{ runner.arch }}
+          path: tools/native-screen-mirroring/build/distribution/*.zip
+          if-no-files-found: error
