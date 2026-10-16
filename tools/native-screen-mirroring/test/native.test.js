@@ -91,6 +91,11 @@ test('native AirPlay receiver returns a complete RTSP capability plist', {
     const model = spawnSync('/usr/bin/plutil', ['-extract', 'model', 'raw', '-o', '-', '--', '-'], { input: result.body });
     assert.equal(model.status, 0, model.stderr.toString());
     assert.equal(model.stdout.toString().trim(), 'AppleTV6,2');
+    const capabilities = spawnSync('/usr/bin/plutil', ['-extract', 'features', 'raw', '-o', '-', '--', '-'], { input: result.body });
+    assert.equal(capabilities.status, 0, capabilities.stderr.toString());
+    const features = BigInt(capabilities.stdout.toString().trim());
+    assert.equal(features & (1n << 9n), 0n, 'Video-only bridge must not advertise audio support');
+    assert.notEqual(features & (1n << 7n), 0n, 'Screen mirroring remains supported');
     for (const [key, expected] of Object.entries({ width: 1288, height: 2796, maxFPS: 60 })) {
       const parsed = spawnSync('/usr/bin/plutil', ['-extract', `displays.0.${key}`, 'raw', '-o', '-', '--', '-'], { input: result.body });
       assert.equal(parsed.status, 0, parsed.stderr.toString());

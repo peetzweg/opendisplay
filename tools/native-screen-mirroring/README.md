@@ -89,7 +89,10 @@ Current limits:
   pair over home Wi-Fi with Tailscale stopped: portrait reconnect, landscape and
   portrait resizing, and automatic resume after a brief app switch passed.
   All 39 automated tests passed from both source and the installed package.
-  Intel and other phones are not verified.
+  Tailscale-address playback and reconnect also passed on the home network.
+  After disabling advertised audio support, live reconnect retained the selected
+  Mac sound output while video worked. University Wi-Fi, Intel and other phones
+  are not verified.
 - Default advertised panel is 1288×2796; receiver hello updates adjust it once
   connected. Other device sizes require physical validation.
 - Video only: no forwarded touch input or audio, no USB transport or automatic

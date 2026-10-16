@@ -91,8 +91,9 @@ int main(int argc, char **argv) {
 #ifdef UXPLAY_HAVE_APPLE_P2P
     dnssd_set_peer_to_peer(dns, getenv("MIRROR_P2P") != NULL);
 #endif
-    // Match UxPlay's mirror-only feature set and force H.264.
-    const int off[] = {0, 3, 4, 8, 23, 24, 26, 29, 31, 42};
+    // Video-only bridge: do not advertise an audio output that discards sound.
+    // Keep UxPlay mirroring capabilities and force H.264.
+    const int off[] = {0, 3, 4, 8, 9, 23, 24, 26, 29, 31, 42};
     for (size_t i = 0; i < sizeof(off)/sizeof(off[0]); i++)
         dnssd_set_airplay_features(dns, off[i], 0);
     raop_callbacks_t cb = {0};

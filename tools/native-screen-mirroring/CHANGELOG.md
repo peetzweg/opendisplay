@@ -2,6 +2,10 @@
 
 ## 0.0.13 — 2026-10-17
 
+- Disable the advertised audio-support capability so this video-only bridge
+  does not take over the Mac sound output. Live reconnect retained the selected
+  output while the phone desktop continued working.
+
 - Add a temporary reviewer launcher with dependency checks and a full build/test mode.
 - Add a one-command installer that checks build dependencies, packages the source,
   installs it offline through npm and registers the persistent login service.
