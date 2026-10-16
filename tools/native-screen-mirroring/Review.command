@@ -7,6 +7,10 @@ node_candidates=( "$(command -v node || true)" /opt/homebrew/bin/node /usr/local
 for runtime in "${node_candidates[@]}"; do
   if [[ -x "$runtime" ]] && [[ "$("$runtime" -p 'Number(process.versions.node.split(".")[0]) >= 20' 2>/dev/null)" == true ]]; then
     export PATH="${runtime:h}:$PATH"
+    if [[ "${1:-}" == --runtime ]]; then
+      print -r -- "$runtime"
+      exit 0
+    fi
     exec "$runtime" scripts/review.js "$@"
   fi
 done

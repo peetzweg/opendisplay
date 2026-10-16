@@ -19,6 +19,8 @@ const receiverReadiness = new ReadinessGuard(() => failSession('iPhone receiver 
   timeoutMs: Number(process.env.MIRROR_HELLO_TIMEOUT_MS || 3000),
 });
 let stopping = false, active = false, socket, retry, heartbeat, ready = false, generation = 0, preflightPending = false;
+let receivedVideo = false, forwardedVideo = false;
+let startupProbe;
 const networkMonitor = new NetworkMonitor({
   isActive: () => active || stopping,
   onRefresh: () => {
@@ -49,6 +51,7 @@ const sessionDecoder = new Decoder(body => {
   }
   if ((message.active === true || message.preflight === true) && !active) {
     active = true;
+    receivedVideo = false; forwardedVideo = false;
     const session = ++generation;
     prepareTailscale(host).then(state => {
       if (!active || stopping || session !== generation) return;
@@ -82,8 +85,10 @@ const gate = new VideoGate();
 let pendingVideo = [], pendingBytes = 0;
 const videoDecoder = new Decoder(body => {
   if (!active) return;
+  if (!receivedVideo) { receivedVideo = true; console.error('AIRPLAY-VIDEO received'); }
   const accepted = gate.accept(body);
   if (!accepted) return;
+  if (!forwardedVideo) { forwardedVideo = true; console.error('IPHONE-VIDEO forwarding keyframe'); }
   const packet = frame(accepted);
   if (!ready || !socket || socket.destroyed) {
     pendingBytes += packet.length;
@@ -103,6 +108,7 @@ receiver.on('exit', (code, signal) => {
 });
 function connect() {
   if (!active || stopping) return;
+  clearInterval(startupProbe); startupProbe = undefined;
   ready = false;
   let handshaken = false;
   const connection = net.createConnection({ host, port: Number(process.env.IPHONE_PORT || 9000) });
@@ -121,6 +127,9 @@ function connect() {
       handshaken = true;
       receiverReadiness.stop();
       readiness.start();
+      // Receiver stats are video-driven. Request a few fresh frames so an idle
+      // desktop can confirm startup, then stop probing once playback is reported.
+      startupProbe = setInterval(() => displayEvents.requestKeyframe(), Number(process.env.MIRROR_STARTUP_KEYFRAME_MS || 1200));
       console.error('IPHONE-READY', message.name || host);
       console.error('IPHONE-PANEL', JSON.stringify(message.panel || { width: message.pixelsWide, height: message.pixelsHigh, scale: message.scale }));
       for (const packet of pendingVideo) {
@@ -132,7 +141,10 @@ function connect() {
     } else if (message.type === 'ping') {
       connection.write(frame({ type: 'pong', t: message.t, mt: Date.now() }));
     } else if (message.type === 'stats') {
-      readiness.observe(message);
+      if (readiness.observe(message) && startupProbe !== undefined) {
+        clearInterval(startupProbe); startupProbe = undefined;
+        console.error('IPHONE-PLAYBACK confirmed');
+      }
       console.error('PHONE-STATS', JSON.stringify(message));
     }
     else if (message.type === 'kf') { gate.reset(); displayEvents.requestKeyframe(); console.error('PHONE-KF: requested AirPlay IDR'); }
@@ -154,6 +166,7 @@ function connect() {
     gate.reset(); pendingVideo = []; pendingBytes = 0;
     clearInterval(heartbeat);
     readiness.stop();
+    clearInterval(startupProbe); startupProbe = undefined;
     if (handshaken && active && !stopping) receiverReadiness.start();
     receiver.stdout.resume();
     if (!stopping && active) retry = setTimeout(connect, 500);
@@ -161,6 +174,7 @@ function connect() {
 }
 function disconnectPhone() {
   clearTimeout(retry); clearInterval(heartbeat);
+  clearInterval(startupProbe); startupProbe = undefined;
   ready = false; gate.reset();
   preflightRefusals = 0;
   preflightPending = false;

@@ -1,8 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.0.13 — 2026-10-17
 
 - Add a temporary reviewer launcher with dependency checks and a full build/test mode.
+- Add a one-command installer that checks build dependencies, packages the source,
+  installs it offline through npm and registers the persistent login service.
+- Request fresh keyframes during startup so a static desktop can produce the
+  receiver's video-driven playback reports; stop probing once playback confirms.
+- Retain upstream's brief app-switch pause behavior instead of requiring
+  continuous positive FPS from an idle display.
+- Log first received/forwarded video and playback confirmation for diagnostics.
 - Acknowledge every receiver hello, including rotation updates, without restarting AirPlay.
 - Generate and persist distinct discovery identities for installations and review sessions.
 - Document manual display arrangement and the distinction from automatic rotation.

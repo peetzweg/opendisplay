@@ -114,3 +114,48 @@ for (const scenario of [
     rmSync(dir, { recursive: true });
   }
 });
+
+
+test('idle startup requests fresh frames, then stops probing without an ongoing FPS deadline', {
+  skip: process.env.RUN_NATIVE_TESTS !== '1', timeout: 10000,
+}, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'mirror-static-'));
+  const control = path.join(dir, 'active'); writeFileSync(control, 'true');
+  let connection, videos = 0;
+  const server = net.createServer(socket => {
+    connection = socket; socket.on('error', () => {});
+    const decoder = new Decoder(body => {
+      if (body[0] === 0 && ++videos === 3) socket.write(frame({ type: 'stats', fps: 1 }));
+    });
+    socket.on('data', bytes => decoder.push(bytes));
+    socket.write(frame({ type: 'hello', pv: 3 }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/bridge.js', import.meta.url))], {
+    env: { ...process.env, IPHONE_HOST: '127.0.0.1', IPHONE_PORT: String(server.address().port),
+      AIRPLAY_BINARY: fileURLToPath(new URL('../scripts/fake-airplay-receiver.cjs', import.meta.url)),
+      SESSION_CONTROL_FILE: control, SESSION_PREFLIGHT: '1', SESSION_KEYFRAME_VIDEO: '1',
+      MIRROR_READY_TIMEOUT_MS: '1200', MIRROR_STARTUP_KEYFRAME_MS: '100' },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let log = ''; child.stderr.on('data', bytes => { log += bytes; });
+  try {
+    const deadline = Date.now() + 3000;
+    while (!log.includes('IPHONE-PLAYBACK confirmed')) {
+      assert.equal(child.exitCode, null, log);
+      assert.ok(Date.now() < deadline, log); await delay(20);
+    }
+    assert.equal(videos, 3, 'Playback needs multiple requested frames');
+    await delay(1500);
+    assert.equal(videos, 3, 'Confirmed playback cancels startup probes');
+    assert.equal(child.exitCode, null, log);
+    assert.doesNotMatch(log, /IPHONE-NOT-READY/);
+    const closed = once(connection, 'close');
+    writeFileSync(control, 'false'); await closed;
+    assert.equal(videos, 3);
+  } finally {
+    const exited = child.exitCode === null ? once(child, 'exit') : Promise.resolve();
+    child.kill(); await exited; connection?.destroy();
+    await new Promise(resolve => server.close(resolve)); rmSync(dir, { recursive: true });
+  }
+});

@@ -4,6 +4,7 @@ import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installationIdentity } from '../src/installer.js';
+import { installPackage } from './install-package.js';
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -15,9 +16,9 @@ export function phoneAddress(value) {
 }
 
 export function review({ mode = 'run', env = process.env, root = projectRoot,
-  platform = process.platform, run = spawnSync } = {}) {
+  platform = process.platform, run = spawnSync, install = installPackage } = {}) {
   if (platform !== 'darwin') throw new Error('macOS is required.');
-  if (!['run', 'check', 'verify'].includes(mode)) throw new Error('Use --check or --verify, or no option to run.');
+  if (!['run', 'check', 'verify', 'install'].includes(mode)) throw new Error('Use --check, --verify or --install, or no option to run.');
   if (Number(process.versions.node.split('.')[0]) < 20) throw new Error('Node 20+ is required.');
   function command(binary, args, options = {}) {
     const result = run(binary, args, { cwd: root, env, stdio: 'inherit', ...options });
@@ -35,11 +36,17 @@ export function review({ mode = 'run', env = process.env, root = projectRoot,
   }
   if (mode === 'check') { console.log('Prerequisites are ready.'); return; }
   let host;
-  if (mode === 'run') {
+  if (mode === 'run' || mode === 'install') {
+    const action = mode === 'install' ? 'Install' : 'Start Review';
     const answer = env.IPHONE_HOST || command('/usr/bin/osascript', ['-e',
-      'text returned of (display dialog "Open OpenDisplay on your iPhone. Enter its Wi-Fi or Tailscale IP address (Settings > Wi-Fi > your network)." default answer "" buttons {"Cancel", "Start Review"} default button "Start Review")'],
+      `text returned of (display dialog "Open OpenDisplay on your iPhone. Enter its Wi-Fi or Tailscale IP address (Settings > Wi-Fi > your network)." with title "iPhone Native Mirror" default answer "" buttons {"Cancel", "${action}"} default button "${action}")`],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).stdout;
     host = phoneAddress(answer);
+  }
+  if (mode === 'install') {
+    console.log('Packaging the source, installing the bridge, and registering its login service.');
+    install({ host, root, env, run });
+    return;
   }
   console.log('Building the native receiver and error dialog.');
   command('cmake', ['-S', '.', '-B', 'build', '-DMIRROR_INTERNAL_MDNS=ON']);

@@ -30,6 +30,23 @@ change ends a review run; open the launcher again to retry.
 For the optional persistent service, use the standalone companion's installation
 instructions: https://github.com/therealjosemaria/iphone-native-mirror.
 
+## One-command installation for daily use
+
+From this folder, run `zsh Install.command` or double-click Install.command.
+It checks Apple's compiler tools, installs missing prerequisites with Homebrew,
+asks for the phone address, packages the source, and installs the persistent
+login service. Homebrew and Xcode Command Line Tools are needed for automatic
+setup. The package install uses a local archive and does not contact npm's
+registry. Re-running the command upgrades the service while retaining its
+saved identity. The installed service runs independently of this checkout.
+
+The address is a LAN address on home Wi-Fi. Tailscale is optional for restrictive
+networks; it is not required for ordinary home Wi-Fi. `IPHONE_HOST` can supply
+an address instead of the dialog. `zsh Install.command --check` checks
+prerequisites without changing the installed service.
+
+For a temporary trial, use Review.command instead; it never registers a service.
+
 ## Automated validation
 
 ```sh
@@ -68,9 +85,11 @@ and sharing device discovery are later architecture decisions for the maintainer
 
 Current limits:
 
-- Physical playback coverage is one Apple Silicon Mac/iPhone 14 Pro Max pair
-  from the companion prototype. This prepared revision still needs a physical
-  playback test; Intel and other phones are not verified.
+- This installed revision was tested on one Apple Silicon Mac/iPhone 14 Pro Max
+  pair over home Wi-Fi with Tailscale stopped: portrait reconnect, landscape and
+  portrait resizing, and automatic resume after a brief app switch passed.
+  All 39 automated tests passed from both source and the installed package.
+  Intel and other phones are not verified.
 - Default advertised panel is 1288×2796; receiver hello updates adjust it once
   connected. Other device sizes require physical validation.
 - Video only: no forwarded touch input or audio, no USB transport or automatic
@@ -79,7 +98,9 @@ Current limits:
   address. Bonjour discovery is for the AirPlay endpoint, not phone selection.
 - A TV icon is used because the tested MacBook AirPlay identity failed negotiation.
 - Physical left/right placement is not sensed. Use System Settings > Displays >
-  Arrange. Rotation is automatic; macOS owns desktop arrangement in this mode.
+  Arrange. macOS may remember different positions for portrait and landscape.
+  Set the desired side once in each orientation; on the tested Mac, subsequent
+  rotations retained the same side. This is saved placement, not physical sensing.
 - The phone leg uses the current plaintext pv 3 protocol. Any integration must
   track encrypted pairing in #16; the local AirPlay restriction does not encrypt
   the phone connection.
