@@ -13,8 +13,10 @@ int main(void) {
         CHECK([controller.installButton.title isEqualToString:@"Done"]);
         CHECK(controller.installButton.action == @selector(done:));
         CHECK(controller.removeButton.hidden);
-        CHECK([controller.status.stringValue containsString:@"Screen Mirroring → iPhone"]);
-        CHECK([controller.status.stringValue containsString:@"iPad first"]);
+        CHECK([controller.status.stringValue containsString:@"Screen Mirroring, then select iPhone"]);
+        CHECK(![controller.status.stringValue containsString:@"iPad"]);
+        CHECK(!controller.successIcon.hidden);
+        CHECK(controller.cancelButton.hidden);
         CHECK(![controller.status.stringValue containsString:@"Finding"]);
         [controller finish:NO removing:NO message:@"No phone found.\n"];
         CHECK([controller.installButton.title isEqualToString:@"Retry"]);

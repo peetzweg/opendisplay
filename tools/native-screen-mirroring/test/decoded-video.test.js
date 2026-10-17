@@ -19,7 +19,7 @@ function clip(width, height) {
   assert.ok(result.stdout.length > 1000);
   return result.stdout;
 }
-async function decodedReceiver(t, video) {
+async function decodedReceiver(t, video, env = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'mirror-decoded-'));
   const videoFile = path.join(dir, 'video.h264'); await writeFile(videoFile, video);
   let diagnostics = '', frames = 0, phone;
@@ -32,7 +32,7 @@ async function decodedReceiver(t, video) {
     const next = (diagnostics.match(/Parsed_showinfo_.*\bn:\s*\d+ .*\bs:\d+x\d+/g) || []).length;
     if (next > frames) {
       frames = next;
-      if (phone?.connections.at(-1) && !phone.connections.at(-1).destroyed) phone.send({ type: 'stats', fps: 1 });
+      if (frames >= Number(env.TEST_MIN_DECODED_FRAMES || 1) && phone?.connections.at(-1) && !phone.connections.at(-1).destroyed) phone.send({ type: 'stats', fps: 1 });
     }
   });
   t.after(async () => {
@@ -52,7 +52,7 @@ async function decodedReceiver(t, video) {
     }
     decoder.stdin.write(body);
   },
-    env: { SESSION_VIDEO_FILE: videoFile, SESSION_VIDEO_INTERVAL_MS: '200', MIRROR_READY_TIMEOUT_MS: '2500' } });
+    env: { SESSION_VIDEO_FILE: videoFile, SESSION_VIDEO_INTERVAL_MS: '200', MIRROR_READY_TIMEOUT_MS: '2500', ...env } });
   phone.reportPlayback = false;
   return { phone, decoder, replace: bytes => writeFile(videoFile, bytes),
     get diagnostics() { return diagnostics; }, get frames() { return frames; } };
@@ -116,4 +116,19 @@ for (const scenario of [
   assert.equal(result.error, undefined, result.error?.message);
   assert.equal(result.status, scenario.code, result.stderr);
   assert.match(result.stdout, scenario.output);
+});
+
+test('real decode: idle startup recovers when the sender ignores keyframe requests, then replay stops', options, async t => {
+  const receiver = await decodedReceiver(t, clip(320, 640), {
+    TEST_MIN_DECODED_FRAMES: '20', SESSION_KEYFRAME_VIDEO: '0', SESSION_VIDEO_INTERVAL_MS: '', MIRROR_STARTUP_IDLE_MS: '100', MIRROR_STARTUP_KEYFRAME_MS: '150'
+  });
+  const { phone } = receiver;
+  await phone.select(true);
+  await phone.until(() => phone.log.includes('IPHONE-STARTUP replaying'));
+  await phone.until(() => receiver.frames > 0 && phone.log.includes('IPHONE-PLAYBACK confirmed'));
+  const count = phone.videos;
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.equal(phone.videos, count, 'Replay stops once decode feedback confirms playback');
+  assert.equal(phone.connections.length, 1);
+  assert.doesNotMatch(phone.log, /IPHONE-NOT-READY/);
 });

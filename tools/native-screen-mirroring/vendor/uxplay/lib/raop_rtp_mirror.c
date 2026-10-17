@@ -588,6 +588,14 @@ raop_rtp_mirror_thread(void *arg)
                     video_stream_suspended = false;
                 }
 
+                if (payload_size == 0) {
+                    // Empty configuration/control markers are not codec evidence.
+                    // Preserve the last configuration and await a real packet;
+                    // explicit HEVC configuration still follows the codec check below.
+                    logger_log(raop_rtp_mirror->logger, LOGGER_INFO,
+                               "AIRPLAY-EMPTY-CONFIG flags=0x%02x; waiting for codec data", packet[6]);
+                    break;
+                }
                 assert (raop_rtp_mirror->callbacks.video_set_codec);
                 ntp_timestamp_nal = ntp_timestamp_raw;
 
@@ -612,13 +620,6 @@ raop_rtp_mirror_thread(void *arg)
                 logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_mirror width_source = %f height_source = %f width = %f height = %f",
                            width_source, height_source, width, height);
 
-                if (payload_size == 0) {
-                    logger_log(raop_rtp_mirror->logger, LOGGER_ERR, "raop_rtp_mirror: received type 0x01 packet with no payload:\n"
-                               "this indicates non-h264 video but Airplay features bit 42 (SupportsScreenMultiCodec) is not set\n"
-                               "use startup option \"-h265\" to set this bit and support h265 (4K) video");
-                    unsupported_codec = true;
-                    break;
-                }
                 if (sps_pps) {
                     free(sps_pps);
                     sps_pps = NULL;

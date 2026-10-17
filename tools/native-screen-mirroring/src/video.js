@@ -32,3 +32,28 @@ export class VideoGate {
     return normalized;
   }
 }
+
+// Replay a complete current GOP only during idle startup. Starting at an IDR
+// and retaining every following packet preserves H.264 reference ordering.
+export class StartupReplay {
+  constructor({ maxBytes = 4 * 1024 * 1024, idleMs = 1000, now = Date.now } = {}) {
+    this.maxBytes = maxBytes; this.idleMs = idleMs; this.now = now; this.clear();
+  }
+  clear() { this.packets = []; this.bytes = 0; this.lastVideo = undefined; }
+  observe(body) {
+    let idr = false;
+    for (let i = 0; i + 4 < body.length; i++)
+      if (body[i] === 0 && body[i + 1] === 0 && body[i + 2] === 0 && body[i + 3] === 1 && (body[i + 4] & 31) === 5) idr = true;
+    if (idr) { this.packets = []; this.bytes = 0; }
+    this.lastVideo = this.now();
+    if (!idr && !this.packets.length) return;
+    this.bytes += body.length;
+    if (this.bytes > this.maxBytes) { this.packets = []; return; }
+    this.packets.push(Buffer.from(body));
+  }
+  take() {
+    if (this.lastVideo === undefined || this.now() - this.lastVideo < this.idleMs) return [];
+    this.lastVideo = this.now();
+    return this.packets;
+  }
+}

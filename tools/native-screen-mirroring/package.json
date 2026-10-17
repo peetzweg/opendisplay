@@ -1,6 +1,6 @@
 {
   "name": "iphone-native-mirror",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "private": true,
   "description": "Experimental native AirPlay to OpenDisplay bridge",
   "repository": {

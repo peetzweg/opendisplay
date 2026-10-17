@@ -106,7 +106,7 @@ export function removeBundle({ home = homedir(), uid = process.getuid(), run = s
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.includes('--remove')) { removeBundle(); console.log('Removal complete. Saved phone settings are kept.'); }
+    if (process.argv.includes('--remove')) { removeBundle(); console.log('Uninstall successful. Saved phone settings are kept.'); }
     else {
       console.log('Finding your iPhone…');
       const host = chooseReceiver();

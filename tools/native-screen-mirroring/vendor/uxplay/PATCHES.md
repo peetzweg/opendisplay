@@ -37,3 +37,5 @@ temporary test receivers from sharing the installed endpoint's cache identity.
 Sanitizer regression, 17 October 2026: `lib/dnssd.c` uses unsigned masks when
 setting feature bits. Signed shifts into bits 31 and 63 were undefined behavior.
 The optional native regression target checks every feature bit and invalid inputs.
+
+- Preserve the mirror stream on empty codec/control markers. These carry no codec evidence; retain the previous configuration and await real codec data instead of declaring unsupported HEVC. Native TCP regression covers empty pause/resume markers followed by valid H.264 configuration.

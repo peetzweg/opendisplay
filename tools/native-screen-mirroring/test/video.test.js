@@ -29,3 +29,17 @@ test('normalizes mixed Annex-B prefixes to the stock iPhone format and restores 
   assert.deepEqual(gate.accept(idr), expected);
   assert.deepEqual(gate.accept(inter), Buffer.concat([Buffer.from([0]), inter]));
 });
+
+test('startup replay retains a complete reference chain, bounds memory and waits for idle', async () => {
+  const { StartupReplay } = await import('../src/video.js');
+  let now = 0;
+  const replay = new StartupReplay({ now: () => now, idleMs: 100, maxBytes: 40 });
+  replay.observe(nal(1)); now = 101; assert.deepEqual(replay.take(), []);
+  replay.observe(nal(5)); replay.observe(nal(1));
+  assert.deepEqual(replay.take(), []);
+  now += 101; assert.deepEqual(replay.take(), [nal(5), nal(1)]);
+  assert.deepEqual(replay.take(), []);
+  replay.observe(Buffer.alloc(50)); now += 101; assert.deepEqual(replay.take(), []);
+  replay.observe(nal(1)); now += 101; assert.deepEqual(replay.take(), []);
+  replay.observe(nal(5)); replay.clear(); now += 101; assert.deepEqual(replay.take(), []);
+});
