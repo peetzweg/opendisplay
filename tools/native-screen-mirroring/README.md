@@ -21,6 +21,20 @@ open the installer and click **Remove**. Removal keeps saved phone settings.
 The app installs only for the current user; the background service starts at
 login. Reboot/login behavior still needs a physical test.
 
+### Using an iPad and iPhone together
+
+Connect the iPad through Sidecar **first**, and wait until its desktop appears.
+Then connect **iPhone** from macOS Screen Mirroring.
+
+Starting Sidecar while the iPhone AirPlay display is active can disconnect the
+iPhone and fail with `SidecarErrorDisplayAirPlayBusy` (Sidecar error -453).
+If this happens, leave the iPhone disconnected, dismiss the error, connect the
+iPad, and then reconnect the iPhone. The bridge cannot prevent a disconnect
+requested by macOS when changing display routes.
+
+Both displays were physically verified together in this order on the tested
+Mac with version 0.0.15.
+
 Current binary coverage is **Apple Silicon (arm64), macOS 14+ declared target**;
 the physical test host runs macOS 26. The local review build is ad-hoc signed,
 **not Developer ID signed or notarized**. macOS may block a downloaded copy.
