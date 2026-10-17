@@ -3,6 +3,7 @@
 @interface SetupController : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property(strong) NSWindow *window;
 @property(strong) NSTextField *status;
+@property(strong) NSTextField *heading;
 @property(strong) NSButton *installButton;
 @property(strong) NSButton *removeButton;
 @property(strong) NSProgressIndicator *progress;
@@ -14,10 +15,11 @@
     (void)note;
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 500, 280)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+    self.window.releasedWhenClosed = NO;
     self.window.title = @"Install iPhone Native Mirror"; self.window.delegate = self;
-    NSTextField *heading = [NSTextField labelWithString:@"Use your iPhone as a Mac display"];
-    heading.font = [NSFont systemFontOfSize:19 weight:NSFontWeightSemibold];
-    self.status = [NSTextField wrappingLabelWithString:@"Open OpenDisplay on your unlocked iPhone and connect both devices to the same Wi-Fi. Click Install to find your phone and set up the background service."];
+    self.heading = [NSTextField labelWithString:@"Set up your iPhone display"];
+    self.heading.font = [NSFont systemFontOfSize:19 weight:NSFontWeightSemibold];
+    self.status = [NSTextField wrappingLabelWithString:@"Keep OpenDisplay open on your unlocked iPhone. Connect your Mac and iPhone to the same Wi-Fi, then click Install."];
     self.status.preferredMaxLayoutWidth = 440;
     self.progress = [[NSProgressIndicator alloc] init]; self.progress.style = NSProgressIndicatorStyleSpinning;
     self.progress.displayedWhenStopped = NO;
@@ -27,7 +29,7 @@
     self.removeButton.bezelStyle = NSBezelStyleRounded;
     NSStackView *buttons = [NSStackView stackViewWithViews:@[self.removeButton, self.installButton]];
     buttons.spacing = 20;
-    NSStackView *stack = [NSStackView stackViewWithViews:@[heading, self.status, self.progress, buttons]];
+    NSStackView *stack = [NSStackView stackViewWithViews:@[self.heading, self.status, self.progress, buttons]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical; stack.spacing = 20;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.window.contentView addSubview:stack];
@@ -37,6 +39,28 @@
         [stack.centerYAnchor constraintEqualToAnchor:self.window.contentView.centerYAnchor],
         [self.status.widthAnchor constraintEqualToConstant:440]]];
     [self.window center]; [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
+}
+- (void)done:(id)sender { (void)sender; [self.window close]; }
+- (void)finish:(BOOL)success removing:(BOOL)remove message:(NSString *)message {
+    [self.progress stopAnimation:nil];
+    self.task = nil;
+    self.installButton.enabled = YES;
+    if (success) {
+        self.window.title = remove ? @"Removal complete" : @"Installation complete";
+        self.heading.stringValue = self.window.title;
+        self.status.stringValue = remove ? @"The background service has been removed. Your saved phone settings are kept."
+            : @"1. Keep OpenDisplay open on your iPhone.\n2. On your Mac, open Control Center → Screen Mirroring → iPhone.\n3. Choose Extended Display.\n\nUsing an iPad too? Connect the iPad first, then the iPhone.\n\nYou can close this installer. The service runs in the background.";
+        self.installButton.title = @"Done";
+        self.installButton.action = @selector(done:);
+        self.removeButton.hidden = YES;
+    } else {
+        self.window.title = @"Setup incomplete";
+        self.heading.stringValue = remove ? @"Removal failed" : @"Installation failed";
+        self.status.stringValue = message.length ? [message stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] : @"Please try again.";
+        self.installButton.title = remove ? @"Install" : @"Retry";
+        self.installButton.action = @selector(install:);
+        self.removeButton.hidden = NO; self.removeButton.enabled = YES;
+    }
 }
 - (void)install:(id)sender { (void)sender; [self start:NO]; }
 - (void)remove:(id)sender {
@@ -65,16 +89,11 @@
         NSString *message = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
         dispatch_async(dispatch_get_main_queue(), ^{
             SetupController *controller = weakSelf;
-            [controller.progress stopAnimation:nil];
-            controller.status.stringValue = message.length ? message : @"Setup did not complete. Please retry.";
-            controller.installButton.enabled = YES; controller.removeButton.enabled = YES;
-            if (completed.terminationStatus == 0) controller.window.title = remove ? @"iPhone Native Mirror removed" : @"iPhone Native Mirror installed";
-            controller.task = nil;
+            [controller finish:completed.terminationStatus == 0 removing:remove message:message];
         });
     };
     NSError *error; if (![task launchAndReturnError:&error]) {
-        [self.progress stopAnimation:nil]; self.status.stringValue = error.localizedDescription;
-        self.installButton.enabled = YES; self.removeButton.enabled = YES; self.task = nil;
+        [self finish:NO removing:remove message:error.localizedDescription];
     }
 }
 - (BOOL)windowShouldClose:(NSWindow *)sender { (void)sender; return self.task == nil; }

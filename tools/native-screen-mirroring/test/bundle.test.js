@@ -165,3 +165,14 @@ test('fresh install handles an absent service and refuses an indeterminate servi
     } finally { f.clean(); }
   }
 });
+
+ test('removal preserves the runtime when service shutdown fails', () => {
+  const f = fixture();
+  try {
+    installBundle({ ...f, host: 'phone.local', run: () => ({ status: 0 }) });
+    assert.throws(() => removeBundle({ home: f.home, run: (binary, args) => ({ status: args[0] === 'bootout' ? 1 : 0 }) }), /Removal cancelled/);
+    assert.ok(existsSync(f.p.runtime)); assert.ok(existsSync(f.p.agent));
+    removeBundle({ home: f.home, run: () => ({ status: 113 }) });
+    assert.ok(!existsSync(f.p.runtime)); assert.ok(existsSync(f.p.config));
+  } finally { f.clean(); }
+});

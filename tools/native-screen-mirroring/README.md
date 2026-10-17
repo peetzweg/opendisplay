@@ -8,18 +8,31 @@ available without this helper or its dependencies.
 
 ## Double-click installation (self-contained build)
 
-The self-contained installer ZIP contains **Install iPhone Native Mirror.app**.
-Unzip it, keep OpenDisplay visible on your unlocked phone on the same Wi-Fi,
-then open the app and click **Install**. It discovers the phone and copies its
-bundled Node runtime and native helpers into your user account. No Homebrew,
-npm, compiler tools, Terminal command or administrator password is needed.
-Select **iPhone** in macOS Control Center > Screen Mirroring afterward.
+**Apple Silicon Macs only. This review installer is not notarized.**
+
+1. **Prepare your iPhone.** Connect it and your Mac to the same Wi-Fi. Keep OpenDisplay open on the unlocked iPhone, allow Local Network access, and turn Portrait Orientation Lock off.
+2. **Download and unzip.** On the [download page](https://github.com/therealjosemaria/opendisplay/releases/tag/native-mirror-v0.0.16-arm64-review-20261018), expand **Assets** and download **iPhone-Native-Mirror-0.0.16-arm64.zip**. Double-click the ZIP to extract it.
+3. **Open the installer.** Double-click **Install iPhone Native Mirror.app**. If macOS displays a warning, click **Done**. Open **Apple menu → System Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway**. Authenticate if prompted, then click **Open**. See [Apple’s instructions](https://support.apple.com/en-au/102445).
+4. **Install.** Click **Install**. Setup finds your phone automatically; no IP address is needed. When installation finishes, close the installer.
+5. **Connect your display.** Select **iPhone** in Mac **Control Center → Screen Mirroring** and choose **Extended Display**. Keep OpenDisplay open on the phone.
+
+No Homebrew, npm, developer tools or Terminal command is needed. The service installs in your user account; macOS may request authentication for **Open Anyway**.
 
 The installer can be closed or removed after setup. To upgrade, open a newer
 installer and click Install; the discovery identity is retained. To uninstall,
 open the installer and click **Remove**. Removal keeps saved phone settings.
 The app installs only for the current user; the background service starts at
 login. Reboot/login behavior still needs a physical test.
+
+### Uninstall in one command
+
+Paste this into Terminal. It stops and removes the installed background service and runtime; saved phone settings and logs are kept. No administrator password is needed.
+
+```sh
+"$HOME/Library/Application Support/iphone-native-mirror/runtime/node" "$HOME/Library/Application Support/iphone-native-mirror/runtime/scripts/bundle-setup.js" --remove
+```
+
+You can also reopen the installer and click **Remove**.
 
 ### Using an iPad and iPhone together
 

@@ -93,7 +93,12 @@ export function installBundle({ source = root, home = homedir(), uid = process.g
 
 export function removeBundle({ home = homedir(), uid = process.getuid(), run = spawnSync } = {}) {
   const p = setupPaths(home);
-  run('/bin/launchctl', ['bootout', `gui/${uid}`, p.agent], { encoding: 'utf8' });
+  const state = run('/bin/launchctl', ['print', `gui/${uid}/${label}`], { encoding: 'utf8' });
+  if (state.error || ![0, 113].includes(state.status)) throw new Error('Could not inspect the service. Removal cancelled.');
+  if (state.status === 0) {
+    const stopped = run('/bin/launchctl', ['bootout', `gui/${uid}`, p.agent], { encoding: 'utf8' });
+    if (stopped.error || stopped.status !== 0) throw new Error('Could not stop the service. Removal cancelled; please retry.');
+  }
   rmSync(p.agent, { force: true });
   rmSync(p.runtime, { recursive: true, force: true });
   // Retain the small saved phone configuration so a reinstall keeps its identity.
@@ -101,12 +106,12 @@ export function removeBundle({ home = homedir(), uid = process.getuid(), run = s
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.includes('--remove')) { removeBundle(); console.log('Removed the background service. Your saved phone settings were retained.'); }
+    if (process.argv.includes('--remove')) { removeBundle(); console.log('Removal complete. Saved phone settings are kept.'); }
     else {
-      console.log('Finding OpenDisplay on your network…');
+      console.log('Finding your iPhone…');
       const host = chooseReceiver();
       installBundle({ host });
-      console.log('Installed. Select iPhone in Mac Control Center → Screen Mirroring. Keep OpenDisplay visible on the phone.');
+      console.log('Installation complete. Open Control Center → Screen Mirroring → iPhone. Keep OpenDisplay open on your iPhone. Using an iPad too? Connect the iPad first.');
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
