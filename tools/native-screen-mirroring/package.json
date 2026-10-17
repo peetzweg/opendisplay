@@ -1,6 +1,6 @@
 {
   "name": "iphone-native-mirror",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "private": true,
   "description": "Experimental native AirPlay to OpenDisplay bridge",
   "repository": {
@@ -13,6 +13,9 @@
   "files": [
     "CMakeLists.txt",
     "native/receiver.c",
+    "native/audio-route.h",
+    "native/audio-route.c",
+    "native/audio-route-policy.c",
     "native/show-error.m",
     "src",
     "scripts",

@@ -94,7 +94,7 @@ test('native AirPlay receiver returns a complete RTSP capability plist', {
     const capabilities = spawnSync('/usr/bin/plutil', ['-extract', 'features', 'raw', '-o', '-', '--', '-'], { input: result.body });
     assert.equal(capabilities.status, 0, capabilities.stderr.toString());
     const features = BigInt(capabilities.stdout.toString().trim());
-    assert.equal(features & (1n << 9n), 0n, 'Video-only bridge must not advertise audio support');
+    assert.notEqual(features & (1n << 9n), 0n, 'macOS requires audio capability to preserve the route during rotation; the native guard preserves actual audio output');
     assert.notEqual(features & (1n << 7n), 0n, 'Screen mirroring remains supported');
     for (const [key, expected] of Object.entries({ width: 1288, height: 2796, maxFPS: 60 })) {
       const parsed = spawnSync('/usr/bin/plutil', ['-extract', `displays.0.${key}`, 'raw', '-o', '-', '--', '-'], { input: result.body });
@@ -178,5 +178,45 @@ for (const approved of [false, true]) test(`native SETUP ${approved ? 'accepts a
     const ended = once(child, 'exit');
     child.kill('SIGTERM');
     await ended;
+  }
+});
+
+
+test('native teardown diagnostics distinguish audio, video and full-session requests', {
+  skip: process.env.RUN_NATIVE_TESTS !== '1', timeout: 10000,
+}, async () => {
+  const binary = process.env.AIRPLAY_TEST_BINARY || fileURLToPath(new URL('../build/airplay-bridge', import.meta.url));
+  const child = spawn(binary, ['Teardown Test'], { stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, MIRROR_DEVICE_ID: '02:49:50:48:4f:63' } });
+  let log = '', socket;
+  try {
+    const port = await new Promise((resolve, reject) => {
+      child.stderr.on('data', bytes => {
+        log += bytes; const match = log.match(/AIRPLAY-READY .* port=(\d+)/);
+        if (match) resolve(Number(match[1]));
+      });
+      child.once('error', reject); child.once('exit', code => reject(new Error(`Exited ${code}: ${log}`)));
+    });
+    for (const [type, expected] of [[96, 'audio=1 video=0'], [110, 'audio=0 video=1'], [null, 'audio=0 video=0']]) {
+      socket = net.createConnection({ host: '127.0.0.1', port });
+      await once(socket, 'connect');
+      const encoded = spawnSync('/usr/bin/plutil', ['-convert', 'binary1', '-o', '-', '--', '-'], {
+        input: JSON.stringify(type === null ? {} : { streams: [{ type }] }),
+      });
+      assert.equal(encoded.status, 0);
+      const response = new Promise((resolve, reject) => {
+        let text = ''; socket.on('error', reject); socket.on('data', bytes => {
+          text += bytes.toString(); if (text.includes('\r\n\r\n')) resolve(text);
+        });
+      });
+      socket.write(Buffer.concat([Buffer.from(`TEARDOWN rtsp://127.0.0.1/session RTSP/1.0\r\nCSeq: 3\r\nContent-Length: ${encoded.stdout.length}\r\n\r\n`), encoded.stdout]));
+      assert.match(await response, /^RTSP\/1.0 200 OK/);
+      const deadline = Date.now() + 1000;
+      while (!log.includes(`AIRPLAY-TEARDOWN ${expected}`) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      assert.ok(log.includes(`AIRPLAY-TEARDOWN ${expected}`), log);
+      socket.destroy();
+    }
+  } finally {
+    socket?.destroy(); const ended = once(child, 'exit'); child.kill(); await ended;
   }
 });

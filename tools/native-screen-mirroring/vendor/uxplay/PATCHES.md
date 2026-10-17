@@ -24,3 +24,6 @@ the same-Mac bridge can send live display information and keyframe requests.
 
 The bridge's native entry point, Node transport, installer, error UI and tests
 live outside the vendored source directory.
+
+Rotation diagnostics: lib/raop_handlers.h logs only the audio/video teardown
+flags at info level, without request bodies, headers or pairing data.

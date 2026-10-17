@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.15 — 2026-10-17
+
+- Restore the AirPlay audio capability: disabling it can make macOS tear down
+  the video route during an orientation update.
+- Preserve the user's selected speakers or AirPods through a native Core Audio
+  guard instead of suppressing that capability. The guard restores the previous
+  available output only when this bridge becomes the default sound output.
+- Test output preservation, manual output changes, unavailable devices and
+  restoration failures with a simulated audio backend.
+- Log audio/video teardown types without exposing pairing data.
+
 ## 0.0.14 — 2026-10-17
 
 - Add a self-contained Mac installer app with bundled Node and native helpers.

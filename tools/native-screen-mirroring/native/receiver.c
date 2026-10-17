@@ -1,5 +1,6 @@
 // GPL-3.0-or-later. Uses the UxPlay receiver core; no GStreamer required.
 #include "raop.h"
+#include "audio-route.h"
 #include <arpa/inet.h>
 #include <signal.h>
 #include <stdio.h>
@@ -75,6 +76,7 @@ static int dimension(const char *key, int fallback) {
 int main(int argc, char **argv) {
     if (getenv("MIRROR_EVENTS")) events = fdopen(3, "wb");
     const char *name = argc > 1 ? argv[1] : "iPhone Mirror";
+    mirror_audio_route_poll(name);
     unsigned char hw[6] = {0x02, 0x49, 0x50, 0x48, 0x4f, 0x4e};
     const char *device_id = getenv("MIRROR_DEVICE_ID");
     if (!device_id) device_id = "02:49:50:48:4f:4e";
@@ -91,9 +93,9 @@ int main(int argc, char **argv) {
 #ifdef UXPLAY_HAVE_APPLE_P2P
     dnssd_set_peer_to_peer(dns, getenv("MIRROR_P2P") != NULL);
 #endif
-    // Video-only bridge: do not advertise an audio output that discards sound.
-    // Keep UxPlay mirroring capabilities and force H.264.
-    const int off[] = {0, 3, 4, 8, 9, 23, 24, 26, 29, 31, 42};
+    // macOS needs the audio capability to keep the route active across display
+    // updates. Preserve the user's real audio output with the Core Audio guard.
+    const int off[] = {0, 3, 4, 8, 23, 24, 26, 29, 31, 42};
     for (size_t i = 0; i < sizeof(off)/sizeof(off[0]); i++)
         dnssd_set_airplay_features(dns, off[i], 0);
     raop_callbacks_t cb = {0};
@@ -129,18 +131,19 @@ int main(int argc, char **argv) {
     if (dnssd_register_raop(dns, port) || dnssd_register_airplay(dns, port)) return 1;
     fprintf(stderr, "AIRPLAY-READY %s port=%u\n", name, port);
     while (running) {
+        mirror_audio_route_poll(name);
 #ifdef EXTERNAL_DNS_SD
         fd_set fds; FD_ZERO(&fds); int max = -1;
         int a = dnssd_get_service_fd(dns, 0), b = dnssd_get_service_fd(dns, 1);
         if (a >= 0) { FD_SET(a, &fds); max = a; }
         if (b >= 0) { FD_SET(b, &fds); if (b > max) max = b; }
-        struct timeval timeout = {1, 0};
+        struct timeval timeout = {0, 100000};
         if (select(max + 1, &fds, NULL, NULL, &timeout) > 0) {
             if (a >= 0 && FD_ISSET(a, &fds)) dnssd_process_service(dns, 0);
             if (b >= 0 && FD_ISSET(b, &fds)) dnssd_process_service(dns, 1);
         }
 #else
-        sleep(1);
+        usleep(100000);
 #endif
     }
     dnssd_unregister_airplay(dns); dnssd_unregister_raop(dns);

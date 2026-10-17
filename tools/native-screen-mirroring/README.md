@@ -105,7 +105,8 @@ the same verification separately from the Swift application checks.
 
 Coverage includes framing, video/keyframe recovery, repeated rotation handshakes,
 readiness gating, fast SETUP rejection, native RTSP capabilities, session teardown,
-discovery identities, network recovery, Tailscale preparation and launcher behavior.
+discovery identities, network recovery, Tailscale preparation, audio output
+preservation and launcher behavior.
 Automated checks do not replace the physical Screen Mirroring test above.
 
 ## Implementation and boundaries
@@ -121,6 +122,9 @@ pipes. Independent mDNS advertisement makes the same-Mac endpoint discoverable.
 The launcher restricts incoming AirPlay sessions and rotation event connections
 to same-Mac addresses. H.264 is forwarded without a second encode. Rotation uses
 the receiver's existing hello/panel messages and AirPlay updateDisplayInfo.
+macOS requires the advertised audio capability to keep the route active during
+resizing. A native Core Audio guard remembers the user's selected output and
+restores it if macOS selects this bridge. Audio is not forwarded to the phone.
 
 This is a contained optional tool, not yet an embedded Swift app feature or a
 signed/notarized standalone application. The core Swift targets and project.yml
@@ -132,11 +136,16 @@ Current limits:
 - This installed revision was tested on one Apple Silicon Mac/iPhone 14 Pro Max
   pair over home Wi-Fi with Tailscale stopped: portrait reconnect, landscape and
   portrait resizing, and automatic resume after a brief app switch passed.
-  All 51 automated tests passed from both source and the installed package.
+  The 0.0.14 installer passed 51 automated tests from source and the installed package.
   Tailscale-address playback and reconnect also passed on the home network.
-  After disabling advertised audio support, live reconnect retained the selected
-  Mac sound output while video worked. University Wi-Fi, Intel and other phones
-  are not verified.
+  Further testing found a rotation disconnect after disabling advertised audio
+  support. A controlled comparison restored rotation when audio capability was
+  enabled, and manual selection of Mac audio output kept both sound and rotation
+  working. The 0.0.15 audio-preservation fix passes 53 source tests. The user
+  confirmed audible sound on the selected output and three complete portrait /
+  landscape cycles without manual audio changes or disconnects; service logs
+  also confirmed repeated resized video streams. University Wi-Fi, Intel and
+  other phones are not verified.
 - Default advertised panel is 1288×2796; receiver hello updates adjust it once
   connected. Other device sizes require physical validation.
 - Video only: no forwarded touch input or audio, no USB transport or automatic
