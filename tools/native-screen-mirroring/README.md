@@ -23,17 +23,29 @@ login. Reboot/login behavior still needs a physical test.
 
 ### Using an iPad and iPhone together
 
-Connect the iPad through Sidecar **first**, and wait until its desktop appears.
-Then connect **iPhone** from macOS Screen Mirroring.
+**Connection order matters: connect the iPad first, then the iPhone.**
 
-Starting Sidecar while the iPhone AirPlay display is active can disconnect the
-iPhone and fail with `SidecarErrorDisplayAirPlayBusy` (Sidecar error -453).
-If this happens, leave the iPhone disconnected, dismiss the error, connect the
-iPad, and then reconnect the iPhone. The bridge cannot prevent a disconnect
-requested by macOS when changing display routes.
+1. Connect the iPad using Mac Control Center > Screen Mirroring and wait until
+   its Sidecar desktop appears.
+2. Open OpenDisplay on the unlocked iPhone.
+3. Select **iPhone** in Control Center > Screen Mirroring.
 
-Both displays were physically verified together in this order on the tested
-Mac with version 0.0.15.
+On the tested Mac, connecting the iPhone first and then the iPad fails with
+"Sidecar is not available while AirPlay Screen is active." The native Sidecar
+log reports `SidecarErrorDisplayAirPlayBusy` (-453).
+In the controlled Control Center test, the iPhone stayed connected but the iPad
+could not start. Independent connection in either order is **not supported by
+this helper on the tested macOS build**; no startup-guard workaround is included.
+
+To recover, disconnect **iPhone** in Control Center > Screen Mirroring, dismiss
+the error, connect the iPad and wait for its desktop, then reconnect **iPhone**.
+This recovery deliberately interrupts the iPhone display. Use Control Center
+for these steps; System Settings > Displays was also observed to disconnect the
+iPhone during a failed attempt to start Sidecar.
+
+The working order, repeated iPhone rotations and selected Mac speakers/AirPods
+were physically verified with version 0.0.15 on one Apple Silicon Mac running
+macOS 26.6.1 (25G76). This does not establish compatibility on other macOS versions.
 
 Current binary coverage is **Apple Silicon (arm64), macOS 14+ declared target**;
 the physical test host runs macOS 26. The local review build is ad-hoc signed,

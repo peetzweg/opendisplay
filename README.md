@@ -304,10 +304,15 @@ ship for any of these platforms later.
 
 An opt-in [native Screen Mirroring helper](tools/native-screen-mirroring/README.md)
 lets macOS Control Center drive the existing iPhone receiver without the Mac
-sender app. It uses a separate UxPlay/Node bridge, is video-only, and currently
-requires a manually configured phone address. See its review launcher, build
+sender app. It uses a separate UxPlay/Node bridge and is video-only. The bundled
+installer discovers the phone automatically on the same Wi-Fi. See its review launcher, build
 requirements and limitations before testing. The standard apps do not require
 this helper or its dependencies.
+
+If using this helper alongside an iPad through Apple Sidecar, **connect the iPad
+first, then the iPhone**. On the tested Mac, the reverse order is blocked with
+"Sidecar is not available while AirPlay Screen is active." See the helper's
+[connection-order and recovery instructions](tools/native-screen-mirroring/README.md#using-an-ipad-and-iphone-together).
 
 ## How it works
 
