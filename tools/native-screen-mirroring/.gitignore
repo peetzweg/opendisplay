@@ -1,0 +1,12 @@
+build/
+build-mdns/
+build*/
+node_modules/
+*.log
+vendor/uxplay/.git/
+vendor/uxplay/*
+!vendor/uxplay/lib/
+!vendor/uxplay/LICENSE
+!vendor/uxplay/PATCHES.md
+*.tgz
+.DS_Store
