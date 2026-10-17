@@ -250,6 +250,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // dial-phase failures take the grace/refusal rules, never this exit.
     private var currentPathDirectLink = false
     private var lastCursorSent: (x: Double, y: Double, visible: Bool) = (-1, -1, false)
+    private var cursorSpriteStabilizer = CursorSpriteStabilizer()
     private var lastCursorPNGHash = 0
     // Cursor side channel (UDP, WiFi only): positions queue behind video
     // frames on the shared TCP socket and stutter under head-of-line
@@ -1214,6 +1215,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             throw error
         }
         captureDisplayID = display.displayID
+        cursorSpriteStabilizer = CursorSpriteStabilizer()
         lastCursorPNGHash = 0      // rotation rebuilds: re-send the sprite
         startCursorEcho()
         // A capture that came back through any path (recovery, rotation,
@@ -2008,14 +2010,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: - Local cursor echo (Mac -> phone)
 
     private func startCursorEcho() {
-        guard localCursor else { return }
+        guard localCursor else {
+            // A reconnecting receiver may still have the previous echo sprite.
+            // Hide it so the baked cursor is the only visible pointer.
+            queue.async { self.sendJSONFrame("{\"type\":\"cursor\",\"v\":0}") }
+            return
+        }
         let displayID = captureDisplayID
         cursorQueue.async { [weak self] in
             guard let self else { return }
             self.cursorTimer?.cancel()
             self.lastCursorSent = (-1, -1, false)
             let timer = DispatchSource.makeTimerSource(queue: self.cursorQueue)
-            timer.schedule(deadline: .now(), repeating: .milliseconds(8))   // 120Hz
+            timer.schedule(deadline: .now(), repeating: .nanoseconds(4_166_667), leeway: .microseconds(200)) // 240 Hz
             timer.setEventHandler { [weak self] in
                 self?.pollCursorPosition(displayID: displayID)
             }
@@ -2062,9 +2069,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             let x = (loc.x - bounds.minX) / bounds.width
             let y = (loc.y - bounds.minY) / bounds.height
             if !lastCursorSent.visible
-                || abs(x - lastCursorSent.x) > 0.0004 || abs(y - lastCursorSent.y) > 0.0004 {
+                || abs(x - lastCursorSent.x) * bounds.width >= 0.25
+                || abs(y - lastCursorSent.y) * bounds.height >= 0.25 {
                 lastCursorSent = (x, y, true)
-                sendCursor(String(format: "\"x\":%.4f,\"y\":%.4f,\"v\":1", x, y))
+                sendCursor(String(format: "\"x\":%.6f,\"y\":%.6f,\"v\":1", x, y))
             }
         } else if lastCursorSent.visible {
             lastCursorSent.visible = false
@@ -2216,7 +2224,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let image = cursor.image
         guard let tiff = image.tiffRepresentation else { return }
         let hash = tiff.hashValue ^ Int(displaySize.width) &* 31
-        guard hash != lastCursorPNGHash else { return }
+        // A reconnect clears the sent hash even if the system cursor is unchanged.
+        // Reset the stabilizer too, so the fresh peer receives a sprite immediately.
+        guard cursorSpriteStabilizer.shouldPublish(hash, at: ProcessInfo.processInfo.systemUptime,
+                                                  force: lastCursorPNGHash == 0),
+              hash != lastCursorPNGHash else { return }
         guard let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]),
               png.count < 24_000 else { return }
