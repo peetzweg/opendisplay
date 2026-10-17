@@ -4,20 +4,31 @@ export class VideoGate {
   reset() { this.waiting = true; }
   accept(body) {
     const starts = [];
-    for (let i = 0; i + 4 < body.length; i++) {
-      if (body.readUInt32BE(i) === 1) { starts.push(i); i += 3; }
+    for (let i = 0; i + 3 < body.length; i++) {
+      if (body[i] !== 0 || body[i + 1] !== 0) continue;
+      const prefix = body[i + 2] === 1 ? 3 : body[i + 2] === 0 && body[i + 3] === 1 ? 4 : 0;
+      if (prefix && i + prefix < body.length) {
+        starts.push({ offset: i, header: i + prefix }); i += prefix - 1;
+      }
     }
+    // OpenDisplay's stock receiver splits only four-byte start codes.
+    const nalus = starts.map((start, index) => {
+      const nal = body.subarray(start.offset, starts[index + 1]?.offset ?? body.length);
+      return start.header - start.offset === 3 ? Buffer.concat([Buffer.from([0]), nal]) : nal;
+    });
+    const normalized = starts.some(start => start.header - start.offset === 3)
+      ? Buffer.concat([body.subarray(0, starts[0].offset), ...nalus]) : body;
     let idr = false, hasSps = false, hasPps = false;
     starts.forEach((start, index) => {
-      const nal = body.subarray(start, starts[index + 1] ?? body.length);
-      const type = nal[4] & 31;
+      const nal = nalus[index];
+      const type = body[start.header] & 31;
       if (type === 7) { this.sps = Buffer.from(nal); hasSps = true; }
       if (type === 8) { this.pps = Buffer.from(nal); hasPps = true; }
       if (type === 5) idr = true;
     });
     if (idr && this.sps && this.pps) this.waiting = false;
     if (this.waiting) return null;
-    if (idr) return Buffer.concat([...(hasSps ? [] : [this.sps]), ...(hasPps ? [] : [this.pps]), body]);
-    return body;
+    if (idr) return Buffer.concat([...(hasSps ? [] : [this.sps]), ...(hasPps ? [] : [this.pps]), normalized]);
+    return normalized;
   }
 }

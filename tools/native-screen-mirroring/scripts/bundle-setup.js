@@ -43,11 +43,27 @@ export function installBundle({ source = root, home = homedir(), uid = process.g
   const staging = path.join(p.support, `runtime-staging-${process.pid}`);
   const backup = path.join(p.support, `runtime-backup-${process.pid}`);
   if (existsSync(staging) || existsSync(backup)) throw new Error('An unfinished installation exists. Close the installer and retry.');
-  cpSync(source, staging, { recursive: true });
-  mkdirSync(path.dirname(p.agent), { recursive: true });
-  mkdirSync(path.dirname(p.log), { recursive: true });
-  const result = run('/bin/launchctl', ['bootout', domain, p.agent], { encoding: 'utf8' });
-  if (result.error) { rmSync(staging, { recursive: true, force: true }); throw result.error; }
+  let wasRegistered = false;
+  try {
+    cpSync(source, staging, { recursive: true });
+    mkdirSync(path.dirname(p.agent), { recursive: true });
+    mkdirSync(path.dirname(p.log), { recursive: true });
+    const state = run('/bin/launchctl', ['print', `${domain}/${label}`], { encoding: 'utf8' });
+    if (state.error) throw state.error;
+    // launchctl returns 113 for a missing service. Other failures are not safe
+    // evidence that an existing service has stopped.
+    if (state.status !== 0 && state.status !== 113)
+      throw new Error(`Could not inspect the service: ${state.stderr || 'launchctl failed'}`);
+    wasRegistered = state.status === 0;
+    if (wasRegistered) {
+      const result = run('/bin/launchctl', ['bootout', domain, p.agent], { encoding: 'utf8' });
+      if (result.error || result.status !== 0)
+        throw new Error(`Could not stop the service: ${result.stderr || result.error?.message || 'launchctl failed'}`);
+    }
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
   let moved = false, installed = false;
   try {
     if (existsSync(p.runtime)) { renameSync(p.runtime, backup); moved = true; }
@@ -64,7 +80,11 @@ export function installBundle({ source = root, home = homedir(), uid = process.g
     for (const [file, contents] of [[p.config, previousConfig], [p.agent, previousAgent]]) {
       if (contents) writeFileSync(file, contents, { mode: 0o600 }); else rmSync(file, { force: true });
     }
-    if (previousAgent) run('/bin/launchctl', ['bootstrap', domain, p.agent], { encoding: 'utf8' });
+    if (previousAgent && wasRegistered) {
+      const restored = run('/bin/launchctl', ['bootstrap', domain, p.agent], { encoding: 'utf8' });
+      if (restored.error || restored.status !== 0)
+        error.message += ` Previous files were restored, but the previous service could not restart: ${restored.stderr || restored.error?.message || 'launchctl failed'}`;
+    }
     throw error;
   } finally { rmSync(staging, { recursive: true, force: true }); }
   rmSync(backup, { recursive: true, force: true });

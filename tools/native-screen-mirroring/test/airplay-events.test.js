@@ -6,6 +6,48 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { spawnSync } from 'node:child_process';
 import { AirPlayEvents, panelSize, encodeEvent } from '../src/airplay-events.js';
 
+test('event channel reports rejected replies, bounds input and accepts a replacement connection', {
+  skip: process.env.RUN_NATIVE_TESTS !== '1', timeout: 10000,
+}, async t => {
+  const errors = [], peers = [];
+  const events = new AirPlayEvents({ onError: error => errors.push(error) });
+  const port = await events.start();
+  t.after(() => { for (const peer of peers) peer.destroy(); events.close(); });
+  async function until(predicate) {
+    const deadline = Date.now() + 2000;
+    while (!predicate()) {
+      assert.ok(Date.now() < deadline, 'Event channel did not settle');
+      await delay(10);
+    }
+  }
+  async function connect() {
+    const peer = net.createConnection({ host: '127.0.0.1', port });
+    peers.push(peer); peer.on('error', () => {});
+    await once(peer, 'connect');
+    await until(() => events.socket?.remotePort === peer.localPort && !events.socket.destroyed);
+    return peer;
+  }
+  const first = await connect();
+  first.write('RTSP/1.0 500 Error\r\nContent-Length: 4\r\n\r\na');
+  await delay(30);
+  assert.deepEqual(errors, [], 'Wait for the entire response body');
+  first.write('bcdRTSP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n');
+  await until(() => errors.length === 1);
+  assert.deepEqual(errors, ['Mac rejected the display update']);
+  first.write('x'.repeat(16385));
+  await until(() => first.destroyed);
+  const second = await connect();
+  second.write('RTSP/1.0 200 OK\r\nContent-Length: 1048577\r\n\r\n');
+  await until(() => second.destroyed);
+  const third = await connect();
+  let bytes = Buffer.alloc(0);
+  third.on('data', chunk => { bytes = Buffer.concat([bytes, chunk]); });
+  events.setActive(true); events.requestKeyframe();
+  await until(() => bytes.includes(Buffer.from('forceKeyFrame')));
+  assert.equal(third.destroyed, false);
+  assert.equal(errors.length, 1);
+});
+
 test('rotation dimensions prefer panel facts, align the raster and reject invalid updates', () => {
   assert.deepEqual(panelSize({ pixelsWide: 1290, pixelsHigh: 2796 }), { width: 1288, height: 2796 });
   assert.deepEqual(panelSize({ panel: { pixelsWide: 2796, pixelsHigh: 1290 } }), { width: 2796, height: 1288 });

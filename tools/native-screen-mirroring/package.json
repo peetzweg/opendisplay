@@ -17,6 +17,8 @@
     "native/audio-route.c",
     "native/audio-route-policy.c",
     "native/show-error.m",
+    "native/test-display-monitor.c",
+    "native/test-feature-bits.c",
     "src",
     "scripts",
     "test",
@@ -36,6 +38,9 @@
   "scripts": {
     "build": "cmake -S . -B build && cmake --build build -j 4",
     "test": "node --test test/*.test.js",
+    "test:virtual": "node scripts/virtual-test.js",
+    "test:video": "RUN_VIDEO_TESTS=1 node --test test/decoded-video.test.js",
+    "test:soak": "RUN_SOAK_TESTS=1 node --test test/soak.test.js",
     "dev": "node src/bridge.js",
     "postinstall": "node src/installer.js"
   }

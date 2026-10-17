@@ -27,3 +27,13 @@ live outside the vendored source directory.
 
 Rotation diagnostics: lib/raop_handlers.h logs only the audio/video teardown
 flags at info level, without request bodies, headers or pairing data.
+
+Isolated testing, 17 October 2026: `lib/dnssdint.h` accepts an optional
+`MIRROR_PAIRING_ID` UUID for native test receivers. Both Bonjour TXT identities
+and RTSP `/info` use it; the default installed pairing ID is unchanged. The
+bridge entry point validates the override before starting discovery. This keeps
+temporary test receivers from sharing the installed endpoint's cache identity.
+
+Sanitizer regression, 17 October 2026: `lib/dnssd.c` uses unsigned masks when
+setting feature bits. Signed shifts into bits 31 and 63 were undefined behavior.
+The optional native regression target checks every feature bit and invalid inputs.

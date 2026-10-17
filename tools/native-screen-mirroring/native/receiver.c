@@ -76,6 +76,16 @@ static int dimension(const char *key, int fallback) {
 int main(int argc, char **argv) {
     if (getenv("MIRROR_EVENTS")) events = fdopen(3, "wb");
     const char *name = argc > 1 ? argv[1] : "iPhone Mirror";
+    const char *pairing_id = getenv("MIRROR_PAIRING_ID");
+    if (pairing_id && pairing_id[0]) {
+        if (strlen(pairing_id) != 36) { fprintf(stderr, "Invalid MIRROR_PAIRING_ID\n"); return 1; }
+        for (int i = 0; i < 36; i++) {
+            int hyphen = i == 8 || i == 13 || i == 18 || i == 23;
+            if ((hyphen && pairing_id[i] != '-') || (!hyphen && !strchr("0123456789abcdefABCDEF", pairing_id[i]))) {
+                fprintf(stderr, "Invalid MIRROR_PAIRING_ID\n"); return 1;
+            }
+        }
+    }
     mirror_audio_route_poll(name);
     unsigned char hw[6] = {0x02, 0x49, 0x50, 0x48, 0x4f, 0x4e};
     const char *device_id = getenv("MIRROR_DEVICE_ID");

@@ -46,6 +46,12 @@
 #define AIRPLAY_SRCVERS GLOBAL_VERSION /*defined in global.h */
 #define AIRPLAY_FLAGS "0x84"
 #define AIRPLAY_VV "2"
-#define AIRPLAY_PI "2e388006-13ba-4041-9a67-25dd4a43d536"
+#include <stdlib.h>
+// Optional isolated-test identity. Keep the installed receiver's default stable.
+static inline const char *dnssd_pairing_id(void) {
+    const char *value = getenv("MIRROR_PAIRING_ID");
+    return value && value[0] ? value : "2e388006-13ba-4041-9a67-25dd4a43d536";
+}
+#define AIRPLAY_PI dnssd_pairing_id()
 
 #endif

@@ -1,10 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { installationIdentity, launchAgent } from '../src/installer.js';
+import { installationIdentity, launchAgent, install } from '../src/installer.js';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { homedir } from 'node:os';
+import { existsSync, readFileSync } from 'node:fs';
+
+test('source installer dry-run produces a plan without changing the saved config or service', { skip: process.platform !== 'darwin' }, () => {
+  const previous = process.env.IPHONE_HOST;
+  const files = ['Library/Application Support/iphone-native-mirror/config.json', 'Library/LaunchAgents/local.iphone-native-mirror.plist'].map(p => path.join(homedir(), p));
+  const before = files.map(p => existsSync(p) ? readFileSync(p).toString('base64') : null);
+  try {
+    process.env.IPHONE_HOST = 'validation-phone.invalid.local';
+    const plan = install({ dryRun: true });
+    assert.equal(plan.destination, files[1]);
+    assert.match(plan.xml, /validation-phone\.invalid\.local/);
+    assert.deepEqual(files.map(p => existsSync(p) ? readFileSync(p).toString('base64') : null), before);
+  } finally {
+    if (previous === undefined) delete process.env.IPHONE_HOST; else process.env.IPHONE_HOST = previous;
+  }
+});
 
 test('discovery identities are unique per installation and retained across upgrades', () => {
   const first = installationIdentity();

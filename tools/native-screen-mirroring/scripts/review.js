@@ -74,7 +74,7 @@ export function review({ mode = 'run', env = process.env, root = projectRoot,
   if (mode === 'verify') {
     console.log('Running all automated tests, including local native/network checks.');
     const tests = readdirSync(path.join(root, 'test')).filter(name => name.endsWith('.test.js')).sort().map(name => path.join('test', name));
-    command(process.execPath, ['--test', ...tests], { env: { ...env, RUN_NATIVE_TESTS: '1' } });
+    command(process.execPath, ['--test', ...tests], { env: { ...env, RUN_NATIVE_TESTS: '1', RUN_VIRTUAL_TESTS: '1' } });
     return;
   }
   const identityFile = path.join(root, 'build', 'review-identity.json');

@@ -3,10 +3,17 @@
 const fs = require('node:fs');
 const net = require('node:net');
 let eventPeer;
+let videoTimer;
+let blocked = false;
+process.stdout.on('drain', () => { blocked = false; });
 function video() {
-  const body = Buffer.from([0, 0, 0, 1, 7, 0x88, 0, 0, 0, 1, 8, 0x88, 0, 0, 0, 1, 5, 0x88]);
+  if (blocked) return;
+  const body = process.env.SESSION_VIDEO_FILE ? fs.readFileSync(process.env.SESSION_VIDEO_FILE)
+    : Buffer.from([0, 0, 0, 1, 7, 0x88, 0, 0, 0, 1, 8, 0x88, 0, 0, 0, 1, 5, 0x88]);
   const length = Buffer.alloc(4); length.writeUInt32BE(body.length);
-  process.stdout.write(Buffer.concat([length, body]));
+  if (!process.stdout.write(Buffer.concat([length, body]))) {
+    blocked = true; console.error('FIXTURE-VIDEO-BACKPRESSURE');
+  }
 }
 let previous;
 let awaitingApproval = false;
@@ -18,6 +25,8 @@ function emit(message) {
 function stream() {
   emit({ active: true });
   console.error('FIXTURE-STREAM-STARTED');
+  if (process.env.SESSION_VIDEO_INTERVAL_MS)
+    videoTimer = setInterval(video, Number(process.env.SESSION_VIDEO_INTERVAL_MS));
   if (process.env.SESSION_KEYFRAME_VIDEO === '1') {
     eventPeer = net.createConnection({ host: '127.0.0.1', port: Number(process.env.MIRROR_EVENT_PORT) });
     let pending = Buffer.alloc(0);
@@ -33,6 +42,11 @@ function stream() {
         const body = pending.subarray(end + 4, end + 4 + length);
         pending = pending.subarray(end + 4 + length);
         eventPeer.write(`RTSP/1.0 200 OK\r\nCSeq: ${header.match(/CSeq: (\d+)/)[1]}\r\nContent-Length: 0\r\n\r\n`);
+        if (body.includes(Buffer.from('updateDisplayInfo'))) {
+          const decoded = require('node:child_process').spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '--', '-'], { input: body });
+          if (decoded.status !== 0) throw new Error('Fixture could not decode display event');
+          console.error('FIXTURE-DISPLAY', decoded.stdout.toString().trim());
+        }
         if (body.includes(Buffer.from('forceKeyFrame'))) video();
       }
     });
@@ -48,7 +62,7 @@ setInterval(() => {
   const active = fs.readFileSync(process.env.SESSION_CONTROL_FILE, 'utf8') === 'true';
   if (active === previous) return;
   previous = active;
-  if (!active) { eventPeer?.destroy(); awaitingApproval = false; emit({ active: false }); }
+  if (!active) { clearInterval(videoTimer); eventPeer?.destroy(); awaitingApproval = false; emit({ active: false }); }
   else if (process.env.SESSION_PREFLIGHT === '1') { awaitingApproval = true; emit({ preflight: true }); }
   else stream();
 }, 20);

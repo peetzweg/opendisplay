@@ -64,7 +64,22 @@ node scripts/build-installer.js
 
 This compiles the bridge and native setup UI, bundles the current Node binary,
 checks every executable for external dylib dependencies and matching CPU
-architecture, includes license notices and produces a ZIP in build/distribution.
+architecture, checks the macOS minimum of static dependencies and executables,
+includes license notices and produces a ZIP in build/distribution.
+The declared macOS 14 target is checked from build metadata; running on an
+actual macOS 14 host still requires separate validation. Homebrew libraries built
+for a newer macOS are rejected. Build libplist and OpenSSL static libraries with
+`MACOSX_DEPLOYMENT_TARGET=14.0` and matching compiler/linker deployment flags,
+then point the builder at their installation prefix and a fresh build directory:
+
+```sh
+MIRROR_DEPENDENCY_PREFIX=/path/to/compatible/prefix \
+MIRROR_BUILD_DIRECTORY=build-macos14 node scripts/build-installer.js
+```
+
+The prefix must contain their headers, static libraries, pkg-config metadata
+and license files. This is a developer build requirement; the resulting app
+bundles its runtime and does not ask end users to install these tools.
 The Node distribution LICENSE must be present beside its bin directory.
 Set DEVELOPER_ID_APPLICATION to an Application signing identity to sign with
 hardened runtime instead of ad-hoc signing. Notarize the ZIP with Apple's
@@ -135,6 +150,78 @@ discovery identities, network recovery, Tailscale preparation, audio output
 preservation and launcher behavior.
 Automated checks do not replace the physical Screen Mirroring test above.
 
+### Virtual phone, without physical devices
+
+From this directory, run `npm run test:virtual` (Node 20 or newer required).
+This runs the actual Node bridge against a loopback TCP phone simulator and a
+fake AirPlay producer. It uses temporary files and ephemeral ports; it does not
+install, stop, or modify the installed service, or advertise a receiver on the LAN.
+The tests need permission to open local TCP sockets and macOS's built-in `plutil`.
+
+The eighteen scenarios check startup gating, partial and combined TCP messages,
+six consecutive rotations with dimension updates on the existing connection,
+forwarded video packets, temporary playback-report pauses, broken-connection
+recovery, deselection/reselection, explicit receiver sleep, and missing playback.
+They also reject malformed/oversized messages, unsupported versions and playback
+claims before a handshake, and exercise delayed handshakes, a 31-message rotation
+burst, twelve connection cycles, and slow-receiver backpressure.
+Video packets are synthetic H.264-shaped fixtures, not decodable video. Playback
+statistics are simulated. Passing these tests does not establish actual rendering,
+audio output, Wi-Fi/Tailscale behavior, or native Screen Mirroring/Sidecar compatibility.
+
+For physical follow-up, record the OS and installer version, connection order,
+whether the first display remains continuously visible, whether the second starts,
+and any error. Run both rows independently, starting with both displays disconnected:
+
+| Connection order | Required result | Current physical evidence |
+| --- | --- | --- |
+| iPad Sidecar, then iPhone | Both update; iPad is never interrupted | Previously observed working |
+| iPhone, then iPad Sidecar | Both update; iPhone is never interrupted | Blocked by Sidecar's AirPlay-busy startup guard on the test Mac |
+
+After both connect, check repeated rotation, chosen audio output, and receiver
+background/resume. The virtual suite does not bypass Apple's startup guard or
+count either connection-order requirement as passed.
+
+With FFmpeg available, `npm run test:video` adds three tests that encode valid
+H.264, forward it through the real bridge, and decode the result. They check
+resolution changes, actual decode recovery after a dropped socket, corrupt video
+that must not confirm playback, and startup recovery from missing keyframes.
+Wire-format assertions also match the stock iPhone's four-byte Annex-B parser.
+These tests exercise the real Node bridge with a simulated AirPlay producer.
+`npm run test:soak` adds a sustained run with 120 fresh resize events and twelve
+forced TCP reconnections, checking continued video forwarding. This uses synthetic
+video packets; the separate video suite checks actual decoding. Set
+`RUN_VIDEO_TESTS=1 RUN_SOAK_TESTS=1` when running `Review.command --verify` to include
+both optional suites. The video suite requires the developer's FFmpeg installation.
+
+For a native-picker test against a virtual phone, developers with FFmpeg at
+`/opt/homebrew/bin/ffmpeg` can run `node scripts/live-virtual-phone.js`, then select
+**Virtual iPhone Test** in native Screen Mirroring. This uses the real native
+AirPlay receiver and bridge, feeds video to FFmpeg, and reports playback feedback
+only after frames decode. It sends a rotation hello every ten seconds and stops
+after three minutes. It does not install a service or save video. The installed
+iPhone bridge stays separate. FFmpeg is a developer test dependency only.
+
+`LIVE_SELF_TEST=1 node scripts/live-virtual-phone.js` checks that same TCP/decoder
+path using twenty generated H.264 frames, without starting AirPlay. A self-check
+pass does not mean a native picker connection occurred. The live test must show
+both a connection and decoded frames; manually verify the iPad remains updating
+through startup and rotation before recording a coexistence pass.
+The live tester returns nonzero if no connection occurs, video never decodes,
+the connection drops, or decoded video does not confirm both orientation changes.
+Its AirPlay pairing UUID is separate from the installed receiver, so test discovery
+does not reuse the installed endpoint's identity. The default installed UUID is
+unchanged. Native automated receiver tests use separate UUIDs as well.
+
+To observe display registration during a physical test, compile the read-only
+monitor with `clang native/test-display-monitor.c -framework ApplicationServices
+-framework CoreFoundation -o /tmp/opendisplay-display-monitor`, then run
+`/tmp/opendisplay-display-monitor 180`. It records timestamped active IDs and
+sizes every 100 ms, alongside best-effort CoreGraphics reconfiguration callbacks.
+The command-line process did not reliably receive callbacks on the test Mac.
+Polling can miss shorter interruptions, and display registration does not prove
+uninterrupted rendered content on the physical iPad.
+
 ## Implementation and boundaries
 
 ```text
@@ -159,19 +246,24 @@ and sharing device discovery are later architecture decisions for the maintainer
 
 Current limits:
 
-- This installed revision was tested on one Apple Silicon Mac/iPhone 14 Pro Max
-  pair over home Wi-Fi with Tailscale stopped: portrait reconnect, landscape and
-  portrait resizing, and automatic resume after a brief app switch passed.
-  The 0.0.14 installer passed 51 automated tests from source and the installed package.
-  Tailscale-address playback and reconnect also passed on the home network.
-  Further testing found a rotation disconnect after disabling advertised audio
-  support. A controlled comparison restored rotation when audio capability was
-  enabled, and manual selection of Mac audio output kept both sound and rotation
-  working. The 0.0.15 audio-preservation fix passes 53 source tests. The user
-  confirmed audible sound on the selected output and three complete portrait /
-  landscape cycles without manual audio changes or disconnects; service logs
-  also confirmed repeated resized video streams. University Wi-Fi, Intel and
-  other phones are not verified.
+- The tested 0.0.15 review candidate passed **88 automated tests**, with no
+  skips, from source and from its extracted installer using the bundled runtime.
+  These cover native protocol handling, decoded H.264, installer rollback, and
+  a simulated 120-rotation / twelve-reconnect run; they do not prove every
+  physical-device or operating-system combination.
+- On one Apple Silicon Mac running macOS 26.6.1 and an iPhone 14 Pro Max over
+  home Wi-Fi with Tailscale off, automatic installation found the phone without
+  an IP address. After fully reopening OpenDisplay, the desktop remained
+  connected, repeated rotations filled both orientations, and sound stayed on
+  the selected Mac speakers/AirPods. An earlier startup stayed on the waiting
+  screen and recovered after reopening the receiver; startup reliability and
+  receiver recovery still need more testing.
+- With iPad Sidecar connected first, both displays worked through repeated phone
+  rotations. iPhone-first then iPad fails with Sidecar's AirPlay-busy startup
+  guard. Follow the [connection order and recovery steps](#using-an-ipad-and-iphone-together).
+- Explicit Tailscale-address playback passed in earlier physical tests; this
+  final candidate's new physical validation was over home Wi-Fi with Tailscale
+  off. University Wi-Fi, Intel and other phone models are not verified.
 - Default advertised panel is 1288×2796; receiver hello updates adjust it once
   connected. Other device sizes require physical validation.
 - Video only: no forwarded touch input or audio, no USB transport or automatic

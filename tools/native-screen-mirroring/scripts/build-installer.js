@@ -12,10 +12,27 @@ export function assertSystemDependencies(output) {
       throw new Error(`Installer would depend on an external library: ${dependency}`);
 }
 
+export function assertMacOSBaseline(output, maximum = '14.0') {
+  const versions = [...output.matchAll(/\bminos\s+(\d+(?:\.\d+)*)/g),
+    ...output.matchAll(/cmd LC_VERSION_MIN_MACOSX[\s\S]*?\bversion\s+(\d+(?:\.\d+)*)/g)].map(match => match[1]);
+  if (!versions.length) throw new Error('Could not inspect macOS deployment metadata.');
+  const target = maximum.split('.').map(Number);
+  for (const version of versions) {
+    const actual = version.split('.').map(Number);
+    for (let index = 0; index < Math.max(actual.length, target.length); index++) {
+      if ((actual[index] || 0) < (target[index] || 0)) break;
+      if ((actual[index] || 0) > (target[index] || 0))
+        throw new Error(`Dependency requires macOS ${version}, newer than the installer target ${maximum}. Rebuild static dependencies for the target macOS.`);
+    }
+  }
+}
+
 export function buildInstaller({ root = projectRoot, node = process.execPath, sign = process.env.DEVELOPER_ID_APPLICATION,
-  run = spawnSync } = {}) {
+  outputDirectory, buildDirectory = process.env.MIRROR_BUILD_DIRECTORY || 'build',
+  dependencyPrefix = process.env.MIRROR_DEPENDENCY_PREFIX, run = spawnSync } = {}) {
+  const env = dependencyPrefix ? { ...process.env, PKG_CONFIG_PATH: path.join(dependencyPrefix, 'lib/pkgconfig') } : process.env;
   function command(binary, args, options = {}) {
-    const r = run(binary, args, { cwd: root, encoding: 'utf8', ...options });
+    const r = run(binary, args, { cwd: root, encoding: 'utf8', env, ...options });
     if (r.error || r.status !== 0) throw new Error(`${binary} failed: ${r.stderr || r.error?.message || r.status}`);
     return r.stdout || '';
   }
@@ -23,9 +40,19 @@ export function buildInstaller({ root = projectRoot, node = process.execPath, si
   const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
   const arch = command('/usr/bin/lipo', ['-archs', node]).trim();
   if (!['arm64', 'x86_64'].includes(arch)) throw new Error('Build with a single-architecture Node runtime.');
-  command('cmake', ['-S', '.', '-B', 'build', '-DMIRROR_INTERNAL_MDNS=ON', '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0', `-DCMAKE_OSX_ARCHITECTURES=${arch}`]);
-  command('cmake', ['--build', 'build', '-j', '4']);
-  const out = path.join(root, 'build/distribution'); mkdirSync(out, { recursive: true });
+  command('cmake', ['-S', '.', '-B', buildDirectory, '-DMIRROR_INTERNAL_MDNS=ON', '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0', `-DCMAKE_OSX_ARCHITECTURES=${arch}`,
+    ...(dependencyPrefix ? [`-DCMAKE_PREFIX_PATH=${dependencyPrefix}`, `-DLIBPLIST=${path.join(dependencyPrefix, 'lib/libplist-2.0.a')}`, `-DLIBCRYPTO=${path.join(dependencyPrefix, 'lib/libcrypto.a')}`] : [])]);
+  const build = path.resolve(root, buildDirectory);
+  const cache = readFileSync(path.join(build, 'CMakeCache.txt'), 'utf8');
+  for (const name of ['LIBPLIST', 'LIBCRYPTO']) {
+    const archive = cache.match(new RegExp(`^${name}:FILEPATH=(.+)$`, 'm'))?.[1];
+    if (!archive || !path.isAbsolute(archive)) throw new Error(`Could not identify static dependency ${name}.`);
+    // A static archive contains load commands for every object, often exceeding
+    // spawnSync's default 1 MiB buffer even for a valid dependency.
+    assertMacOSBaseline(command('/usr/bin/otool', ['-l', archive], { maxBuffer: 64 * 1024 * 1024 }));
+  }
+  command('cmake', ['--build', buildDirectory, '-j', '4']);
+  const out = outputDirectory || path.join(root, 'build/distribution'); mkdirSync(out, { recursive: true });
   const app = path.join(out, 'Install iPhone Native Mirror.app'); rmSync(app, { recursive: true, force: true });
   const contents = path.join(app, 'Contents'), runtime = path.join(contents, 'Resources/runtime');
   mkdirSync(path.join(contents, 'MacOS'), { recursive: true }); mkdirSync(runtime, { recursive: true });
@@ -33,7 +60,7 @@ export function buildInstaller({ root = projectRoot, node = process.execPath, si
   for (const name of ['package.json', 'CMakeLists.txt', 'LICENSE', 'README.md', 'Review.command', 'Install.command'])
     cpSync(path.join(root, name), path.join(runtime, name));
   mkdirSync(path.join(runtime, 'build'));
-  for (const name of ['airplay-bridge', 'iphone-display-error']) cpSync(path.join(root, 'build', name), path.join(runtime, 'build', name));
+  for (const name of ['airplay-bridge', 'iphone-display-error']) cpSync(path.join(build, name), path.join(runtime, 'build', name));
   cpSync(node, path.join(runtime, 'node')); chmodSync(path.join(runtime, 'node'), 0o755);
   const notices = path.join(contents, 'Resources/Third Party Notices'); mkdirSync(notices, { recursive: true });
   const nodeLicense = path.resolve(node, '../../LICENSE');
@@ -58,6 +85,7 @@ export function buildInstaller({ root = projectRoot, node = process.execPath, si
   writeFileSync(entitlements, '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>');
   for (const binary of binaries) {
     assertSystemDependencies(command('/usr/bin/otool', ['-L', binary]));
+    assertMacOSBaseline(command('/usr/bin/otool', ['-l', binary]));
     const binaryArch = command('/usr/bin/lipo', ['-archs', binary]).trim();
     if (binaryArch !== arch) throw new Error(`Architecture mismatch: ${binary}`);
     command('/usr/bin/codesign', ['--force', '--sign', sign || '-', ...(sign ? ['--options', 'runtime', '--timestamp'] : []),
