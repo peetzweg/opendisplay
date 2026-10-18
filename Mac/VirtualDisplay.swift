@@ -32,6 +32,8 @@ final class VirtualDisplay {
     /// display is then running some other mode, so the owner should resize
     /// it to a 1x size that capture and the stream agree on (#292).
     var onModeRefused: ((VirtualCanvasSize) -> Void)?
+    var onDisplayUnitCollisionChange: ((Bool) -> Void)?
+    private var hasDuplicateUnitNumbers: Bool?
 
     var displayID: CGDirectDisplayID { display.displayID }
 
@@ -105,6 +107,7 @@ final class VirtualDisplay {
                 // removing the display — never hold it across the sleep.
                 do {
                     guard let self else { return }
+                    self.checkDisplayUnitNumbers()
                     self.ensureNotMirrored()
                     if self.selectTargetMode(recover: settled) { settled = true }
                     self.manageOrigin()
@@ -250,6 +253,22 @@ final class VirtualDisplay {
     private func reportRefusal() {
         guard scale == 2 else { return }
         onModeRefused?(VirtualCanvasSize(pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale))
+    }
+
+    /// ScreenCaptureKit can route frames to the wrong CGVirtualDisplay when
+    /// macOS assigns two OpenDisplay displays the same unit number (#154).
+    private func checkDisplayUnitNumbers() {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return }
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return }
+        let unitNumbers = displays.prefix(Int(count))
+            .filter { CGDisplayVendorNumber($0) == 0x5043 }
+            .map { CGDisplayUnitNumber($0) }
+        let hasDuplicates = DisplayUnitNumbers.hasDuplicates(unitNumbers)
+        guard hasDuplicates != hasDuplicateUnitNumbers else { return }
+        hasDuplicateUnitNumbers = hasDuplicates
+        onDisplayUnitCollisionChange?(hasDuplicates)
     }
 
     /// Consecutive `CGCompleteDisplayConfiguration` failures for the target mode.

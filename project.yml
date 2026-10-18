@@ -152,6 +152,7 @@ targets:
     sources:
       - MacTests
       - Mac/DisplayArrangement.swift
+      - Mac/DisplayUnitNumbers.swift
       - Mac/StreamConfiguration.swift
       - Mac/VirtualCanvasSizing.swift
       - Mac/PhoneInfo.swift

@@ -68,6 +68,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // not a delta — repeated bumps in one session must not accumulate into
     // an offset nothing ever validated.
     @MainActor var onDisplayIdentityBumped: ((UInt32) -> Void)?
+    @MainActor var onDisplayUnitCollisionChange: ((Bool) -> Void)?
 
     private var stream: SCStream?
     private var encoder: VTCompressionSession?
@@ -754,6 +755,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                             self?.queue.async {
                                 guard let self, let info = self.lastHello else { return }
                                 self.modeRefused(refused, info: info)
+                            }
+                        }
+                        created.onDisplayUnitCollisionChange = { [weak self] hasCollision in
+                            guard let self else { return }
+                            Task { @MainActor in
+                                self.onDisplayUnitCollisionChange?(hasCollision)
                             }
                         }
                     }
