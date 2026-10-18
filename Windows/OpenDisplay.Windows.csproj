@@ -1,0 +1,74 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Some mapped/network Windows workspaces pass SDK wildcard items such as
+         **/*.xaml and **/*.resx to build tasks as literal filenames. Keep the
+         project deterministic by declaring every source input explicitly. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OpenDisplay.Windows</RootNamespace>
+    <AssemblyName>OpenDisplay</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="Exists('Assets\OpenDisplay.ico')">Assets\OpenDisplay.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="App.xaml.cs">
+      <DependentUpon>App.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="MainWindow.xaml.cs">
+      <DependentUpon>MainWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Infrastructure\ObservableObject.cs" />
+    <Compile Include="Infrastructure\RelayCommand.cs" />
+    <Compile Include="Infrastructure\Log.cs" />
+    <Compile Include="Infrastructure\TrayIconService.cs" />
+    <Compile Include="Models\AdbDevice.cs" />
+    <Compile Include="Models\DisplayTarget.cs" />
+    <Compile Include="Models\ReceiverEndpoint.cs" />
+    <Compile Include="Models\ReceiverHello.cs" />
+    <Compile Include="Models\StreamQuality.cs" />
+    <Compile Include="Models\VirtualDisplayRequest.cs" />
+    <Compile Include="Protocol\FramedConnection.cs" />
+    <Compile Include="Services\AdbClient.cs" />
+    <Compile Include="Services\AdbDeviceWatcher.cs" />
+    <Compile Include="Services\AdbLocator.cs" />
+    <Compile Include="Services\DependencyDiagnostics.cs" />
+    <Compile Include="Services\FfmpegCaptureEncoder.cs" />
+    <Compile Include="Services\FfmpegLocator.cs" />
+    <Compile Include="Services\IVirtualDisplayProvider.cs" />
+    <Compile Include="Services\ManualEndpointParser.cs" />
+    <Compile Include="Services\MonitorLocator.cs" />
+    <Compile Include="Services\PreferencesStore.cs" />
+    <Compile Include="Services\ReceiverDiscovery.cs" />
+    <Compile Include="Services\StreamingSession.cs" />
+    <Compile Include="Services\VddPipeClient.cs" />
+    <Compile Include="Services\VddSettingsStore.cs" />
+    <Compile Include="Services\VddVirtualDisplayProvider.cs" />
+    <Compile Include="Services\WindowsInputInjector.cs" />
+    <Compile Include="ViewModels\MainViewModel.cs" />
+    <Compile Include="ViewModels\DisplaySelection.cs" />
+    <Compile Include="ViewModels\ReceiverRowViewModel.cs" />
+    <Compile Include="ViewModels\SessionViewModel.cs" />
+
+    <ApplicationDefinition Include="App.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </ApplicationDefinition>
+    <Page Include="MainWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Resource Include="Assets\OpenDisplay.ico" />
+  </ItemGroup>
+</Project>
