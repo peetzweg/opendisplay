@@ -68,3 +68,10 @@ reviewers on the `native-mirror-release` environment for an additional approval
 boundary. No automated check proves a human performed a physical test; the
 committed record is an explicit attestation. This pipeline does not publish or
 change the upstream author's official Mac/iOS releases.
+
+The fork's environment is configured with `therealjosemaria` as a required
+reviewer, administrator bypass disabled, and only branch `main` permitted.
+Self-review remains allowed so the single repository owner can approve an
+otherwise valid release. Administrators can still edit these settings; this is
+not a repository-owner lockout. Other repositories must configure their own
+environment before enabling this publication workflow.

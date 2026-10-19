@@ -25,7 +25,7 @@ jobs:
         working-directory: tools/native-screen-mirroring
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
       - name: Install native build dependencies
@@ -49,7 +49,7 @@ jobs:
         run: node scripts/build-installer.js
       - name: Test the extracted installer with its bundled runtime
         run: node scripts/ci-artifact.js verify build/distribution
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-mirror-installer-${{ runner.arch }}
           path: |
