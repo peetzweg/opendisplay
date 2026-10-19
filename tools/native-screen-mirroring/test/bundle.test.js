@@ -176,3 +176,19 @@ test('fresh install handles an absent service and refuses an indeterminate servi
     assert.ok(!existsSync(f.p.runtime)); assert.ok(existsSync(f.p.config));
   } finally { f.clean(); }
 });
+
+test('optional Tailscale fallback survives runtime upgrades without replacing the LAN target', () => {
+  const f = fixture();
+  try {
+    installBundle({ ...f, host: 'phone.local', run: () => ({ status: 0 }) });
+    const saved = JSON.parse(readFileSync(f.p.config, 'utf8'));
+    saved.fallbackHost = '100.106.150.88'; writeFileSync(f.p.config, JSON.stringify(saved));
+    installBundle({ ...f, host: 'phone.local', run: () => ({ status: 0 }) });
+    const after = JSON.parse(readFileSync(f.p.config, 'utf8'));
+    assert.equal(after.host, 'phone.local'); assert.equal(after.deviceId, saved.deviceId);
+    assert.equal(after.fallbackHost, saved.fallbackHost);
+    const agent = readFileSync(f.p.agent, 'utf8');
+    assert.match(agent, /IPHONE_HOST<\/key><string>phone.local/);
+    assert.match(agent, /IPHONE_FALLBACK_HOST<\/key><string>100.106.150.88/);
+  } finally { f.clean(); }
+});

@@ -70,7 +70,7 @@ export function installBundle({ source = root, home = homedir(), uid = process.g
     renameSync(staging, p.runtime); installed = true;
     writeFileSync(p.config, JSON.stringify({ ...saved, host, ...identity }, null, 2) + '\n', { mode: 0o600 });
     writeFileSync(p.agent, launchAgent({ node: path.join(p.runtime, 'node'), script: path.join(p.runtime, 'src/bridge.js'),
-      host, log: p.log, ...identity }), { mode: 0o600 });
+      host, fallbackHost: saved.fallbackHost, log: p.log, ...identity }), { mode: 0o600 });
     const registered = run('/bin/launchctl', ['bootstrap', domain, p.agent], { encoding: 'utf8' });
     if (registered.error || registered.status !== 0) throw new Error(`Could not start the service: ${registered.stderr || registered.error?.message || 'launchctl failed'}`);
   } catch (error) {

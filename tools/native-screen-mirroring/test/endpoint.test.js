@@ -32,3 +32,14 @@ test('explicit Tailscale and IPv6 targets keep their original address selection'
     assert.deepEqual(receiverEndpoint(host, 9000), { host, port: 9000 });
   assert.equal(receiverEndpoint('Phone.LOCAL.', 9000).family, 4);
 });
+
+test('optional VPN fallback keeps the LAN route primary and resets for each session', async () => {
+  const { ReceiverRoute } = await import('../src/endpoint.js');
+  const route = new ReceiverRoute('phone.local', '100.106.150.88');
+  assert.equal(route.current, 'phone.local'); assert.equal(route.canFallback, true);
+  assert.equal(route.advance(), '100.106.150.88'); assert.equal(route.canFallback, false);
+  assert.equal(route.advance(), undefined); route.reset(); assert.equal(route.current, 'phone.local');
+  const unchanged = new ReceiverRoute('phone.local'); assert.equal(unchanged.advance(), undefined);
+  assert.equal(unchanged.current, 'phone.local');
+  assert.throws(() => new ReceiverRoute('phone.local', '192.168.1.2'), /Tailscale address/);
+});

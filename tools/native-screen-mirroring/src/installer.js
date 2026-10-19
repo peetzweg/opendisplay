@@ -14,7 +14,7 @@ export function installationIdentity(saved = {}) {
 }
 
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]);
-export function launchAgent({ node, script, host, log, deviceId, hostLabel }) {
+export function launchAgent({ node, script, host, fallbackHost, log, deviceId, hostLabel }) {
   const identity = installationIdentity({ deviceId, hostLabel });
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,6 +23,7 @@ export function launchAgent({ node, script, host, log, deviceId, hostLabel }) {
 <key>ProgramArguments</key><array><string>${escape(node)}</string><string>${escape(script)}</string></array>
 <key>EnvironmentVariables</key><dict>
 <key>IPHONE_HOST</key><string>${escape(host)}</string>
+${fallbackHost ? `<key>IPHONE_FALLBACK_HOST</key><string>${escape(fallbackHost)}</string>` : ''}
 <key>MIRROR_NAME</key><string>iPhone</string>
 <key>MIRROR_HOST_LABEL</key><string>${escape(identity.hostLabel)}</string>
 <key>MIRROR_DEVICE_ID</key><string>${escape(identity.deviceId)}</string>

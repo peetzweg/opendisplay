@@ -7,16 +7,23 @@ import { ReadinessGuard } from './readiness.js';
 import { prepareTailscale } from './tailscale.js';
 import { AirPlayEvents } from './airplay-events.js';
 import { NetworkMonitor } from './network-monitor.js';
-import { receiverEndpoint } from './endpoint.js';
+import { receiverEndpoint, ReceiverRoute } from './endpoint.js';
 
 const host = process.env.IPHONE_HOST;
 if (!host) throw new Error('Set IPHONE_HOST to the iPhone LAN or Tailscale address');
+const route = new ReceiverRoute(host, process.env.IPHONE_FALLBACK_HOST);
 const binary = process.env.AIRPLAY_BINARY || fileURLToPath(new URL('../build/airplay-bridge', import.meta.url));
 const errorBinary = process.env.MIRROR_ERROR_BINARY || fileURLToPath(new URL('../build/iphone-display-error', import.meta.url));
 const readiness = new ReadinessGuard(() => failSession('No iPhone playback confirmation'), {
   timeoutMs: Number(process.env.MIRROR_READY_TIMEOUT_MS || 10000),
 });
-const receiverReadiness = new ReadinessGuard(() => failSession('iPhone receiver did not answer'), {
+const receiverReadiness = new ReadinessGuard(() => {
+  if (route.canFallback && socket && !ready) {
+    socket.destroy(new Error('Local receiver did not answer; trying Tailscale'));
+    return;
+  }
+  failSession('iPhone receiver did not answer');
+}, {
   timeoutMs: Number(process.env.MIRROR_HELLO_TIMEOUT_MS || 3000),
 });
 let stopping = false, active = false, socket, retry, heartbeat, ready = false, generation = 0, preflightPending = false;
@@ -53,6 +60,7 @@ const sessionDecoder = new Decoder(body => {
   }
   if ((message.active === true || message.preflight === true) && !active) {
     active = true;
+    route.reset();
     receivedVideo = false; forwardedVideo = false;
     const session = ++generation;
     prepareTailscale(host).then(state => {
@@ -114,7 +122,7 @@ function connect() {
   clearInterval(startupProbe); startupProbe = undefined; startupReplay.clear();
   ready = false;
   let handshaken = false;
-  const connection = net.createConnection(receiverEndpoint(host, Number(process.env.IPHONE_PORT || 9000)));
+  const connection = net.createConnection(receiverEndpoint(route.current, Number(process.env.IPHONE_PORT || 9000)));
   socket = connection;
   connection.setNoDelay(true);
   connection.on('drain', () => receiver.stdout.resume());
@@ -128,6 +136,7 @@ function connect() {
       if (ready) return; // Acknowledge rotation without restarting the session or heartbeat.
       ready = true;
       handshaken = true;
+      console.error('IPHONE-TRANSPORT', route.current === host ? 'primary' : 'Tailscale fallback');
       receiverReadiness.stop();
       readiness.start();
       // Receiver stats are video-driven. Request a few fresh frames so an idle
@@ -166,7 +175,7 @@ function connect() {
   });
   connection.on('error', error => {
     console.error('IPHONE:', error.message);
-    if (socket === connection && preflightPending && error.code === 'ECONNREFUSED' && ++preflightRefusals >= 2)
+    if (!route.canFallback && socket === connection && preflightPending && error.code === 'ECONNREFUSED' && ++preflightRefusals >= 2)
       failSession('iPhone receiver refused the connection');
   });
   connection.on('close', () => {
@@ -179,7 +188,19 @@ function connect() {
     clearInterval(startupProbe); startupProbe = undefined; startupReplay.clear();
     if (handshaken && active && !stopping) receiverReadiness.start();
     receiver.stdout.resume();
-    if (!stopping && active) retry = setTimeout(connect, 500);
+    if (!stopping && active) {
+      const fallback = !handshaken && route.advance();
+      if (fallback) {
+        receiverReadiness.stop();
+        const session = generation;
+        console.error('IPHONE-ROUTE trying Tailscale fallback');
+        prepareTailscale(fallback).then(state => {
+          if (!active || stopping || session !== generation) return;
+          if (state !== 'ready' && state !== 'starting') return failSession('Tailscale is not ready', 'tailscale');
+          receiverReadiness.start(); connect();
+        }).catch(() => { if (active && !stopping && session === generation) failSession('Tailscale is not ready', 'tailscale'); });
+      } else retry = setTimeout(connect, 500);
+    }
   });
 }
 function disconnectPhone() {
