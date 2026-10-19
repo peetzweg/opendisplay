@@ -19,7 +19,7 @@ export function candidateName(candidate) {
     throw new Error('Invalid candidate metadata');
   return `native-mirror-v${candidate.version}-${candidate.architecture}-${candidate.sourceCommit.slice(0, 12)}`;
 }
-export function verifyArtifact(directory) {
+export function verifyArtifact(directory, { spawn = spawnSync } = {}) {
   directory = path.resolve(directory);
   const candidate = JSON.parse(readFileSync(path.join(directory, 'candidate.json')));
   candidateName(candidate);
@@ -28,7 +28,7 @@ export function verifyArtifact(directory) {
   const unpacked = path.join(directory, 'extracted');
   mkdirSync(unpacked); // A fresh extraction is mandatory.
   const run = (binary, args, options = {}) => {
-    const result = spawnSync(binary, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...options });
+    const result = spawn(binary, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...options });
     if (result.error || result.status !== 0) throw new Error(`${binary} failed: ${result.stderr || result.error || result.status}`);
     return result.stdout;
   };
@@ -37,9 +37,15 @@ export function verifyArtifact(directory) {
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
   const runtime = path.join(app, 'Contents/Resources/runtime');
   const tests = readdirSync(path.join(runtime, 'test')).filter(name => name.endsWith('.test.js')).sort();
-  const log = run(path.join(runtime, 'node'), ['--test', '--test-reporter=tap', ...tests.map(name => `test/${name}`)],
-    { cwd: runtime, env: { ...process.env, RUN_NATIVE_TESTS: '1', RUN_VIRTUAL_TESTS: '1', RUN_VIDEO_TESTS: '1', RUN_SOAK_TESTS: '1' } });
-  writeFileSync(path.join(directory, 'tests.tap'), log);
+  const result = spawn(path.join(runtime, 'node'), ['--test', '--test-reporter=tap', ...tests.map(name => `test/${name}`)],
+    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, cwd: runtime,
+      env: { ...process.env, RUN_NATIVE_TESTS: '1', RUN_VIRTUAL_TESTS: '1', RUN_VIDEO_TESTS: '1', RUN_SOAK_TESTS: '1' } });
+  // Node's test reporter writes failures to stdout. Retain it before checking
+  // status so a failed packaged test is diagnosable instead of just "exit 1".
+  writeFileSync(path.join(directory, 'tests.tap'), result.stdout || '');
+  writeFileSync(path.join(directory, 'tests.stderr.log'), result.stderr || '');
+  if (result.error || result.status !== 0)
+    throw new Error(`Extracted installer tests failed: ${result.error?.message || result.status}\n${result.stdout || ''}\n${result.stderr || ''}`);
   return candidate;
 }
 export function approve(directory, evidenceFile, runFile, repository) {

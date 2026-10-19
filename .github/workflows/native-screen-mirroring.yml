@@ -56,6 +56,17 @@ jobs:
         run: node scripts/build-installer.js
       - name: Test the extracted installer with its bundled runtime
         run: node scripts/ci-artifact.js verify build/distribution
+      - name: Retain failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-mirror-failed-diagnostics-${{ runner.arch }}
+          path: |
+            tools/native-screen-mirroring/build/distribution/tests.tap
+            tools/native-screen-mirroring/build/distribution/tests.stderr.log
+            tools/native-screen-mirroring/build/distribution/candidate.json
+            tools/native-screen-mirroring/build/distribution/native-tests.log
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v7
         with:
           name: native-mirror-installer-${{ runner.arch }}
