@@ -30,6 +30,8 @@ jobs:
           node-version: '20'
       - name: Install native build dependencies
         run: brew install cmake pkgconf ffmpeg
+      - name: Verify publishing cannot bypass failures
+        run: node --test release/publish-workflow.test.js
       - name: Build and test pinned macOS 14 static dependencies
         run: bash scripts/ci-dependencies.sh
       - name: Build and run all bridge tests
