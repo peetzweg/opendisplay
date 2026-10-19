@@ -3,6 +3,7 @@
 set -euo pipefail
 prefix="$PWD/build/dependencies"
 sources="$PWD/build/dependency-sources"
+helper="$PWD"
 mkdir -p "$prefix" "$sources"
 export MACOSX_DEPLOYMENT_TARGET=14.0
 export CFLAGS='-O2 -mmacosx-version-min=14.0'
@@ -23,6 +24,7 @@ curl --fail --location --retry 3 -o openssl.tar.gz https://github.com/openssl/op
 echo '243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  openssl.tar.gz' | shasum -a 256 -c -
 tar -xf openssl.tar.gz
 cd openssl-3.6.3
+node "$helper/scripts/sync-openssl-test.js" "$PWD"
 case "$(uname -m)" in
   arm64) target=darwin64-arm64-cc ;;
   x86_64) target=darwin64-x86_64-cc ;;
