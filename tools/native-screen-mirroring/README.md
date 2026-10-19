@@ -145,6 +145,14 @@ prerequisites without changing the installed service.
 
 For a temporary trial, use Review.command instead; it never registers a service.
 
+## Release checks
+
+Before publishing a new installer, follow [the release procedure](release/RELEASING.md)
+and pass the artifact-specific release check. Home LAN, restricted Wi-Fi/Tailscale
+and returning home without VPN are mandatory physical cases on the same ZIP.
+The [19 October incident report](release/INCIDENT-2026-10-19.md) explains the
+previous explicit-address versus automatic-setup coverage gap.
+
 ## Automated validation
 
 ```sh
@@ -204,8 +212,8 @@ These tests exercise the real Node bridge with a simulated AirPlay producer.
 `npm run test:soak` adds a sustained run with 120 fresh resize events and twelve
 forced TCP reconnections, checking continued video forwarding. This uses synthetic
 video packets; the separate video suite checks actual decoding. Set
-`RUN_VIDEO_TESTS=1 RUN_SOAK_TESTS=1` when running `Review.command --verify` to include
-both optional suites. The video suite requires the developer's FFmpeg installation.
+`RUN_VIDEO_TESTS=1 RUN_SOAK_TESTS=1` for direct Node test runs.
+`Review.command --verify` now includes both suites and native CTest by default. The video suite requires the developer's FFmpeg installation.
 
 For a native-picker test against a virtual phone, developers with FFmpeg at
 `/opt/homebrew/bin/ffmpeg` can run `node scripts/live-virtual-phone.js`, then select

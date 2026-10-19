@@ -79,8 +79,12 @@ test('verification builds before running the full suite and never starts a phone
   assert.ok(calls.at(-1).args.includes('test/bundle.test.js'));
   assert.equal(calls.at(-1).options.env.RUN_NATIVE_TESTS, '1');
   assert.equal(calls.at(-1).options.env.RUN_VIRTUAL_TESTS, '1');
+  assert.equal(calls.at(-1).options.env.RUN_VIDEO_TESTS, '1');
+  assert.equal(calls.at(-1).options.env.RUN_SOAK_TESTS, '1');
+  assert.equal(calls[5].binary, 'ctest');
+  assert.deepEqual(calls[5].args, ['--test-dir', 'build', '--output-on-failure']);
   assert.ok(calls.at(-1).args.includes('test/virtual.test.js'));
-  assert.deepEqual(calls[3].args, ['-S', '.', '-B', 'build', '-DMIRROR_INTERNAL_MDNS=ON']);
+  assert.deepEqual(calls[3].args, ['-S', '.', '-B', 'build', '-DMIRROR_INTERNAL_MDNS=ON', '-DMIRROR_BUILD_TESTS=ON']);
   assert.deepEqual(calls[4].args, ['--build', 'build', '-j', '4']);
   assert.ok(calls.every(call => !call.args.includes('src/bridge.js')));
 });

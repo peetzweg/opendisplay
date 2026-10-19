@@ -30,7 +30,8 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "native/setup.m"
+    "native/setup.m",
+    "release"
   ],
   "engines": {
     "node": ">=20"
@@ -42,6 +43,7 @@
     "test:video": "RUN_VIDEO_TESTS=1 node --test test/decoded-video.test.js",
     "test:soak": "RUN_SOAK_TESTS=1 node --test test/soak.test.js",
     "dev": "node src/bridge.js",
-    "postinstall": "node src/installer.js"
+    "postinstall": "node src/installer.js",
+    "check:release": "node scripts/check-release.js"
   }
 }

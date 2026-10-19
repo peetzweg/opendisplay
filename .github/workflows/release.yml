@@ -19,6 +19,8 @@ concurrency:
 
 jobs:
   release-please:
+    # This workflow publishes the original author's apps, not fork installers.
+    if: github.repository == 'peetzweg/opendisplay'
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}

@@ -69,12 +69,13 @@ export function review({ mode = 'run', env = process.env, root = projectRoot,
     return;
   }
   console.log('Building the native receiver and error dialog.');
-  command('cmake', ['-S', '.', '-B', 'build', '-DMIRROR_INTERNAL_MDNS=ON']);
+  command('cmake', ['-S', '.', '-B', 'build', '-DMIRROR_INTERNAL_MDNS=ON', ...(mode === 'verify' ? ['-DMIRROR_BUILD_TESTS=ON'] : [])]);
   command('cmake', ['--build', 'build', '-j', '4']);
   if (mode === 'verify') {
     console.log('Running all automated tests, including local native/network checks.');
+    command('ctest', ['--test-dir', 'build', '--output-on-failure']);
     const tests = readdirSync(path.join(root, 'test')).filter(name => name.endsWith('.test.js')).sort().map(name => path.join('test', name));
-    command(process.execPath, ['--test', ...tests], { env: { ...env, RUN_NATIVE_TESTS: '1', RUN_VIRTUAL_TESTS: '1' } });
+    command(process.execPath, ['--test', ...tests], { env: { ...env, RUN_NATIVE_TESTS: '1', RUN_VIRTUAL_TESTS: '1', RUN_VIDEO_TESTS: '1', RUN_SOAK_TESTS: '1' } });
     return;
   }
   const identityFile = path.join(root, 'build', 'review-identity.json');

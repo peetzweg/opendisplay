@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -56,7 +57,7 @@ export function buildInstaller({ root = projectRoot, node = process.execPath, si
   const app = path.join(out, 'Install iPhone Native Mirror.app'); rmSync(app, { recursive: true, force: true });
   const contents = path.join(app, 'Contents'), runtime = path.join(contents, 'Resources/runtime');
   mkdirSync(path.join(contents, 'MacOS'), { recursive: true }); mkdirSync(runtime, { recursive: true });
-  for (const dir of ['src', 'scripts', 'test', 'native', 'vendor']) cpSync(path.join(root, dir), path.join(runtime, dir), { recursive: true });
+  for (const dir of ['src', 'scripts', 'test', 'native', 'vendor', 'release']) cpSync(path.join(root, dir), path.join(runtime, dir), { recursive: true });
   for (const name of ['package.json', 'CMakeLists.txt', 'LICENSE', 'README.md', 'Review.command', 'Install.command'])
     cpSync(path.join(root, name), path.join(runtime, name));
   mkdirSync(path.join(runtime, 'build'));
@@ -102,7 +103,16 @@ export function buildInstaller({ root = projectRoot, node = process.execPath, si
   const zip = path.join(out, `iPhone-Native-Mirror-${version}-${arch}.zip`);
   rmSync(zip, { force: true });
   command('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', app, zip]);
-  return { app, zip, manifest };
+  // Freeze provenance beside the ZIP; dirty/local builds remain usable for
+  // development, but check-release refuses to approve them for publication.
+  const revision = run('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+  const changes = run('git', ['status', '--porcelain', '--', '.'], { cwd: root, encoding: 'utf8' });
+  const candidate = { schemaVersion: 1, artifact: path.basename(zip), version, architecture: arch,
+    artifactSHA256: createHash('sha256').update(readFileSync(zip)).digest('hex'),
+    sourceCommit: revision.status === 0 ? revision.stdout.trim() : null,
+    sourceClean: changes.status === 0 && changes.stdout.trim() === '', signing: manifest.signing };
+  writeFileSync(path.join(out, 'candidate.json'), JSON.stringify(candidate, null, 2) + '\n');
+  return { app, zip, manifest, candidate };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
