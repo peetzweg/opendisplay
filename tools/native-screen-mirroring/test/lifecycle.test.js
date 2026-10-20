@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -17,6 +17,19 @@ test('AirPlay disconnect closes the phone session, stays idle, and reconnects on
   const control = path.join(dir, 'active'); writeFileSync(control, 'false');
   const fixture = fileURLToPath(new URL('../scripts/fake-airplay-receiver.cjs', import.meta.url));
   chmodSync(fixture, 0o755);
+  const rejection = path.join(dir, 'sidecar-event'), marker = path.join(dir, 'sidecar-help');
+  writeFileSync(rejection, '');
+  const bootstrap = path.join(dir, 'bootstrap.cjs');
+  const bridge = fileURLToPath(new URL('../src/bridge.js', import.meta.url));
+  // Intercept only log access inside this isolated child. Production keeps the
+  // fixed system log command; no test command override is installed or shipped.
+  const logFixture = `const fs=require('node:fs');let previous='';setInterval(()=>{const text=fs.readFileSync(${JSON.stringify(rejection)},'utf8');if(text!==previous){previous=text;process.stdout.write(text)}},20);`;
+  writeFileSync(bootstrap, `const cp=require('node:child_process'),original=cp.spawn;
+cp.spawn=(binary,args,options)=>{
+  if(binary==='/usr/bin/log') return original(process.execPath,['-e',${JSON.stringify(logFixture)}],options);
+  if(args?.[0]==='sidecar') return original(process.execPath,['-e',${JSON.stringify(`require('node:fs').appendFileSync(${JSON.stringify(marker)},'sidecar\\n')`)}],options);
+  return original(binary,args,options);
+};require('node:module').syncBuiltinESMExports();import(${JSON.stringify(bridge)});`);
   const connections = [], welcomes = [], videos = [];
   const server = net.createServer(socket => {
     connections.push(socket);
@@ -29,7 +42,7 @@ test('AirPlay disconnect closes the phone session, stays idle, and reconnects on
     socket.on('error', () => {});
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/bridge.js', import.meta.url))], {
+  const child = spawn(process.execPath, [bootstrap], {
     env: { ...process.env, IPHONE_HOST: '127.0.0.1', IPHONE_PORT: String(server.address().port), AIRPLAY_BINARY: fixture, SESSION_CONTROL_FILE: control, SESSION_PREFLIGHT: '1' },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -49,6 +62,11 @@ test('AirPlay disconnect closes the phone session, stays idle, and reconnects on
     await until(() => videos.length === 1);
     assert.ok(log.indexOf('IPHONE-READY') < log.indexOf('FIXTURE-STREAM-STARTED'), 'AirPlay starts only after the phone handshake');
     assert.equal(videos[0][4] & 31, 7, 'Startup video retains SPS before the first IDR');
+    writeFileSync(rejection, JSON.stringify({ processImagePath: '/System/Library/CoreServices/SidecarDisplayAgent', eventMessage: 'SidecarErrorDisplayAirPlayBusy (-453)' }) + '\n');
+    await until(() => existsSync(marker));
+    assert.equal(readFileSync(marker, 'utf8'), 'sidecar\n');
+    assert.equal(connections[0].destroyed, false, 'Sidecar guidance must leave the phone connected');
+    assert.doesNotMatch(log, /IPHONE-NOT-READY|AIRPLAY-EXIT/);
     connections[0].write(frame({ type: 'hello', pv: 3, pixelsWide: 2796, pixelsHigh: 1290 }));
     await until(() => welcomes.length === 2);
     assert.equal(connections.length, 1, 'Rotation hello is acknowledged on the existing connection');

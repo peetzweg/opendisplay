@@ -17,10 +17,14 @@ int main(int argc, char **argv) {
             title = @"Tailscale setup required";
             message = @"Tailscale needs to be configured.";
         }
+        if (argc > 1 && !strcmp(argv[1], "sidecar")) {
+            title = @"Connect iPad first";
+            message = @"In Control Center → Screen Mirroring, disconnect iPhone. Connect iPad, then reconnect iPhone.";
+        }
         NSImage *icon = [NSImage imageWithSystemSymbolName:@"laptopcomputer" accessibilityDescription:@"Laptop display"];
         icon = [icon imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPaletteColors:@[NSColor.systemBlueColor]]];
         icon.size = NSMakeSize(64, 64);
-        BOOL check = argc > 1 && !strcmp(argv[1], "--check");
+        BOOL check = !strcmp(argv[argc - 1], "--check");
 
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];

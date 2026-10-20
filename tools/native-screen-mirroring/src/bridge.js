@@ -8,6 +8,7 @@ import { prepareTailscale } from './tailscale.js';
 import { AirPlayEvents } from './airplay-events.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { receiverEndpoint, ReceiverRoute } from './endpoint.js';
+import { SidecarHelp } from './sidecar-help.js';
 
 const host = process.env.IPHONE_HOST;
 if (!host) throw new Error('Set IPHONE_HOST to the iPhone LAN or Tailscale address');
@@ -27,6 +28,18 @@ const receiverReadiness = new ReadinessGuard(() => {
   timeoutMs: Number(process.env.MIRROR_HELLO_TIMEOUT_MS || 3000),
 });
 let stopping = false, active = false, socket, retry, heartbeat, ready = false, generation = 0, preflightPending = false;
+let sidecarDialog;
+const sidecarHelp = new SidecarHelp({
+  show: () => {
+    if (!active || stopping || sidecarDialog) return;
+    const dialog = spawn(errorBinary, ['sidecar'], { stdio: 'ignore' });
+    sidecarDialog = dialog;
+    const clear = () => { if (sidecarDialog === dialog) sidecarDialog = undefined; };
+    dialog.on('error', error => { clear(); console.error('SIDECAR-HELP:', error.message); });
+    dialog.on('exit', clear);
+  },
+  onError: reason => console.error('SIDECAR-HELP unavailable:', reason),
+});
 let receivedVideo = false, forwardedVideo = false;
 let startupProbe;
 const startupReplay = new StartupReplay({ idleMs: Number(process.env.MIRROR_STARTUP_IDLE_MS || 1000) });
@@ -72,6 +85,7 @@ const sessionDecoder = new Decoder(body => {
     }).catch(() => { if (session === generation) failSession('Tailscale setup required', 'tailscale'); });
   } else if (message.active === false && active) {
     displayEvents.setActive(false);
+    sidecarHelp.setActive(false);
     active = false;
     generation++;
     readiness.stop();
@@ -136,6 +150,7 @@ function connect() {
       if (ready) return; // Acknowledge rotation without restarting the session or heartbeat.
       ready = true;
       handshaken = true;
+      sidecarHelp.setActive(true);
       console.error('IPHONE-TRANSPORT', route.current === host ? 'primary' : 'Tailscale fallback');
       receiverReadiness.stop();
       readiness.start();
@@ -215,6 +230,8 @@ function disconnectPhone() {
   receiver.stdout.resume();
 }
 function stop() {
+  sidecarHelp.close();
+  sidecarDialog?.kill();
   networkMonitor.close();
   stopping = true; active = false;
   generation++;

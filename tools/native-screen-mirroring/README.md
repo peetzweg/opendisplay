@@ -46,6 +46,12 @@ You can also reopen the installer and click **Remove**.
 On the tested Mac, connecting the iPhone first and then the iPad fails with
 "Sidecar is not available while AirPlay Screen is active." The native Sidecar
 log reports `SidecarErrorDisplayAirPlayBusy` (-453).
+Newer source adds a **Connect iPad first** hint when that specific rejection is
+visible in the Mac's live Sidecar/Control Center log while the iPhone is connected.
+The hint gives the recovery steps below; it does not disconnect the phone or
+replace macOS's own error. If log access is unavailable, the existing connection
+continues normally. This extra hint has automated coverage; its real-device
+trigger still needs validation and it is not in the published 0.0.17 ZIP.
 In the controlled Control Center test, the iPhone stayed connected but the iPad
 could not start. Independent connection in either order is **not supported by
 this helper on the tested macOS build**; no startup-guard workaround is included.
