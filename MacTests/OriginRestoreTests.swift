@@ -38,6 +38,28 @@ final class OriginRestoreTests: XCTestCase {
         XCTAssertEqual(restore.tick(origin: dragged, now: t0 + 9), .report(dragged))
     }
 
+    /// #203: a WindowServer snap is system state. Adopting it must neither
+    /// re-apply every tick nor be saved once the window closes.
+    func testSnapIsAdoptedAndNeverReported() {
+        var restore = OriginRestore(target: saved)
+        let snapped = CGPoint(x: -424, y: -1_100)
+
+        XCTAssertEqual(restore.tick(origin: macDefault, now: t0), .apply(saved))
+        restore.settled(at: snapped)
+        XCTAssertEqual(restore.tick(origin: snapped, now: t0 + 2), .none)
+        XCTAssertEqual(restore.tick(origin: snapped, now: t0 + 10), .none)
+    }
+
+    /// A failed configuration leaves the display where macOS put it. That
+    /// spot is adopted, not saved over the device's placement.
+    func testFailedApplyIsNotReportedAfterWindow() {
+        var restore = OriginRestore(target: saved)
+
+        XCTAssertEqual(restore.tick(origin: macDefault, now: t0), .apply(saved))
+        restore.settled(at: macDefault)
+        XCTAssertEqual(restore.tick(origin: macDefault, now: t0 + 10), .none)
+    }
+
     func testDragAfterWindowIsReported() {
         var restore = OriginRestore(target: saved)
         XCTAssertEqual(restore.tick(origin: saved, now: t0), .none)
