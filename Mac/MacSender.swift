@@ -281,6 +281,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var captureDisplayID: CGDirectDisplayID = 0
     /// Only touched on `queue` (the SCK sample queue).
     private var captureSourceCheck = CaptureSourceCheck()
+    /// #391 re-attaches this session. If a fresh stream is misbound too,
+    /// restarting forever is worse than a wrong picture: stop checking.
+    private var wrongDisplayReattaches = 0
+    private let maxWrongDisplayReattaches = 3
     // ScreenCaptureKit and VideoToolbox finish work asynchronously. During a
     // rotation, an old capture callback or a late encoder completion must not
     // put a frame from the retired display onto this device's new socket.
@@ -2593,7 +2597,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// display's picture for a sustained stretch (#391).
     private func capturingAnotherDisplay(_ sampleBuffer: CMSampleBuffer) -> Bool {
         let displayID = captureDisplayID
-        guard displayID != 0,
+        guard mode == .extend, displayID != 0,
+              wrongDisplayReattaches < maxWrongDisplayReattaches,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
                 as? [[SCStreamFrameInfo: Any]],
               let info = attachments.first,
@@ -2602,8 +2607,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         else { return false }
         let expected = CGDisplayBounds(displayID)
         guard captureSourceCheck.frame(screenRect: screenRect, expected: expected) else { return false }
+        wrongDisplayReattaches += 1
         Log.info("capture of display \(displayID) is delivering \(screenRect), not its own \(expected)"
-            + " — re-attaching capture (#391)")
+            + " — re-attaching capture (#391, \(wrongDisplayReattaches)/\(maxWrongDisplayReattaches))")
+        if wrongDisplayReattaches == maxWrongDisplayReattaches {
+            Log.info("capture keeps landing on another display — no further checks this session (#391)")
+        }
         return true
     }
 
@@ -2612,7 +2621,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// the display correctly; the running stream is what went wrong.
     private func reattachCaptureToOwnDisplay() {
         guard !stopped, mode == .extend, let stream else { return }
-        invalidateCapturePipeline()
+        // The last frame is the other display's picture: never replay it.
+        invalidateCapturePipeline(discardingLastFrame: true)
         self.stream = nil
         stream.stopCapture { _ in }
         scheduleCaptureRecovery()
