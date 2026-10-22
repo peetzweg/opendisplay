@@ -6,7 +6,7 @@
 #   eval "$(linux/testbench/nested.sh --env)"   # in another shell, while it runs
 #
 # Everything destructive (kill -9, two senders, reconfigure under capture)
-# runs against this instance, never the real session. See SENDER-PLAN.md §4.1.
+# runs against this instance, never the real session.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"

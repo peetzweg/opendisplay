@@ -5,13 +5,13 @@ name: Linux release
 # release-please just created; the jobs below build the Linux artifacts from
 # that tag and attach them to the same GitHub release, next to
 # OpenDisplay.dmg and OpenDisplayReceiver.dmg, and append the Linux install
-# notes to its body. See linux/SENDER-PLAN.md §8.1 and RELEASING.md.
+# notes to its body. See RELEASING.md.
 #
 # The binaries link a minimal static FFmpeg and x264 built by
 # linux/packaging/ffmpeg/build-static.sh, so they run on any glibc distro
-# whatever its FFmpeg (SENDER-PLAN §3.5 option C). Pull requests touching that
-# script or this file, and manual runs, build and smoke-test without
-# releasing: only a workflow_call with a `tag` uploads anything.
+# whatever its FFmpeg. Pull requests touching that script or this file, and
+# manual runs, build and smoke-test without releasing: only a workflow_call
+# with a `tag` uploads anything.
 on:
   workflow_call:
     inputs:

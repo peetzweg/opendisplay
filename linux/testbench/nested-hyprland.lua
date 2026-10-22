@@ -1,4 +1,4 @@
--- Sacrificial Hyprland for od-sender tests (linux/SENDER-PLAN.md §4.1).
+-- Sacrificial Hyprland for od-sender tests.
 -- Runs as a window inside the real session; no Omarchy includes, no
 -- autostart, permissions off. Started by nested.sh.
 

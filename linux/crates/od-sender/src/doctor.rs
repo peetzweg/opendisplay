@@ -1,5 +1,5 @@
-//! `od-sender doctor`: what the sender would use on this desktop and why
-//! (SENDER-PLAN §3.3). Read-only: it creates no output and takes no lock.
+//! `od-sender doctor`: what the sender would use on this desktop and why.
+//! Read-only: it creates no output and takes no lock.
 
 use std::path::{Path, PathBuf};
 

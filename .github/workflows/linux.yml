@@ -96,7 +96,7 @@ jobs:
         run: cargo build --locked --workspace --release
 
   # The AUR package, built the way an Arch/Omarchy user's AUR helper builds it
-  # (SENDER-PLAN §4.3 row 1, step 8), from this checkout instead of the tag.
+  # from this checkout instead of the tag.
   # Arch rather than Ubuntu: it is the package's target, and its sway (>= 1.10,
   # ext-image-copy-capture) hosts the headless smoke test below. x86_64 only:
   # archlinux:latest has no arm64 image.
@@ -178,7 +178,7 @@ jobs:
             timeout 180 linux/testbench/receiver-smoke.sh /usr/bin/od-sender \
             "$GITHUB_WORKSPACE/linux/target/release/od-receiver" "$RUNNER_TEMP/receiver-smoke"
 
-      # The NixOS kiosk shape (PLAN.md M5): cage runs od-receiver as its only
+      # The NixOS kiosk shape: cage runs od-receiver as its only
       # application; od-fake-sender streams into it.
       - name: Receiver kiosk smoke (cage)
         run: |
@@ -202,14 +202,14 @@ jobs:
             ${{ runner.temp }}/cage-smoke
           if-no-files-found: ignore
 
-  # The KDE backend on a headless KWin (SENDER-PLAN §4.3 KWin row):
+  # The KDE backend on a headless KWin:
   # zkde_screencast virtual outputs, PipeWire frames, fake input, a stream
   # into od-receiver --sink none. KWin's virtual backend composites with
   # OpenGL only on a DRM render node; hosted runners have no GPU, so the vgem
   # module provides one for Mesa's software renderer. Some runner kernels ship
   # no vgem: then the smoke is skipped and this job passes WITHOUT coverage;
   # the step summary says so and `kde coverage` below turns red (it is not
-  # required, so it does not block). SENDER-PLAN §4.3.
+  # required, so it does not block).
   kde-smoke:
     name: kde smoke (x86_64)
     runs-on: ubuntu-24.04

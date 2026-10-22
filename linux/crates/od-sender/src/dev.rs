@@ -126,7 +126,7 @@ pub enum Dev {
     },
     /// Through the detected backend: open (or adopt) a display, capture and
     /// encode `--frames` frames while moving the pointer over it, scroll
-    /// once, tear down. Exits non-zero on any failed step (SENDER-PLAN §4.3).
+    /// once, tear down. Exits non-zero on any failed step.
     Smoke {
         /// Display size, WxH.
         #[arg(long, default_value = "640x480")]

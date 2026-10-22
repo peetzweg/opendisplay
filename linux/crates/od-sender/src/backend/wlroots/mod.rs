@@ -1,6 +1,6 @@
 //! Sway (wlroots): headless outputs made over Sway IPC, sized through
 //! `zwlr_output_manager_v1`, captured and driven through the shared
-//! `wayland/*` protocols (SENDER-PLAN §4.3 findings). Other wlroots
+//! `wayland/*` protocols. Other wlroots
 //! compositors lack a way to create outputs; they get adopt mode.
 
 pub mod display;

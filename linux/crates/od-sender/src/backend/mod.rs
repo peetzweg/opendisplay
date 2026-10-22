@@ -1,5 +1,5 @@
 //! What differs per compositor: creating a virtual output, getting its
-//! frames, and injecting input (SENDER-PLAN §3.2). A backend is chosen once at
+//! frames, and injecting input. A backend is chosen once at
 //! startup by [`detect`]; the session loop only sees the traits below.
 
 pub mod adopt;
@@ -126,7 +126,7 @@ pub fn place(position: Position, w: i32, h: i32, others: &[LayoutRect]) -> (i32,
     }
 }
 
-/// What the session asks for, derived from `hello` (SENDER-PLAN §3.6).
+/// What the session asks for, derived from `hello`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplaySpec {
     /// `od-<6 chars of hello.id>`; also the lock key.
@@ -398,7 +398,7 @@ pub type DriftProbe = Box<dyn FnOnce() -> Option<String> + Send>;
 pub trait InputSink: Send {
     fn touch(&mut self, t: &Touch);
     fn scroll(&mut self, s: &Scroll);
-    /// Pointer mapping lands with SENDER-PLAN §5 step 3; dropped until then.
+    /// Pencil events are not mapped to the pointer yet; dropped.
     fn pencil(&mut self, _p: &Pencil) {}
 }
 

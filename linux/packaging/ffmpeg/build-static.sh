@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the minimal static FFmpeg (plus static x264) that release tarballs of
 # od-sender link, so the binary needs nothing beyond glibc, libgcc and
-# libstdc++ and runs on any distribution regardless of its FFmpeg soname
-# (SENDER-PLAN §3.5 option C). The AUR package keeps linking the system FFmpeg.
+# libstdc++ and runs on any distribution regardless of its FFmpeg soname.
+# The AUR package keeps linking the system FFmpeg.
 #
 #   linux/packaging/ffmpeg/build-static.sh <prefix>
 #   FFMPEG_DIR=<prefix> RUSTFLAGS="$(cat <prefix>/rustflags)" \

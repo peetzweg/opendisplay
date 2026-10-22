@@ -1,4 +1,4 @@
-//! Desktop policy (SENDER-PLAN.md §3.6): turns a receiver's `hello` into the
+//! Desktop policy: turns a receiver's `hello` into the
 //! output to create and the stream to send, the way `Mac/DesktopPolicy.swift`
 //! and `Mac/StreamConfiguration.swift` do, so the Linux sender makes the same
 //! choices as the Mac sender. Pure: no Wayland, no I/O, no clocks.
@@ -29,7 +29,7 @@ const MAX_PIXELS_PER_AXIS: u32 = 8_192;
 /// The legacy rate when the receiver announces none (§6.1).
 const DEFAULT_FPS: u32 = 60;
 
-/// How the output scale is chosen (SENDER-PLAN.md §8.3, undecided).
+/// How the output scale is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ScalePolicy {
     /// The receiver's announced scale verbatim on an output of its pixels:

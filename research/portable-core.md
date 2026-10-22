@@ -1,6 +1,6 @@
 # Portable core: Rust everywhere, or a common C core?
 
-Research note, 2026-10-20. Inputs: `linux/PLAN.md` (§3.1), `linux/SENDER-PLAN.md`,
+Research note, 2026-10-20. Inputs: the Linux plan documents of the time,
 the `linux/` crates, issues #375, #241, #284, #15, #65, #66, #159, and the
 external sources linked inline. Legend: **[V]** verified against a linked
 source or the repo; **[I]** my inference; **[U]** unverified, needs the spike.
@@ -34,7 +34,7 @@ so they must.
 | Building for 10.12 from a modern Mac | Default deployment target *is* 10.12 on x86_64; set `MACOSX_DEPLOYMENT_TARGET=10.12` for the C/ObjC shim too, because `cc`/clang otherwise default to the SDK version and the link warns and takes the higher one [V: [rust#136113](https://github.com/rust-lang/rust/issues/136113)]. Rosetta runs the result on Apple Silicon for smoke tests [V: apple-darwin page]. | Same flag; Xcode GUI warns below 10.13 but compiles [V: forum reports in [Eclectic Light](https://eclecticlight.co/2024/07/25/will-updated-apps-still-run-on-older-macos/)]. |
 | Cross-compile from Linux | Supported "using Clang, may require the macOS SDK" (`SDKROOT`); osxcross recipes exist [V: apple-darwin page]. Nice-to-have, not required: the release build can run on a GitHub macOS runner. | osxcross. |
 | Windows | `x86_64-pc-windows-msvc` and `-gnu` Tier 1, **Windows 10+** since 1.78 (May 2024); Win7 only as Tier 3 `*-win7-windows-msvc` [V: [platform-support](https://doc.rust-lang.org/nightly/rustc/platform-support.html), [Win7 blog](https://blog.rust-lang.org/2024/02/26/Windows-7.html)]. `+crt-static` gives a self-contained exe on MSVC [V: [linkage](https://doc.rust-lang.org/reference/linkage.html)]. | MSVC/MinGW; the existing C++ PoC already ships a single self-contained exe [V: [opendisplay-win README](https://github.com/martinhoess/opendisplay-win)]. |
-| Static linking on Linux | Pure-Rust → musl works; with FFmpeg/GStreamer we build natively per arch and link a minimal static FFmpeg + x264 (`linux-release.yml`, glibc ≥ 2.38 tarballs) [V: repo, PLAN §2.5]. | Same linking story; no advantage. |
+| Static linking on Linux | Pure-Rust → musl works; with FFmpeg/GStreamer we build natively per arch and link a minimal static FFmpeg + x264 (`linux-release.yml`, glibc ≥ 2.38 tarballs) [V: repo]. | Same linking story; no advantage. |
 
 Windows 10+ is the floor for IddCx anyway (IddCx 1.0 = Win10 1607; 1.4 = 19H2; 1.5 = 20H1+) [V: [IddCx versions](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/iddcx-versions)], so Rust's Win10 floor costs nothing.
 

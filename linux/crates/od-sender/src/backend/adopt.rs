@@ -1,4 +1,4 @@
-//! Adopt mode (`--output <name>`, SENDER-PLAN §3.7): capture and inject on an
+//! Adopt mode (`--output <name>`): capture and inject on an
 //! output that already exists. Nothing is created, sized or removed, so it
 //! works on any compositor with `ext-image-copy-capture` and
 //! `zwlr_virtual_pointer`. The stream takes the output's size, not the

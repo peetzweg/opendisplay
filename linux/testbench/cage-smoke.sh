@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # od-receiver as a kiosk: cage (headless) runs it as its only application,
-# as the NixOS kiosk module does (PLAN.md M5); od-fake-sender streams into
+# as the NixOS kiosk module does; od-fake-sender streams into
 # it. No GPU, own XDG_RUNTIME_DIR/XDG_STATE_HOME, no system bus.
 #
 #   linux/testbench/cage-smoke.sh <od-receiver> <od-fake-sender> <clip.h264> [<logdir>]

@@ -194,7 +194,7 @@ pub fn restore_origin(gone: &str) -> Result<()> {
 }
 
 /// `od-sender clean`: undo the shift a sender killed during a left/up
-/// placement left behind (SENDER-PLAN §8.17). Our own outputs vanish with
+/// placement left behind. Our own outputs vanish with
 /// their sender; only the user's outputs can be offset. Returns the shift.
 pub fn reset_origin() -> Result<Option<(i32, i32)>> {
     move_to_origin(session()?, |name| name.starts_with("Virtual-od-"))

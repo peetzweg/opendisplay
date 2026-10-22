@@ -23,7 +23,7 @@ latency, presentation, scaling, and visual-quality measurements.
 
 # Linux development (`linux/` workspace)
 
-The Rust workspace builds natively per architecture; see `linux/PLAN.md`.
+The Rust workspace builds natively per architecture; see `linux/README.md`.
 
 - Omarchy build/runtime packages: `pkgconf gst-libav gst-plugins-good
   gst-plugins-bad gst-plugin-va gst-plugin-pipewire libva-utils` (headers ship

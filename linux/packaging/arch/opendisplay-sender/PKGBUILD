@@ -3,7 +3,7 @@
 # AUR source package for od-sender, built from an OpenDisplay `vX.Y.Z`
 # release tag (one version for all platforms; see RELEASING.md).
 # It links the system FFmpeg, so it survives FFmpeg soname bumps by being
-# rebuilt (rebuild-detector flags it); see linux/SENDER-PLAN.md §3.5.
+# rebuilt (rebuild-detector flags it).
 #
 #   ./bump.sh 1.26.0            new release: pkgver, sha256sums, .SRCINFO
 #   ./from-checkout.sh          build this checkout's HEAD instead of the tag

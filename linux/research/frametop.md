@@ -33,7 +33,7 @@ Research 2026-10-20, read-only. Sources: [Frametop/frametop](https://github.com/
   - It uses the V4L2 *stateful* API. Its outputs are `Q08C` (NV12 UBWC; no extra delay), linear NV12 (+2 frames of delay), and NV21. Its "RGBA" outputs are really 10-bit UBWC YUV.
   - Budget: 7.78 M macroblocks/s, which is one 8K60 stream. Steam Link VR shares the decoder.
   - **No VA-API** on the Frame.
-  - FFmpeg `v4l2m2m` hasn't been tried for decode (its encoder segfaults). **[inferred]** Whether GStreamer's `v4l2h264dec` works on this downstream driver is unknown. `decodebin3` may fall back to `avdec_h264`, which is fine for 1–2 screens per PLAN.md §2.4.
+  - FFmpeg `v4l2m2m` hasn't been tried for decode (its encoder segfaults). **[inferred]** Whether GStreamer's `v4l2h264dec` works on this downstream driver is unknown. `decodebin3` may fall back to `avdec_h264`, which is fine for 1–2 screens on the CPU.
 - **SteamVR imports NV12 dmabufs but doesn't convert them** (red=Cr, green=Y, blue=Cb). You need one GLES pass:
   1. Sample the decoder buffer as `GL_TEXTURE_EXTERNAL_OES` with `EGL_YUV_COLOR_SPACE_HINT_EXT` / `EGL_SAMPLE_RANGE_HINT_EXT`.
   2. Draw into a ring of 3 RGBA buffers using the modifiers from `GetDmabufModifiers` (UBWC). SteamVR imports each of these once.
@@ -68,7 +68,7 @@ Research 2026-10-20, read-only. Sources: [Frametop/frametop](https://github.com/
 | | Frametop Remote Displays | OpenDisplay |
 |---|---|---|
 | Host software | Windows/Linux need Vibepollo (Frametop's patched fork), macOS needs Sunshine | The user's own sender |
-| Virtual displays | Vibepollo's Linux virtual displays are **x86_64 Arch/CachyOS + KDE + its own DKMS module only**. No Hyprland, no aarch64/Asahi. | Hyprland `output create headless` exists and the sender builds it **[inferred from PLAN.md]** |
+| Virtual displays | Vibepollo's Linux virtual displays are **x86_64 Arch/CachyOS + KDE + its own DKMS module only**. No Hyprland, no aarch64/Asahi. | Hyprland `output create headless` exists and the sender builds it |
 | macOS | One display only | OpenDisplay already has a Mac sender |
 | Cursor | Baked into the video, so it lags by a round trip | Separate cursor channel (§6.2/6.3) |
 | Input needs | Needs VR keyboard/mouse | The laptop's own keyboard/trackpad drive the extended desktop |

@@ -1,5 +1,5 @@
 //! Wayland-protocol pieces shared by every backend that is a Wayland
-//! compositor speaking the common protocols (SENDER-PLAN §3.1).
+//! compositor speaking the common protocols.
 
 pub mod capture;
 pub mod cursor;

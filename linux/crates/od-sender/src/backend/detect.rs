@@ -1,4 +1,4 @@
-//! Startup probing (SENDER-PLAN §3.3): pick a backend, or refuse with a
+//! Startup probing: pick a backend, or refuse with a
 //! message that names the gap. [`decide`] is pure over an [`Environment`] and
 //! a registry probe so the walk is unit-tested; `doctor` prints the same walk.
 

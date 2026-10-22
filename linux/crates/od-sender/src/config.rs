@@ -1,4 +1,4 @@
-//! `$XDG_CONFIG_HOME/opendisplay/sender.toml` (SENDER-PLAN §5 step 7):
+//! `$XDG_CONFIG_HOME/opendisplay/sender.toml`:
 //! defaults for `run`'s options, plus per-receiver overrides. Keys are the
 //! long option names. Precedence, highest first: command line, the
 //! receiver's `[receiver."<id or name>"]` table, the top level, built-in
