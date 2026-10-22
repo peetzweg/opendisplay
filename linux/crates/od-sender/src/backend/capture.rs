@@ -3,7 +3,7 @@
 //!
 //! Hyprland before 0.57 dereferences a freed monitor when an
 //! ext-image-copy-capture frame request arrives for an output that was just
-//! removed (research/hyprland-screenshare-transform.md); a client cannot
+//! removed (research/linux/hyprland-screenshare-transform.md); a client cannot
 //! close that race. Its wlr-screencopy path checks the monitor at every step
 //! (nested 0.56.2: 40/40 removals under full-rate capture survived, against a
 //! crash at the 7th with ext), so `auto` picks wlr-screencopy there.

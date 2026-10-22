@@ -2,7 +2,7 @@
 
 Written 2026-10-20, before the device was on hand. **[verified]** marks what was
 run (on an aarch64 Asahi box, headless Sway/KWin); **[from frametop.md]** is
-from `linux/research/frametop.md`; everything else is a plan or an
+from `research/linux/frametop.md`; everything else is a plan or an
 expectation to check on the Frame.
 
 ## 1. What the Frame gives a receiver

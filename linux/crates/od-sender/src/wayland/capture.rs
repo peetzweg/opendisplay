@@ -490,9 +490,10 @@ pub fn capture_shm(
                 }
             };
             // Hyprland 0.56.2 segfaults on a create_frame for an output whose
-            // monitor is already gone (research/hyprland-screenshare-
-            // transform.md): read what the compositor sent without blocking,
-            // and never create a frame on a stopped session.
+            // monitor is already gone
+            // (research/linux/hyprland-screenshare-transform.md): read what
+            // the compositor sent without blocking, and never create a frame
+            // on a stopped session.
             dispatch_with_timeout(&conn, &mut queue, &mut st, Duration::ZERO)?;
             if !may_create_frame(&st.session, stop.load(Ordering::Relaxed)) {
                 recycler.release(index);
