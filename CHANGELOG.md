@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.26.0](https://github.com/peetzweg/opendisplay/compare/v1.25.0...v1.26.0) (2026-10-22)
+
+
+### Features
+
+* **linux:** Linux sender and receiver (beta) ([#298](https://github.com/peetzweg/opendisplay/issues/298)) ([195d823](https://github.com/peetzweg/opendisplay/commit/195d8233ab06f034ba7ce63db3479e591e465335))
+* **site:** Android receiver public beta ([#379](https://github.com/peetzweg/opendisplay/issues/379)) ([839c3ce](https://github.com/peetzweg/opendisplay/commit/839c3ce5b695e874d3aff3c9fc66239fa69b746b))
+* **site:** animated og:video splash ([#385](https://github.com/peetzweg/opendisplay/issues/385)) ([e2cc20d](https://github.com/peetzweg/opendisplay/commit/e2cc20d920e9ba4634d2168745e67611c7d79e66))
+* **site:** QR code for the Android beta ([#381](https://github.com/peetzweg/opendisplay/issues/381)) ([819e95d](https://github.com/peetzweg/opendisplay/commit/819e95dfcbb9ce6be7629fc3e8b396f1f37afb63))
+
 ## [1.25.0](https://github.com/peetzweg/opendisplay/compare/v1.24.0...v1.25.0) (2026-10-01)
 
 
