@@ -318,3 +318,46 @@ final class VirtualDisplay {
         Log.info("virtual display \(id) was in a mirror set — detached to extend (result \(err.rawValue))")
     }
 }
+
+/// Unit number collisions between displays (#391).
+///
+/// macOS numbers a new display from the count of online displays instead of
+/// reusing the freed slot. So when the first of two virtual displays is
+/// rebuilt while the second survives, the rebuilt one gets the survivor's
+/// unit number. Two displays sharing a unit get crossed: a stream on the new
+/// display delivers the survivor's picture (aspect-fit into its own size)
+/// and the survivor's mode list stops matching its mode. Unit numbers are
+/// never renumbered once assigned, so the only way back to unique numbers is
+/// to recreate the displays in order.
+enum DisplayUnits {
+    /// The other display already holding `id`'s unit number, once `id` is
+    /// online (its unit reads as `UInt32.max` for a moment after creation).
+    static func clash(for id: CGDirectDisplayID) async -> (unit: UInt32, other: CGDirectDisplayID)? {
+        var unit = CGDisplayUnitNumber(id)
+        for _ in 0..<40 where unit == UInt32.max {
+            try? await Task.sleep(for: .milliseconds(50))
+            unit = CGDisplayUnitNumber(id)
+        }
+        guard unit != UInt32.max else { return nil }
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var list = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &list, &count)
+        guard let other = list.prefix(Int(count)).first(where: { $0 != id && CGDisplayUnitNumber($0) == unit })
+        else { return nil }
+        return (unit, other)
+    }
+
+    /// Wait (up to 3 s) until released displays have left the online list,
+    /// so a recreated display is numbered without them.
+    static func waitUntilOffline(_ ids: [CGDirectDisplayID]) async {
+        for _ in 0..<60 {
+            var count: UInt32 = 0
+            CGGetOnlineDisplayList(0, nil, &count)
+            var list = [CGDirectDisplayID](repeating: 0, count: Int(count))
+            CGGetOnlineDisplayList(count, &list, &count)
+            if !ids.contains(where: list.prefix(Int(count)).contains) { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+}
