@@ -123,20 +123,10 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 @media (max-width: 720px) {
   .sender-download { grid-template-columns: minmax(0, 440px); gap: 48px; }
 }
-.receiver-downloads { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: stretch; }
+.receiver-downloads { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; row-gap: 64px; }
 .download-option { text-align: center; }
-.receiver-visual-placeholder { display: none; }
-/* Four receiver cards (iOS, macOS, Android, Linux) need more room than two
-   did: two per row from 900px, four from 1200px, stacked below 900px. */
-@media (min-width: 900px) and (max-width: 1199px) {
-  .receiver-downloads { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 56px; }
-}
-@media (min-width: 900px) {
-  .receiver-downloads .download-option { display: grid;
-    grid-template-rows: 166px auto auto var(--download-control-height) 1fr; align-items: start; }
-  .receiver-visual-placeholder { display: block; }
-  .receiver-copy, .receiver-downloads .sub { align-self: end; }
-}
+/* Two receivers per row: iOS beside Android (both with a QR code), macOS
+   beside Linux; stacked below 900px. */
 @media (max-width: 899px) {
   .receiver-downloads { grid-template-columns: 1fr; gap: 48px; }
 }

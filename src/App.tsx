@@ -16,7 +16,6 @@ const ANDROID_BETA_TESTER_URL = "https://play.google.com/apps/testing/com.peetzw
 // once AUR registration reopens). Docs: /docs/linux/ (content/docs/linux/,
 // prerendered by tools/docs.mjs); linux/README.md mirrors them for GitHub.
 const LINUX_DOCS_URL = "docs/linux/"
-const LINUX_ARCH_URL = "docs/linux/install/#arch-omarchy-build-the-package"
 const LINUX_RECEIVER_URL = "docs/linux/receiver/"
 const LINUX_RELEASES_URL = "https://github.com/peetzweg/opendisplay/releases/latest"
 
@@ -243,32 +242,13 @@ export default function App() {
               </div>
               <div className="download-option">
                 <div className="platform">Linux <span className="beta-tag">Beta</span></div>
-                <p className="dl-sub">
-                  The OpenDisplay Linux sender adds a virtual display to your desktop and shows it on
-                  your iPhone, iPad, Mac or Android device.
-                </p>
+                <p className="dl-sub">Extends a Wayland desktop onto any receiver.</p>
                 <a className="btn primary" href={LINUX_DOCS_URL}>
                   Get started
                 </a>
-                <p className="note brew">
-                  Prebuilt x86_64 and aarch64 tarballs with an installer, for any distribution. On
-                  Arch / Omarchy you can build the package from the repository with makepkg.
-                </p>
                 <p className="note">
-                  <a href={LINUX_ARCH_URL}>Arch / Omarchy: build the package</a>
-                </p>
-                <p className="note">
-                  Tested on Omarchy / Hyprland&nbsp;0.56 on Apple silicon (Asahi); x86_64 expected
-                  to work. Experimental: Sway&nbsp;1.10+, KDE&nbsp;Plasma&nbsp;6.8+ (older
-                  Plasma&nbsp;6 through the packaged desktop entry), GNOME&nbsp;50+.
-                </p>
-                <p className="note">
-                  CPU-encoded on Linux for now (VA-API planned). The stream is not encrypted; use a
-                  network you trust. An AUR package follows once AUR registration reopens.
-                </p>
-                <p className="note">
-                  <a href={LINUX_DOCS_URL}>Setup &amp; known issues</a> ·{" "}
-                  <a href={LINUX_RELEASES_URL}>Download from the latest release ↗</a>
+                  Hyprland tested; Sway, KDE Plasma and GNOME experimental.{" "}
+                  <a href={LINUX_RELEASES_URL}>Downloads ↗</a>
                 </p>
               </div>
             </div>
@@ -295,25 +275,6 @@ export default function App() {
                 <p className="sub">
                   Want early builds? <span className="no-break"><a id="testflight" href="https://testflight.apple.com/join/3NYaY11c">Join the TestFlight beta</a></span>, or <span className="no-break"><a href="https://github.com/peetzweg/opendisplay#quick-start">compile from source ↗</a></span>.
                 </p>
-              </div>
-              <div className="download-option">
-                <div className="receiver-visual-placeholder" aria-hidden="true" />
-                <div className="platform">macOS</div>
-                <p className="dl-sub">Turns an older Mac into a second display.</p>
-                <a className="btn primary" href="https://github.com/peetzweg/opendisplay/releases/latest/download/OpenDisplayReceiver.dmg">
-                  Download
-                </a>
-                <div className="receiver-copy">
-                  <p className="note brew">
-                    Or with Homebrew: <code>brew install --cask opendisplay-receiver</code>
-                  </p>
-                  <p className="note">
-                    Got a spare <em>Mac</em> to use as the display? Install OpenDisplay Receiver on it instead of the iOS app — runs on macOS&nbsp;12+, so older Macs qualify.
-                  </p>
-                  <p className="note">
-                    <a href="https://github.com/peetzweg/opendisplay/releases">Browse all releases ↗</a>
-                  </p>
-                </div>
               </div>
               <div className="download-option">
                 <div className="app-store-qr">
@@ -347,20 +308,32 @@ export default function App() {
                 </div>
               </div>
               <div className="download-option">
-                <div className="receiver-visual-placeholder" aria-hidden="true" />
+                <div className="platform">macOS</div>
+                <p className="dl-sub">Turns an older Mac into a second display.</p>
+                <a className="btn primary" href="https://github.com/peetzweg/opendisplay/releases/latest/download/OpenDisplayReceiver.dmg">
+                  Download
+                </a>
+                <div className="receiver-copy">
+                  <p className="note brew">
+                    Or with Homebrew: <code>brew install --cask opendisplay-receiver</code>
+                  </p>
+                  <p className="note">
+                    Got a spare <em>Mac</em> to use as the display? Install OpenDisplay Receiver on it instead of the iOS app — runs on macOS&nbsp;12+, so older Macs qualify.
+                  </p>
+                  <p className="note">
+                    <a href="https://github.com/peetzweg/opendisplay/releases">Browse all releases ↗</a>
+                  </p>
+                </div>
+              </div>
+              <div className="download-option">
                 <div className="platform">Linux <span className="beta-tag">Beta</span></div>
-                <p className="dl-sub">
-                  Turns a Linux machine's screen into an extra display for a Mac or a Linux desktop.
-                </p>
+                <p className="dl-sub">Turns a Linux machine into an extra display.</p>
                 <a className="btn primary" href={LINUX_RECEIVER_URL}>
                   Get started
                 </a>
                 <div className="receiver-copy">
                   <p className="note">
-                    Tested windowed on Asahi Linux / Hyprland at 24&nbsp;ms end to end; other
-                    desktops expected to work. Install the Flatpak bundle from the{" "}
-                    <a href={LINUX_RELEASES_URL}>latest release ↗</a> (any distribution), or build
-                    the package on Arch / Omarchy.
+                    Flatpak for any distribution. <a href={LINUX_RELEASES_URL}>Downloads ↗</a>
                   </p>
                 </div>
               </div>
