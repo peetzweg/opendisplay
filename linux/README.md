@@ -408,7 +408,9 @@ lists the rest. Problems and reports go to
 
 ## Development
 
-The Rust workspace in this directory also holds the protocol crates. See
-[PLAN.md](PLAN.md) for the overall plan and [SENDER-PLAN.md](SENDER-PLAN.md)
-for the sender's road to this beta, including how to test without risking
-your own Hyprland session.
+The Rust workspace in this directory also holds the protocol crates
+(`opendisplay-proto`, `opendisplay-session`, see [PROTOCOL.md](../PROTOCOL.md))
+and `od-fake-sender`, which replays a clip into a receiver. Test sender
+changes that create or remove outputs on a nested Hyprland
+(`testbench/nested.sh`), never on your own session; `testbench/` also holds
+the headless Sway, KDE Plasma, GNOME and receiver smoke tests that CI runs.
