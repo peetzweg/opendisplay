@@ -29,15 +29,33 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.rp.outputs.release_created }}
-      tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || steps.rp.outputs.tag_name }}
+      release_created: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.rp.outputs.release_created || steps.rp2.outputs.release_created || steps.rp3.outputs.release_created }}
+      tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || steps.rp.outputs.tag_name || steps.rp2.outputs.tag_name || steps.rp3.outputs.tag_name }}
     steps:
       # Manifest mode (release-please-config.json, .release-please-manifest.json)
       # only to bump linux/Cargo.toml and linux/Cargo.lock with the app
       # version: one `simple` package at the root, tags stay `vX.Y.Z`.
+      #
+      # GitHub's GraphQL API intermittently answers release-please's commit
+      # query with "Something went wrong while executing your query" (seen
+      # after the large #298 merge). Retry twice; a release that was created
+      # before a failure is picked up as already tagged, so its builds would
+      # be skipped: rebuild it with the workflow_dispatch entry below.
       - uses: googleapis/release-please-action@v5
         if: github.event_name == 'push'
         id: rp
+        continue-on-error: true
+      - if: github.event_name == 'push' && steps.rp.outcome == 'failure'
+        run: sleep 30
+      - uses: googleapis/release-please-action@v5
+        if: github.event_name == 'push' && steps.rp.outcome == 'failure'
+        id: rp2
+        continue-on-error: true
+      - if: github.event_name == 'push' && steps.rp2.outcome == 'failure'
+        run: sleep 60
+      - uses: googleapis/release-please-action@v5
+        if: github.event_name == 'push' && steps.rp2.outcome == 'failure'
+        id: rp3
       - name: Check the release to rebuild exists
         if: github.event_name == 'workflow_dispatch'
         env:
