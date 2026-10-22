@@ -279,6 +279,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Only touched on `cursorQueue`.
     private var cursorSessionGeneration: UInt64 = 0
     private var captureDisplayID: CGDirectDisplayID = 0
+    /// Only touched on `queue` (the SCK sample queue).
+    private var captureSourceCheck = CaptureSourceCheck()
     // ScreenCaptureKit and VideoToolbox finish work asynchronously. During a
     // rotation, an old capture callback or a late encoder completion must not
     // put a frame from the retired display onto this device's new socket.
@@ -2567,6 +2569,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let generation = captureGenerationNow
 
+        if capturingAnotherDisplay(sampleBuffer) {
+            reattachCaptureToOwnDisplay()
+            return
+        }
+
         lastPixelBuffer = pixelBuffer
         lastCaptureAt = Date()
         capFrames += 1
@@ -2580,6 +2587,35 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if shouldDropFrame(reason: "pending_sends") { return }   // TCP send queue full
 
         encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), generation: generation)
+    }
+
+    /// On `queue`: whether this stream has been delivering some other
+    /// display's picture for a sustained stretch (#391).
+    private func capturingAnotherDisplay(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        let displayID = captureDisplayID
+        guard displayID != 0,
+              let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+                as? [[SCStreamFrameInfo: Any]],
+              let info = attachments.first,
+              let rectDictionary = info[.screenRect] as? NSDictionary,
+              let screenRect = CGRect(dictionaryRepresentation: rectDictionary)
+        else { return false }
+        let expected = CGDisplayBounds(displayID)
+        guard captureSourceCheck.frame(screenRect: screenRect, expected: expected) else { return false }
+        Log.info("capture of display \(displayID) is delivering \(screenRect), not its own \(expected)"
+            + " — re-attaching capture (#391)")
+        return true
+    }
+
+    /// On `queue`: drop the misbound stream and let the recovery loop attach
+    /// a fresh one to our display. A new SCShareableContent lookup resolves
+    /// the display correctly; the running stream is what went wrong.
+    private func reattachCaptureToOwnDisplay() {
+        guard !stopped, mode == .extend, let stream else { return }
+        invalidateCapturePipeline()
+        self.stream = nil
+        stream.stopCapture { _ in }
+        scheduleCaptureRecovery()
     }
 
     private func isPipelineBackedUp() -> Bool {
@@ -3092,6 +3128,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         frameRateLimiter = FrameRateLimiter(framesPerSecond: 60)
         pipelineLock.unlock()
         captureDisplayID = 0
+        queue.async { self.captureSourceCheck = CaptureSourceCheck() }
         if discardingLastFrame {
             lastPixelBuffer = nil
             lastCaptureAt = .distantPast
