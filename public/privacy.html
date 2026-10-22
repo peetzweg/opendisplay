@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Privacy — OpenDisplay</title>
-  <meta name="description" content="OpenDisplay's privacy policy: no data collection, no analytics, no accounts, no servers. Your screen content travels directly between your Mac and your device, over your cable or your local network." />
+  <meta name="description" content="OpenDisplay's privacy policy: no data collection, no analytics, no accounts, no servers. Your screen content travels directly between your Mac or Linux computer and your device, over your cable or your local network." />
   <link rel="icon" type="image/png" href="icon-256.png" />
   <link rel="canonical" href="https://opendisplay.app/privacy.html" />
   <meta name="theme-color" content="#ffffff" />
@@ -82,7 +82,7 @@
   <div class="wrap">
     <p class="eyebrow">Privacy policy</p>
     <h1>No accounts. No analytics. No servers.</h1>
-    <p class="updated">Effective October 17, 2026 · applies to the OpenDisplay Mac, iOS and Android apps and this website</p>
+    <p class="updated">Effective October 20, 2026 · applies to the OpenDisplay Mac, iOS and Android apps, the OpenDisplay Linux sender, and this website</p>
   </div>
 </header>
 
@@ -92,8 +92,8 @@
     <div class="tldr">
       <p>OpenDisplay collects <strong>no data</strong>. There are no accounts, no analytics,
       no telemetry, no crash reporting, no ads, and no servers — ours or anyone else's.
-      Your screen content travels directly from your Mac to your device over your USB
-      cable or your local network, and nowhere else. Because the source code is public,
+      Your screen content travels directly from your Mac or Linux computer to your device
+      over your USB cable or your local network, and nowhere else. Because the source code is public,
       every claim on this page is verifiable.</p>
     </div>
 
@@ -108,7 +108,11 @@
       <li><strong>Over WiFi</strong>, the video travels across your own local network
       directly between the two devices, discovered via Bonjour.</li>
     </ul>
-    <p>In both cases the connection is peer-to-peer: no relay, no cloud, no third
+    <p>The <strong>OpenDisplay Linux sender</strong> (<code>od-sender</code>, in beta) does
+    the same from a Linux desktop: it asks your desktop to add a virtual display,
+    captures it, encodes it as video, and streams it over your local network to the
+    device, which it finds via Bonjour/mDNS. It has no USB mode.</p>
+    <p>In every case the connection is peer-to-peer: no relay, no cloud, no third
     party. Nothing is recorded or stored — frames are decoded, displayed, and
     discarded. Touch and scroll input travels the same direct path in the other
     direction.</p>
@@ -127,6 +131,15 @@
           USB and WiFi. It is generated on the device, has no relation to your
           identity or hardware identifiers, and is only ever sent to Macs you
           connect to.</td></tr>
+      <tr><td>Linux sender: settings file (<code>~/.config/opendisplay/sender.toml</code>)</td>
+          <td>Your computer, locally</td>
+          <td>Only if you write one; the sender reads it and never changes it.</td></tr>
+      <tr><td>Linux sender: lock files (<code>$XDG_RUNTIME_DIR/opendisplay</code>)</td>
+          <td>Your computer, in memory</td>
+          <td>Keep two senders off the same virtual display, and let
+          <code>od-sender clean</code> remove one a crashed sender left behind. They
+          hold a process id and, on Sway, the virtual display's name, and vanish at
+          logout.</td></tr>
       <tr><td>Diagnostic log files</td>
           <td>Mac (<code>/tmp</code>) / device (app container), locally</td>
           <td>Debugging. Never uploaded — they leave your device only if you choose
@@ -146,6 +159,12 @@
       <tr><td>Local Network (Mac and device)</td>
           <td>For WiFi discovery and streaming on your own network. Not needed in
           USB mode.</td></tr>
+      <tr><td>Desktop access (Linux sender)</td>
+          <td>To add a virtual display, capture it, and turn taps and scrolls into
+          pointer input, through your desktop's own interfaces. Linux shows no
+          system prompt for this; some desktops ask first or need a setting, which the
+          <a href="https://github.com/peetzweg/opendisplay/blob/main/linux/README.md">Linux
+          README</a> describes.</td></tr>
       <tr><td>Network access (Android)</td>
           <td>Android grants these at install, without a prompt: network and WiFi
           access to advertise the device on your local network and receive the
@@ -160,7 +179,8 @@
       currently travels <strong>unencrypted across your local network</strong> —
       someone with access to the same network could in principle observe the video
       stream. On a trusted home or office network this is rarely a concern, but on
-      shared or public WiFi we recommend USB mode. Encrypted WiFi transport with
+      shared or public WiFi we recommend USB mode. The Linux sender always streams
+      over the network, so use it only on a network you trust. Encrypted WiFi transport with
       device pairing is on the roadmap
       (<a href="https://github.com/peetzweg/opendisplay/issues/16">issue&nbsp;#16</a>).
       A privacy page that didn't tell you this wouldn't be worth linking to.</p>

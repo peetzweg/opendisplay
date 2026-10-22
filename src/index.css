@@ -119,12 +119,18 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 .download-role { font-size: clamp(2rem, 4vw, 2.7rem); }
 .download-group-intro { color: var(--muted); font-size: 0.98rem; margin-top: 8px; }
 .download-options { display: grid; gap: 36px; margin-top: 28px; }
-.sender-download { justify-content: center; grid-template-columns: minmax(0, 440px); }
-.receiver-downloads { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; }
+.sender-download { justify-content: center; grid-template-columns: repeat(2, minmax(0, 440px)); }
+@media (max-width: 720px) {
+  .sender-download { grid-template-columns: minmax(0, 440px); gap: 48px; }
+}
+.receiver-downloads { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: stretch; }
 .download-option { text-align: center; }
 .receiver-visual-placeholder { display: none; }
-/* Three receiver cards (iOS, macOS, Android) need more room than two did, so
-   they stack below 900px instead of 720px. */
+/* Four receiver cards (iOS, macOS, Android, Linux) need more room than two
+   did: two per row from 900px, four from 1200px, stacked below 900px. */
+@media (min-width: 900px) and (max-width: 1199px) {
+  .receiver-downloads { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 56px; }
+}
 @media (min-width: 900px) {
   .receiver-downloads .download-option { display: grid;
     grid-template-rows: 166px auto auto var(--download-control-height) 1fr; align-items: start; }
@@ -339,29 +345,6 @@ summary::after { content: "+"; font-family: var(--mono); color: var(--faint);
 details[open] summary::after { content: "–"; }
 details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
 
-/* ---- compatible apps ---- */
-/* Same hairline-cell grid as .fgrid, but every cell is a link to a community
-   repo: mono role label on top, repo path as the heading. */
-.compat-lead { color: var(--muted); max-width: 78ch; margin-top: 8px; }
-.compat { display: grid; grid-template-columns: repeat(2, 1fr);
-  border-top: 1px solid var(--line); border-left: 1px solid var(--line);
-  margin-top: 32px; }
-a.compat-item { display: block; padding: 24px; text-decoration: none; color: var(--fg);
-  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-a.compat-item:hover { background: #fafafa; }
-.compat-role { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
-  display: block; margin-bottom: 12px; }
-/* Repo paths are long (one runs to 45 chars) — allow a mid-path break so a
-   narrow cell wraps instead of overflowing. */
-.compat-repo { display: block; font-weight: 600; font-size: 1.02rem;
-  letter-spacing: -0.01em; overflow-wrap: anywhere; }
-.compat-item p { color: var(--muted); font-size: 0.92rem; margin-top: 6px; }
-.compat-note { color: var(--muted); font-size: 0.9rem; max-width: 78ch; margin-top: 28px; }
-@media (max-width: 560px) {
-  .compat { grid-template-columns: 1fr; }
-  a.compat-item { padding: 20px; }
-}
-
 /* ---- support / ko-fi ---- */
 .support { text-align: center; }
 .support h2 { max-width: 22ch; margin: 0 auto; }
@@ -421,4 +404,92 @@ footer .fine { color: var(--faint); font-size: 0.84rem; }
   .hero { padding-top: 56px; padding-bottom: 60px; }
   .hero h1 .l1 { white-space: normal; }   /* let the long words wrap on small screens */
   .fcell { padding: 20px; }
+}
+
+/* ---- docs (/docs/**, prerendered by tools/docs.mjs, no client JS) ---- */
+.docs-page .wrap { max-width: 1180px; }
+.docs-page nav.site-nav .brand img { width: 36px; height: 36px; }
+.docs { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 56px;
+  padding-top: 40px; padding-bottom: 88px; }
+/* The site-wide `nav` rule styles the sticky top bar; the docs tree is a nav
+   too, so undo the bar styling for it. */
+nav.docs-nav { position: static; border: 0; background: none; z-index: auto;
+  font-size: 0.9rem; }
+.docs-side { position: sticky; top: 84px; align-self: start;
+  max-height: calc(100vh - 100px); overflow-y: auto; }
+.docs-nav ul { list-style: none; }
+.docs-nav a { display: block; padding: 5px 0 5px 12px; color: var(--muted);
+  text-decoration: none; border-left: 1px solid var(--line); }
+.docs-nav a:hover { color: var(--fg); border-left-color: var(--faint); }
+.docs-nav a[aria-current="page"] { color: var(--fg); font-weight: 600;
+  border-left: 2px solid var(--accent); padding-left: 11px; }
+.docs-nav .docs-nav-root, .docs-nav li.group > a { font-family: var(--mono);
+  font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; }
+.docs-nav li.group > a { margin-top: 18px; }
+.docs-nav li.group > ul a { padding-left: 24px; }
+.docs-nav li.group > ul a[aria-current="page"] { padding-left: 23px; }
+.docs-menu { display: none; }
+
+.docs-crumbs { list-style: none; display: flex; flex-wrap: wrap; gap: 6px;
+  font-family: var(--mono); font-size: 0.74rem; color: var(--faint); margin-bottom: 18px; }
+.docs-crumbs li + li::before { content: "/"; margin-right: 6px; }
+.docs-crumbs a { color: var(--muted); text-decoration: none; }
+.docs-crumbs a:hover { color: var(--fg); }
+
+.doc { max-width: 76ch; }
+.doc h1 { font-size: clamp(2rem, 4.5vw, 2.7rem); line-height: 1.1; }
+.doc .doc-lead { font-size: 1.12rem; color: var(--muted); margin-top: 16px; }
+.doc h2 { font-size: clamp(1.35rem, 2.6vw, 1.6rem); margin-top: 52px;
+  padding-top: 20px; border-top: 1px solid var(--line); }
+.doc h3 { font-size: 1.12rem; font-weight: 600; letter-spacing: -0.01em; margin-top: 34px; }
+.doc h4 { font-size: 1rem; font-weight: 600; margin-top: 26px; }
+.doc h2, .doc h3, .doc h4 { scroll-margin-top: 76px; }
+.doc .h-anchor { color: inherit; text-decoration: none; }
+.doc .h-anchor:hover::after { content: " #"; color: var(--faint); font-weight: 400; }
+.doc p, .doc ul, .doc ol, .doc pre, .doc .tbl-scroll, .doc blockquote { margin-top: 16px; }
+.doc ul, .doc ol { padding-left: 1.4em; }
+.doc li { margin-top: 6px; }
+.doc li > p { margin-top: 6px; }
+.doc a { text-decoration-color: var(--faint); }
+.doc a:hover { text-decoration-color: var(--line-strong); }
+.doc :not(pre) > code { font-size: 0.86em; background: #f2f2f2; padding: 1px 5px;
+  overflow-wrap: anywhere; }
+.doc pre { font-size: 0.82rem; }
+.doc blockquote { border-left: 2px solid var(--accent); padding: 4px 0 4px 16px; color: var(--muted); }
+.doc blockquote p:first-child { margin-top: 0; }
+.doc hr { border: 0; border-top: 1px solid var(--line); margin: 36px 0; }
+.doc table { min-width: 0; font-size: 0.88rem; }
+.doc th, .doc td { padding: 10px 12px; }
+.doc thead th { text-align: left; font-size: 0.88rem; border-bottom: 1px solid var(--line-strong); }
+.doc tbody td:first-child { color: var(--fg); }
+.doc th:first-child, .doc td:first-child { white-space: normal; }
+.doc td:first-child code { white-space: nowrap; }
+
+.docs-pager { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 64px;
+  max-width: 76ch; }
+.docs-pager a { display: block; border: 1px solid var(--line); padding: 14px 18px;
+  text-decoration: none; font-weight: 600; }
+.docs-pager a:hover { border-color: var(--line-strong); }
+.docs-pager a span { display: block; font-family: var(--mono); font-size: 0.7rem; font-weight: 400;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
+.docs-pager .next { text-align: right; grid-column: 2; }
+.docs-meta { margin-top: 28px; font-size: 0.84rem; color: var(--faint); }
+.docs-meta a { color: var(--muted); text-decoration-color: var(--line); }
+
+@media (max-width: 860px) {
+  .docs { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: 20px; }
+  .docs-side { display: none; }
+  .docs-menu { display: block; border: 1px solid var(--line); margin-bottom: 22px; }
+  .docs-menu summary { padding: 12px 16px; font-size: 0.92rem; }
+  .docs-menu nav.docs-nav { padding: 0 16px 14px; }
+}
+@media (max-width: 680px) {
+  .docs-page nav .links.docs-links { display: flex; gap: 16px; }
+  .docs-links a:first-child { display: none; }   /* the brand already links home */
+}
+@media (max-width: 560px) {
+  .docs-pager { grid-template-columns: 1fr; }
+  .docs-pager .next { grid-column: 1; }
+  .doc pre { margin-left: -20px; margin-right: -20px; border-left: 0; border-right: 0;
+    padding: 16px 20px; }
 }
