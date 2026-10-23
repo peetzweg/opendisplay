@@ -12,9 +12,12 @@ build=/lib/modules/$rel/build
 # Upstream tag for the kernel's base version: 6.17.0-1022-azure -> v6.17.
 base=$(echo "$rel" | grep -oE '^[0-9]+\.[0-9]+')
 src=$(mktemp -d)
+# raw.githubusercontent.com rate-limits runner IPs (429), so kernel.org first.
 for f in vgem_drv.c vgem_drv.h vgem_fence.c; do
   curl -fsSL --retry 3 -o "$src/$f" \
-    "https://raw.githubusercontent.com/torvalds/linux/v$base/drivers/gpu/drm/vgem/$f"
+    "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/drivers/gpu/drm/vgem/$f?h=v$base" ||
+    curl -fsSL --retry 3 -o "$src/$f" \
+      "https://raw.githubusercontent.com/torvalds/linux/v$base/drivers/gpu/drm/vgem/$f"
 done
 cat > "$src/Kbuild" <<'EOF'
 obj-m := vgem.o
