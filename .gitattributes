@@ -1,0 +1,2 @@
+# Preserve third-party formatting and collapse the pinned receiver core in reviews.
+tools/native-screen-mirroring/vendor/** linguist-vendored whitespace=-trailing-space,-space-before-tab

@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "artifactSHA256": "",
+  "sourceCommit": "",
+  "automated": {
+    "status": "pending",
+    "runtime": "extracted-installer",
+    "log": "tests.tap",
+    "logSHA256": ""
+  },
+  "native": {
+    "status": "pending",
+    "evidence": ""
+  },
+  "physical": [
+    {
+      "id": "fresh_home_lan",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "fresh-installer",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "fresh_restricted_wifi_tailscale",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "fresh-installer",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "return_home_tailscale_off",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "installed-artifact",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "home_lan_with_tailscale_on",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "installed-artifact",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "vpn_unavailable_clear_failure",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "installed-artifact",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "upgrade_preserves_settings",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "installed-artifact",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "repeated_connections",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "installed-artifact",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "rotation_audio",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "installed-artifact",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "background_resume",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "installed-artifact",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    },
+    {
+      "id": "uninstall_twice",
+      "status": "pending",
+      "artifactSHA256": "",
+      "sourceCommit": "",
+      "setup": "installed-artifact",
+      "testedAt": "",
+      "environment": "",
+      "evidence": ""
+    }
+  ],
+  "limitations": [
+    "Review build is not notarized",
+    "Apple Silicon only; macOS 14/15 unverified",
+    "Sidecar iPad must connect first"
+  ]
+}
