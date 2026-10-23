@@ -115,6 +115,7 @@ final class StreamReceiver: ObservableObject {
     /// Called on the main thread once a power action passed the gate.
     var onPowerAction: ((PowerAction) -> Void)?
     private var lastCursorSeq: UInt64 = 0
+    private var cursorHandshake = CursorDatagramHandshake()
     // Cursor channel health for the HUD/stats: how many positions landed and
     // how many datagrams never did (sequence gaps + reordered drops). A
     // stuttering pointer with a healthy count means the drawing side; a low
@@ -516,10 +517,12 @@ final class StreamReceiver: ObservableObject {
             guard let self, self.cursorListener === udp else { conn.cancel(); return }
             // A UDP "connection" is one remote host:port flow. The newest
             // one is the live sender (a rebuilt sender socket gets a fresh
-            // ephemeral port) and starts its sequence over.
+            // ephemeral port). Its sequence stays scoped to the TCP session.
             self.cursorConnection?.cancel()
             self.cursorConnection = conn
-            self.lastCursorSeq = 0
+            self.cursorHandshake.resetFlow()
+            // Sequence is TCP-session scoped; a fresh UDP flow must not
+            // rewind a floor already advanced by the TCP mirror.
             conn.stateUpdateHandler = { [weak self] state in
                 guard let self, self.cursorConnection === conn else { return }
                 if case .failed(let error) = state {
@@ -586,19 +589,13 @@ final class StreamReceiver: ObservableObject {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               obj["type"] as? String == "cursor",
               let seq = (obj["s"] as? NSNumber)?.uint64Value else { return }
-        // Loss accounting only; the floor itself is enforced in applyCursor,
-        // shared with TCP. Counts run slightly hot during the brief window
-        // where the sender still mirrors to TCP (duplicates read as drops).
-        guard seq > lastCursorSeq else { cursorLostThisWindow += 1; return }
-        if lastCursorSeq == 0 {
-            // First datagram of this flow: tell the sender the channel truly
-            // delivers (UDP .ready proves only a local route — a firewalled
-            // port would otherwise eat the cursor forever, PROTOCOL.md 6.3).
+        let decision = cursorHandshake.receive(sequence: seq, lastApplied: lastCursorSeq)
+        if decision.acknowledge {
             Log.info("cursor channel: receiving datagrams")
             sendControl(["type": "cursorAck"])
-        } else {
-            cursorLostThisWindow += Int(seq - lastCursorSeq - 1)
         }
+        guard decision.apply else { return }
+        if lastCursorSeq > 0 { cursorLostThisWindow += Int(seq - lastCursorSeq - 1) }
         applyCursor(obj)
     }
 
@@ -715,6 +712,7 @@ final class StreamReceiver: ObservableObject {
         cursorConnection?.cancel()
         cursorConnection = nil
         resetStreamState()
+        cursorHandshake.resetFlow()
         lastCursorSeq = 0   // the sender restarts its cursor sequence per session
         cursorPortAnnounced = false
         // Hide the previous sender's cursor: replayed into a fresh video view
