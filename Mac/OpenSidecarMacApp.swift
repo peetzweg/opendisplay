@@ -226,6 +226,10 @@ final class SenderController: ObservableObject {
 
     private var browser: NWBrowser?
     private var usbWatcher: UsbmuxDeviceWatcher?
+    /// Watches for Android devices over ADB and auto-configures host/port
+    /// for the adb-forward path (127.0.0.1:9000). Only runs when adb is
+    /// on PATH; see AdbDeviceWatcher.locateAdb().
+    private var adbWatcher: AdbDeviceWatcher?
 
     // Connection policy — one session per physical device, and the cable
     // wins whenever it's available (lower, steadier latency than WiFi):
@@ -292,11 +296,64 @@ final class SenderController: ObservableObject {
             self.failover(detachedUDIDs: detached)
             self.autoConnect()
         }
+        // AdbDeviceWatcher — Android USB support.
+        adbWatcher = AdbDeviceWatcher()
+        adbWatcher?.onChange = { [weak self] devices in
+            Task { @MainActor in
+                guard let self else { return }
+                if !devices.isEmpty {
+                    self.applyAdbHostConfig()
+                    self.autoConnect()
+                } else {
+                    self.removeAdbHostConfigIfManaged()
+                    self.autoConnect()
+                }
+            }
+        }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             self.wifiAutoConnectArmed = true
             self.autoConnect()
         }
+    }
+    // MARK: - ADB auto-config
+
+    private var adbHostManaged: Bool {
+        get { UserDefaults.standard.object(forKey: "adbHostManaged") as? Bool ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: "adbHostManaged") }
+    }
+
+    private func applyAdbHostConfig() {
+        if adbHostManaged { return }
+        let defaults = UserDefaults.standard
+        let existingHost = defaults.string(forKey: "host")
+        let existingPort = defaults.string(forKey: "port")
+        let hostAlreadyUs = (existingHost == "127.0.0.1" && existingPort == "9000")
+        if existingHost == nil || hostAlreadyUs {
+            defaults.set("127.0.0.1", forKey: "host")
+            defaults.set("9000", forKey: "port")
+            self.host = "127.0.0.1"
+            self.port = "9000"
+            adbHostManaged = true
+            Log.info("adb auto-config: host=127.0.0.1 port=9000")
+        } else {
+            Log.info("adb device detected but host/port already set — not overwriting")
+        }
+    }
+
+    private func removeAdbHostConfigIfManaged() {
+        guard adbHostManaged else { return }
+        let defaults = UserDefaults.standard
+        let currentHost = defaults.string(forKey: "host")
+        let currentPort = defaults.string(forKey: "port")
+        if currentHost == "127.0.0.1" && currentPort == "9000" {
+            defaults.removeObject(forKey: "host")
+            defaults.removeObject(forKey: "port")
+            self.host = UserDefaults.standard.string(forKey: "host") ?? "127.0.0.1"
+            self.port = UserDefaults.standard.string(forKey: "port") ?? "9000"
+            Log.info("adb auto-config cleared (host/port removed)")
+        }
+        adbHostManaged = false
     }
 
     private func startBrowsing() {
