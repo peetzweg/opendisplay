@@ -314,17 +314,21 @@ Reports go to [#284](https://github.com/peetzweg/opendisplay/issues/284).
 OpenDisplay's own apps cover the Mac and Linux senders and receivers for
 iPhone, iPad, Mac, Android and Linux. Fans have also built their own clients
 against the same protocol ([PROTOCOL.md](PROTOCOL.md)), for example for
-de-Googled Android phones or iPads too old for the official app:
+de-Googled Android phones, iPads too old for the official app, or Linux X11
+desktops. Requirements, install steps and comparisons are in the docs:
+[opendisplay.app/docs/third-party](https://opendisplay.app/docs/third-party/).
 
-**Android receivers**
+**Older iOS receivers** ([docs](https://opendisplay.app/docs/third-party/older-ios/))
+* [Francesco149/opendisplay (iOSLegacy)](https://github.com/Francesco149/opendisplay/tree/ios12-legacy-receiver/iOSLegacy) - the official receiver's code in a UIKit shell for iOS 12.2+ (iPad Air, iPad mini 2/3, iPhone 5s/6), built and installed yourself
+* [cuongpham1/ipad-iphone-second-monitor-ios12-free](https://github.com/cuongpham1/ipad-iphone-second-monitor-ios12-free) - iOS 12 client for iPads and iPhones that cannot run the official app, prebuilt `.ipa`
+
+**Linux senders** ([docs](https://opendisplay.app/docs/third-party/linux/))
+* [cray2015/opendisplay-x11](https://github.com/cray2015/opendisplay-x11) - extend an X11 desktop onto an iPad over a USB cable; needs a free HDMI or DP++ port
+* [tixwho/opendisplay-linux](https://github.com/tixwho/opendisplay-linux) - drive an iPhone or iPad from a Wayland desktop (KDE Plasma, Hyprland)
+
+**Android receivers** ([docs](https://opendisplay.app/docs/third-party/android/))
 * [gprot42/android-opendisplay](https://github.com/gprot42/android-opendisplay) - GrapheneOS receiver for de-Googled Pixel phones and tablets, Android 8.0+
 * [josepacelli/opendisplay-android](https://github.com/josepacelli/opendisplay-android) - Android receiver, Android 8.0+, works with an unmodified Mac app
-
-**Older iOS receivers**
-* [cuongpham1/ipad-iphone-second-monitor-ios12-free](https://github.com/cuongpham1/ipad-iphone-second-monitor-ios12-free) - iOS 12 client for iPads and iPhones that cannot run the official app
-
-**Linux senders**
-* [tixwho/opendisplay-linux](https://github.com/tixwho/opendisplay-linux) - drive an iPhone or iPad from a Wayland desktop (KDE Plasma, Hyprland)
 
 These are fan-made projects, not official builds. They are not affiliated
 with OpenDisplay and are not maintained, reviewed, or supported by us, so

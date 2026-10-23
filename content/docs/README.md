@@ -29,5 +29,8 @@ updated: 2026-10-22                  # optional: shown on the page and used as s
   renaming a heading breaks links to it.
 - Plain GitHub-flavoured markdown: tables, fenced code blocks, lists. Code is
   shown as is, without highlighting. No HTML-only features or client JS.
+- Each page is also published as markdown at `/docs/<section>/<slug>/index.md`
+  and listed in `/llms.txt`, for assistants and crawlers. The `description`
+  is the summary they see first, so make it say what the page answers.
 - Check the result with `npx pnpm@10.33.0 build` and `python3 -m http.server -d docs`,
   then open http://localhost:8000/docs/.

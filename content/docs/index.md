@@ -3,7 +3,7 @@ title: OpenDisplay documentation
 nav: Docs
 description: How to set up and use OpenDisplay, the free, open-source way to turn a spare iPhone, iPad, Mac, Android device or Linux machine into a second monitor.
 order: 0
-updated: 2026-10-22
+updated: 2026-10-23
 ---
 
 ## What OpenDisplay is
@@ -57,6 +57,16 @@ desktops, then:
 - [Notes per desktop](/docs/linux/desktops/): Hyprland, Sway, KDE Plasma, GNOME
 - [Use a Linux machine as the display](/docs/linux/receiver/)
 - [Troubleshooting](/docs/linux/troubleshooting/)
+
+## Third-party apps
+
+Community projects speak the same protocol and cover devices the official
+apps do not, such as iPads and iPhones stuck on iOS 12, Linux X11 desktops
+and de-Googled Android. See [Third-party apps](/docs/third-party/):
+
+- [Older iPhones and iPads (iOS 12)](/docs/third-party/older-ios/)
+- [Linux senders](/docs/third-party/linux/), including X11
+- [Android receivers](/docs/third-party/android/), including GrapheneOS
 
 ## Help and feedback
 

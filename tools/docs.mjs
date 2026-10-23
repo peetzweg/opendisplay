@@ -285,4 +285,43 @@ const entries = order
 sitemap = sitemap.replace("</urlset>", `${entries}</urlset>`)
 await fs.writeFile(sitemapFile, sitemap)
 
-console.log(`docs: rendered ${order.length} pages into ${OUT_DIR}/docs/ and added them to sitemap.xml`)
+// ---- agent-readable copies -------------------------------------------------
+// Each page's markdown next to its HTML (/docs/linux/install/index.md) and an
+// llms.txt index at the site root (https://llmstxt.org), so assistants and
+// crawlers can read the docs without parsing the HTML. Site-absolute links
+// become full URLs because the markdown is read outside the site.
+
+function markdownCopy(page) {
+  const body = page.body.replace(/\]\(\/(?!\/)/g, `](${SITE}/`)
+  const updated = page.updated ? `Updated ${page.updated}. ` : ""
+  return `# ${page.title}\n\n> ${page.description}\n\n${updated}Source: ${SITE}${page.route}\n\n${body.trim()}\n`
+}
+
+for (const route of order) {
+  const page = byRoute.get(route)
+  const outFile = path.join(OUT_DIR, ...route.split("/").filter(Boolean), "index.md")
+  await fs.writeFile(outFile, markdownCopy(page))
+}
+
+const root = byRoute.get("/docs/")
+const llms = [
+  "# OpenDisplay",
+  "",
+  `> ${root.description}`,
+  "",
+  "Every page below is also available as HTML at the same URL without `index.md`.",
+  `The wire protocol all senders and receivers speak: https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md`,
+  "",
+  "## Docs",
+  "",
+  ...order.map((route) => {
+    const p = byRoute.get(route)
+    return `- [${p.title}](${SITE}${route}index.md): ${p.description}`
+  }),
+  "",
+].join("\n")
+await fs.writeFile(path.join(OUT_DIR, "llms.txt"), llms)
+
+console.log(
+  `docs: rendered ${order.length} pages into ${OUT_DIR}/docs/ (HTML and markdown), added them to sitemap.xml and wrote llms.txt`,
+)
