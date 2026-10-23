@@ -106,7 +106,7 @@ final class VirtualDisplay {
                     if self.selectTargetMode(recover: settled) { settled = true }
                     self.manageOrigin()
                 }
-                try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
+                try? await Task.sleep(nanoseconds: settled ? 2_000_000_000 : 200_000_000)
             }
         }
     }

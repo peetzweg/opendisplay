@@ -22,17 +22,171 @@ struct OpenSidecarMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var controller = SenderController.shared
 
+    // The menu-bar item is an NSStatusItem + borderless panel
+    // (StatusItemController), not SwiftUI's MenuBarExtra, which needs
+    // macOS 13. App needs a scene, so give it an empty Settings one and drop
+    // its Preferences… item (and ⌘,), which would open a blank window.
     var body: some Scene {
-        MenuBarExtra(isInserted: Binding(
-            get: { controller.presentation == .menuBar },
-            set: { _ in }
-        )) {
-            ContentView(controller: controller, updater: appDelegate.updater)
-        } label: {
-            Image(systemName: controller.running
-                  ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle")
+        Settings { EmptyView() }
+            .commands { CommandGroup(replacing: .appSettings) {} }
+    }
+}
+
+/// Borderless panel that stands in for MenuBarExtra's window: no pointer, no
+/// open animation, and it takes key focus so the controls respond at once.
+private final class MenuPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override func cancelOperation(_ sender: Any?) { close() }
+}
+
+/// Menu-bar icon and panel for `.menuBar` presentation. Shown only while
+/// that presentation is selected; the icon fills in while streaming.
+@MainActor
+final class StatusItemController: NSObject {
+    private static let panelSize = NSSize(width: 440, height: 540)
+    // MenuBarExtra's window sits 2pt below the menu bar with its right edge
+    // on the icon's right edge (measured on macOS 13); match it.
+    private static let gap: CGFloat = 2
+
+    private let controller: SenderController
+    private let updater: SPUStandardUpdaterController?
+    private var item: NSStatusItem?
+    private var panel: MenuPanel?
+    // A press on the icon can take focus from the open panel, closing it on
+    // mouse-down; the icon's action follows on mouse-up and must not reopen
+    // it. Set for that one press, cleared once its mouse-up is handled.
+    private var closedByIconPress = false
+    private var cancellables = Set<AnyCancellable>()
+
+    init(controller: SenderController, updater: SPUStandardUpdaterController?) {
+        self.controller = controller
+        self.updater = updater
+        super.init()
+        // @Published fires in willSet, so read the new value from the sink.
+        controller.$presentation
+            .sink { [weak self] p in self?.setVisible(p == .menuBar) }
+            .store(in: &cancellables)
+        controller.$sessions
+            .sink { [weak self] s in self?.updateIcon(running: !s.isEmpty) }
+            .store(in: &cancellables)
+        // Displays come and go while the panel is open (ours included, when a
+        // session creates its virtual display); keep it under the icon.
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .sink { [weak self] _ in
+                guard let self, let panel = self.panel, panel.isVisible else { return }
+                self.position(panel)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func setVisible(_ visible: Bool) {
+        if visible, item == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item.button?.target = self
+            item.button?.action = #selector(toggle(_:))
+            self.item = item
+            updateIcon(running: !controller.sessions.isEmpty)
+        } else if !visible, let existing = item {
+            panel?.close()
+            NSStatusBar.system.removeStatusItem(existing)
+            item = nil
         }
-        .menuBarExtraStyle(.window)
+    }
+
+    private func updateIcon(running: Bool) {
+        item?.button?.image = NSImage(
+            systemSymbolName: running ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle",
+            accessibilityDescription: "OpenDisplay")
+    }
+
+    private func makePanel() -> MenuPanel {
+        let panel = MenuPanel(contentRect: NSRect(origin: .zero, size: Self.panelSize),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let background = NSVisualEffectView(frame: NSRect(origin: .zero, size: Self.panelSize))
+        background.material = .popover
+        background.state = .active
+        background.blendingMode = .behindWindow
+        // A behind-window blur ignores layer corner masks; maskImage is what
+        // rounds it (and the shadow that follows its outline).
+        let radius: CGFloat = 6
+        let mask = NSImage(size: NSSize(width: radius * 2 + 1, height: radius * 2 + 1),
+                           flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        mask.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        mask.resizingMode = .stretch
+        background.maskImage = mask
+
+        let hosting = NSHostingView(rootView: ContentView(controller: controller, updater: updater))
+        hosting.frame = background.bounds
+        hosting.autoresizingMask = [.width, .height]
+        hosting.wantsLayer = true
+        hosting.layer?.cornerRadius = radius
+        hosting.layer?.masksToBounds = true
+        background.addSubview(hosting)
+        panel.contentView = background
+
+        // Click anywhere else (or switch apps) and the panel goes away.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(panelLostFocus(_:)),
+            name: NSWindow.didResignKeyNotification, object: panel)
+        return panel
+    }
+
+    @objc private func panelLostFocus(_ note: Notification) {
+        panel?.close()
+        guard let event = NSApp.currentEvent, event.type == .leftMouseDown,
+              let buttonWindow = item?.button?.window, event.window === buttonWindow
+        else { return }
+        // The press is on the icon. The button tracks it in the event-tracking
+        // run loop mode and sends its action on release over the icon, so a
+        // clear queued for the default mode runs only after that action has
+        // seen the flag; a press dragged off the icon leaves none behind.
+        closedByIconPress = true
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            self?.closedByIconPress = false
+        }
+    }
+
+    @objc private func toggle(_ sender: Any?) {
+        // A click on the icon while the panel is open closes it, either here
+        // or already on mouse-down when the press took the panel's focus.
+        if closedByIconPress {
+            closedByIconPress = false
+            return
+        }
+        if let panel, panel.isVisible {
+            panel.close()
+            return
+        }
+        guard item?.button?.window != nil else { return }
+        let panel = self.panel ?? makePanel()
+        self.panel = panel
+        position(panel)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// Hang the panel below the icon, clamped to the icon's screen.
+    private func position(_ panel: MenuPanel) {
+        guard let buttonWindow = item?.button?.window else { return }
+        let icon = buttonWindow.frame
+        var x = icon.maxX - Self.panelSize.width
+        if let visible = buttonWindow.screen?.visibleFrame {
+            x = min(max(x, visible.minX + 8), visible.maxX - Self.panelSize.width - 8)
+        }
+        let y = icon.minY - Self.gap - Self.panelSize.height
+        panel.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: Self.panelSize), display: true)
+        panel.invalidateShadow()
     }
 }
 
@@ -45,7 +199,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let updater = SPUStandardUpdaterController(
         startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
+    private var statusItem: StatusItemController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        statusItem = StatusItemController(controller: SenderController.shared, updater: updater)
         // Hand the updater to the control window, which is built outside the
         // SwiftUI App scene (NSHostingView), so it can offer the same button.
         MainWindow.updater = updater
@@ -293,7 +450,7 @@ final class SenderController: ObservableObject {
             self.autoConnect()
         }
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             self.wifiAutoConnectArmed = true
             self.autoConnect()
         }
@@ -907,6 +1064,17 @@ final class PermissionMonitor: ObservableObject {
     }
 }
 
+/// `.formStyle(.grouped)` is macOS 13+; Monterey keeps its default form style.
+private struct GroupedFormStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 13.0, *) {
+            content.formStyle(.grouped)
+        } else {
+            content
+        }
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var controller: SenderController
     @StateObject private var permissions = PermissionMonitor()
@@ -981,7 +1149,7 @@ struct ContentView: View {
                     Text("Mirror").tag(CaptureMode.mirror)
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: controller.mode) { controller.restartAll() }
+                .onChange(of: controller.mode) { _ in controller.restartAll() }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Picker("Quality", selection: $controller.quality) {
@@ -989,7 +1157,7 @@ struct ContentView: View {
                             Text(q.label).tag(q)
                         }
                     }
-                    .onChange(of: controller.quality) { controller.restartAll() }
+                    .onChange(of: controller.quality) { _ in controller.restartAll() }
                     Text(controller.quality.explanation)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1008,9 +1176,17 @@ struct ContentView: View {
                     }
                 }
 
-                LabeledContent("Display layout") {
+                HStack {
+                    Text("Display layout")
+                    Spacer()
                     Button("Arrange Displays…") {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.Displays-Settings.extension") {
+                        // Ventura renamed System Preferences to System Settings
+                        // and the Displays pane URL with it.
+                        let pane = ProcessInfo.processInfo.isOperatingSystemAtLeast(
+                            OperatingSystemVersion(majorVersion: 13, minorVersion: 0, patchVersion: 0))
+                            ? "com.apple.Displays-Settings.extension"
+                            : "com.apple.preference.displays"
+                        if let url = URL(string: "x-apple.systempreferences:\(pane)") {
                             NSWorkspace.shared.open(url)
                         }
                     }
@@ -1044,10 +1220,8 @@ struct ContentView: View {
                     )
                 }
             }
-            .formStyle(.grouped)
-            // Scrollable + fixed panel height: MenuBarExtra windows mis-measure
-            // grouped Forms (clipping on small displays), so size explicitly
-            // and let the form scroll when it doesn't fit.
+            .modifier(GroupedFormStyle())
+            // Fixed panel height; the form scrolls when it doesn't fit.
 
             Divider()
 
