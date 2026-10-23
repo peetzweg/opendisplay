@@ -207,7 +207,8 @@ jobs:
   # into od-receiver --sink none. KWin's virtual backend composites with
   # OpenGL only on a DRM render node; hosted runners have no GPU, so the vgem
   # module provides one for Mesa's software renderer. Some runner kernels ship
-  # no vgem: then the smoke is skipped and this job passes WITHOUT coverage;
+  # no vgem: then it is built from source, and only if that fails too is the
+  # smoke skipped and this job passes WITHOUT coverage;
   # the step summary says so and `kde coverage` below turns red (it is not
   # required, so it does not block).
   kde-smoke:
@@ -220,8 +221,10 @@ jobs:
       - uses: actions/checkout@v6
 
       # KWin's virtual outputs need OpenGL, which needs a render node. Some
-      # runner kernels ship no vgem module (6.17.0-1022-azure): that is a gap
-      # in the infrastructure, not a regression, so warn and skip.
+      # runner kernels ship no vgem module, not even in linux-modules-extra
+      # (6.17.0-1022-azure on image 20261012): then build it from source. If
+      # that fails too, it is a gap in the infrastructure, not a regression,
+      # so warn and skip.
       - name: Render node (vgem)
         id: dri
         run: |
@@ -229,7 +232,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)" &&
               sudo modprobe vgem
-          } || true
+          } || sudo bash linux/testbench/vgem-from-source.sh || true
           ls -l /dev/dri || true
           if ls /dev/dri/renderD* >/dev/null 2>&1; then
             echo "available=true" >> "$GITHUB_OUTPUT"
