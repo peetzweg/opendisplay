@@ -778,6 +778,62 @@ struct VideoLayerView: UIViewRepresentable {
         private var cursorNorm = CGPoint(x: 0.5, y: 0.5)
         private var cursorVisible = false
 
+        private var cursorDirty = false
+        private var cursorDisplayLink: CADisplayLink?
+        private var lastCursorUpdateAt: CFTimeInterval = 0
+        private var cursorRateStartedAt: CFTimeInterval = 0
+        private var cursorRateTicks = 0
+        private final class CursorClock: NSObject {
+            weak var view: VideoView?
+            @objc func tick(_ link: CADisplayLink) { view?.drawCursorFrame(link) }
+        }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window == nil { stopCursorDisplayLink() }
+            else if cursorVisible { ensureCursorDisplayLink() }
+        }
+        deinit { cursorDisplayLink?.invalidate() }
+
+        fileprivate func stopCursorDisplayLink() {
+            cursorDisplayLink?.invalidate()
+            cursorDisplayLink = nil
+        }
+        private func ensureCursorDisplayLink() {
+            guard cursorDisplayLink == nil, let screen = window?.screen else { return }
+            let clock = CursorClock()
+            clock.view = self
+            let link = CADisplayLink(target: clock, selector: #selector(CursorClock.tick(_:)))
+            let rate = Float(min(screen.maximumFramesPerSecond, 120))
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: rate, maximum: rate, preferred: rate)
+            link.add(to: .main, forMode: .common)
+            cursorDisplayLink = link
+            Log.info("cursor display refresh requested: \(Int(rate)) Hz")
+        }
+        private func drawCursorFrame(_ link: CADisplayLink) {
+            let now = CACurrentMediaTime()
+            guard cursorVisible, UIApplication.shared.applicationState == .active,
+                  now - lastCursorUpdateAt < 0.25 else {
+                link.isPaused = true
+                cursorRateStartedAt = 0
+                cursorRateTicks = 0
+                return
+            }
+            if cursorRateStartedAt == 0 { cursorRateStartedAt = now }
+            cursorRateTicks += 1
+            if now - cursorRateStartedAt >= 2 {
+                Log.info("cursor display callbacks: \(Int(Double(cursorRateTicks) / (now - cursorRateStartedAt))) Hz")
+                cursorRateStartedAt = now
+                cursorRateTicks = 0
+            }
+            guard cursorDirty else { return }
+            cursorDirty = false
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            cursorLayer.isHidden = cursorLayer.contents == nil
+            updateCursorLayout()
+            CATransaction.commit()
+        }
+
         private var lastLoggedLayout = ""
 
         override func layoutSubviews() {
@@ -820,11 +876,15 @@ struct VideoLayerView: UIViewRepresentable {
         func moveCursor(x: Double, y: Double, visible: Bool) {
             cursorNorm = CGPoint(x: x, y: y)
             cursorVisible = visible
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            cursorLayer.isHidden = !visible || cursorLayer.contents == nil
-            updateCursorLayout()
-            CATransaction.commit()
+            cursorDirty = true
+            lastCursorUpdateAt = CACurrentMediaTime()
+            if visible {
+                ensureCursorDisplayLink()
+                cursorDisplayLink?.isPaused = false
+            } else {
+                cursorLayer.isHidden = true
+                cursorDisplayLink?.isPaused = true
+            }
         }
 
         func setCursorSprite(_ image: CGImage, anchor: CGPoint, normSize: CGSize) {

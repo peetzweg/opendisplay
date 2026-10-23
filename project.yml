@@ -160,6 +160,7 @@ targets:
       - Mac/CaptureSourceCheck.swift
       - Mac/Log.swift
       - Mac/LogPolicies.swift
+      - Mac/CursorSpriteStabilizer.swift
       - Shared/Protocol.swift
       - Shared/DirectCable.swift
       - Shared/LogSnapshot.swift
@@ -195,6 +196,7 @@ targets:
         UIRequiresFullScreen: true
         NSLocalNetworkUsageDescription: OpenDisplay advertises itself on the local network so your Mac can connect over WiFi.
         NSBonjourServices: ["_opensidecar._tcp"]
+        CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
