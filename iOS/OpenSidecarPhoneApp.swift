@@ -68,6 +68,12 @@ struct ReceiverScreen: View {
         return nil
     }
 
+    /// The whole window, safe areas included: the video ignores them.
+    private static func windowSize(_ geo: GeometryProxy) -> CGSize {
+        CGSize(width: geo.size.width + geo.safeAreaInsets.leading + geo.safeAreaInsets.trailing,
+               height: geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom)
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -91,9 +97,9 @@ struct ReceiverScreen: View {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
             }
-            .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
-            .onChange(of: geo.size) { size in
-                model.receiver.setOrientation(portrait: size.height > size.width)
+            .onAppear { model.updatePanel(windowPoints: Self.windowSize(geo)) }
+            .onChange(of: Self.windowSize(geo)) { size in
+                model.updatePanel(windowPoints: size)
             }
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView { onboardingDismissed = true }
@@ -540,36 +546,30 @@ private struct DeviceNameField: View {
 @MainActor
 final class ReceiverModel: ObservableObject {
     let receiver: StreamReceiver
+    private let decodesHEVC: Bool
     private var started = false
     private var cancellables = Set<AnyCancellable>()
 
     init() {
         // Offer HEVC wherever the hardware decodes it (A9 and later; the A8/A8X
         // iPads stay on H.264). Panels here fit H.264's raster anyway, so HEVC
-        // buys quality per bit, which matters most over WiFi. Bounded by the
-        // panel in either orientation, so a large mirrored Mac display is
-        // scaled to what this screen can show instead of sent in full.
-        let native = UIScreen.main.nativeBounds.size   // portrait pixels
-        let longSide = Int(max(native.width, native.height))
+        // buys quality per bit, which matters most over WiFi.
         var decodesHEVC = VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)
         #if DEBUG
         // The simulator has no hardware decoder; -forceHEVCOffer YES exercises
         // the HEVC receive path there with software decode.
         if UserDefaults.standard.bool(forKey: "forceHEVCOffer") { decodesHEVC = true }
         #endif
-        let hevc = decodesHEVC
-            ? VideoCapability(codec: "hevc", maxWidth: longSide, maxHeight: longSide,
-                              maxFrameRate: 60)
-            : nil
+        self.decodesHEVC = decodesHEVC
         receiver = StreamReceiver(displayLayer: AVSampleBufferDisplayLayer(),
                                   deviceKind: deviceKind,
-                                  fallbackServiceName: UIDevice.current.name,
-                                  hevcCapability: hevc)
-        // Announce the native panel size to the Mac.
-        receiver.setNativePanel(long: Int(max(native.width, native.height)),
-                                short: Int(min(native.width, native.height)),
-                                scale: Double(UIScreen.main.nativeScale))
-        receiver.setDisplayMaxFrameRate(UIScreen.main.maximumFramesPerSecond)
+                                  fallbackServiceName: UIDevice.current.name)
+        // Seed with the whole screen in landscape; the view replaces it with
+        // its window size on first layout, before any Mac connects.
+        let native = UIScreen.main.nativeBounds.size   // portrait pixels
+        applyPanel(pixelsWide: Int(max(native.width, native.height)),
+                   pixelsHigh: Int(min(native.width, native.height)),
+                   scale: Double(UIScreen.main.nativeScale))
         if let budget = DecodeBudget.maxPixelsPerSecond(model: DecodeBudget.currentModel) {
             receiver.setDecodeBudget(maxPixelsPerSecond: budget)
         }
@@ -579,6 +579,57 @@ final class ReceiverModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+    }
+
+    /// Announce the window this app renders into, in points. A rotation, a
+    /// fold or unfold (iPhone Duo) and a multitasking resize all land here,
+    /// so the Mac always builds its virtual display for what is on screen.
+    func updatePanel(windowPoints size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        let screen = Self.currentScreen
+        receiver.setDisplayMaxFrameRate(screen.maximumFramesPerSecond)
+        // nativeScale, not scale: the Plus phones render at 3x and downsample,
+        // and the Mac should size for the pixels the panel actually has.
+        let scale = screen.nativeScale
+        let pixels: CGSize
+        if size == screen.bounds.size {
+            // A window filling the screen reports the panel exactly. Under
+            // Display Zoom points times nativeScale misses by a few pixels
+            // (iPhone 8 Plus zoomed: 667 x 2.88 = 1921 for a 1920 panel).
+            let native = screen.nativeBounds.size   // portrait pixels
+            let landscape = size.width > size.height
+            pixels = CGSize(width: landscape ? max(native.width, native.height)
+                                             : min(native.width, native.height),
+                            height: landscape ? min(native.width, native.height)
+                                              : max(native.width, native.height))
+        } else {
+            pixels = CGSize(width: (size.width * scale).rounded(),
+                            height: (size.height * scale).rounded())
+        }
+        applyPanel(pixelsWide: Int(pixels.width), pixelsHigh: Int(pixels.height),
+                   scale: Double(scale))
+    }
+
+    private func applyPanel(pixelsWide w: Int, pixelsHigh h: Int, scale: Double) {
+        // HEVC is bounded by the window in either orientation, so a large
+        // mirrored Mac display is scaled to what this window can show
+        // instead of sent in full.
+        let longSide = max(w, h)
+        let limitsChanged = receiver.setDecodeLimits(
+            maxEncodeWide: nil, maxEncodeHigh: nil,
+            hevc: decodesHEVC
+                ? VideoCapability(codec: "hevc", maxWidth: longSide, maxHeight: longSide,
+                                  maxFrameRate: 60)
+                : nil)
+        receiver.setPanel(pixelsWide: w, pixelsHigh: h, scale: scale,
+                          limitsChanged: limitsChanged)
+    }
+
+    /// The screen showing this app's foreground scene.
+    private static var currentScreen: UIScreen {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.screen
+            ?? UIScreen.main
     }
 
     func start() {

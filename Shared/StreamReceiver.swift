@@ -215,12 +215,10 @@ final class StreamReceiver: ObservableObject {
 
     let displayLayer: AVSampleBufferDisplayLayer
 
-    /// Native panel size in pixels + scale, announced to the Mac in a "hello"
-    /// message so it can size the virtual display. Orientation-dependent:
-    /// rotating the phone re-announces with swapped dimensions and the Mac
-    /// rebuilds the virtual display as a portrait/landscape monitor.
-    private var nativeLong = 0
-    private var nativeShort = 0
+    /// Panel size in pixels + scale, announced to the Mac in a "hello"
+    /// message so it can size the virtual display. Follows the window: a
+    /// rotation, a fold or a multitasking resize re-announces it and the Mac
+    /// rebuilds the virtual display to match.
     private(set) var devicePixelsWide = 0
     private(set) var devicePixelsHigh = 0
     var deviceScale: Double = 2
@@ -293,25 +291,8 @@ final class StreamReceiver: ObservableObject {
         }
     }
 
-    func setNativePanel(long: Int, short: Int, scale: Double) {
-        nativeLong = long
-        nativeShort = short
-        deviceScale = scale
-        if devicePixelsWide == 0 {   // default landscape until the view reports
-            devicePixelsWide = long
-            devicePixelsHigh = short
-        }
-    }
-
-    func setOrientation(portrait: Bool) {
-        guard nativeLong > 0 else { return }
-        setPanel(pixelsWide: portrait ? nativeShort : nativeLong,
-                 pixelsHigh: portrait ? nativeLong : nativeShort,
-                 scale: deviceScale)
-    }
-
     /// Announce the panel this receiver renders onto. Called before start()
-    /// and again whenever it changes (iOS rotation via setOrientation, macOS
+    /// and again whenever it changes (iOS window resizes, macOS
     /// display-mode changes) — a live connection re-sends hello so the sender
     /// rebuilds the virtual display for the new dimensions.
     /// `panel` is announced as `hello.panel` when the legacy fields are not

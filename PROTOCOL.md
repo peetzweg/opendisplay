@@ -250,7 +250,7 @@ Coordinates use the conventions of section 7.
 
 | `type` | Since | Fields | Purpose |
 |---|---|---|---|
-| `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `device`?, `id`?, `pv`?, `displayMaxFrameRate`?, `videoCaps`?, `panel`? | Identify the panel and receiver video capabilities; (re)sent on connect and on rotation |
+| `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `device`?, `id`?, `pv`?, `displayMaxFrameRate`?, `videoCaps`?, `panel`? | Identify the panel and receiver video capabilities; (re)sent on connect and whenever the panel changes |
 | `ping` | pv 1 | `t` | Liveness + clock sync probe |
 | `touch` | pv 1 | `phase`, `x`, `y`, `t`? | Finger input |
 | `scroll` | pv 1 | `dx`, `dy` | Two-finger scroll |
@@ -528,7 +528,7 @@ desktop/quality policy, then reports the result with `streamConfig`.
 
 Every official receiver advertises H.264. A receiver with a hardware HEVC
 decoder also advertises HEVC: the Mac receiver up to 5120×2880 at 60 FPS, the
-iOS receiver up to its panel's long side on either axis at 60 FPS, within any
+iOS receiver up to its window's long side on either axis at 60 FPS, within any
 decode budget. HEVC is additive: a peer that ignores the new capability keeps
 H.264.
 
@@ -635,9 +635,13 @@ swaps every pair).
   size the receiver itself currently runs (a Mac's "looks like" display
   setting). Absent means the receiver has no such setting.
 
+A receiver that runs in a window smaller than its screen (iPad Split View
+or Stage Manager, one half of a foldable's split) reports that window's
+pixels, and a foldable reports the screen it is currently on.
+
 The receiver MUST re-send `hello` whenever any `panel` value changes
-(rotation, a display-mode change on a Mac), even if the deprecated fields
-did not change.
+(rotation, a fold or unfold, a window resize, a display-mode change on a
+Mac), even if the deprecated fields did not change.
 
 A sender uses `panel` only when `pixelsWide/High` are integers of at least
 2, `scale` is a finite number above 0, and `pointsWide/High` are both
