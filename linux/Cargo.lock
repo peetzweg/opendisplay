@@ -1591,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "od-fake-sender"
-version = "1.26.0"
+version = "1.27.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1604,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "od-receiver"
-version = "1.26.0"
+version = "1.27.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1627,7 +1627,7 @@ dependencies = [
 
 [[package]]
 name = "od-sender"
-version = "1.26.0"
+version = "1.27.0"
 dependencies = [
  "anyhow",
  "async-io",
@@ -1670,7 +1670,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opendisplay-proto"
-version = "1.26.0"
+version = "1.27.0"
 dependencies = [
  "proptest",
  "serde",
@@ -1680,7 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "opendisplay-session"
-version = "1.26.0"
+version = "1.27.0"
 dependencies = [
  "opendisplay-proto",
  "proptest",
