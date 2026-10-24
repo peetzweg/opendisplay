@@ -53,9 +53,11 @@ final class InputInjector {
     private var fingerClicks = ClickCounter(interval: SystemClickMetrics.interval,
                                             distance: max(SystemClickMetrics.distance, 24))
 
-    private let pointerHandoff: PointerHandoff
+    /// Nil when the sender can't watch the pointer (no cursor echo), since
+    /// nothing would then give the pointer back.
+    private let pointerHandoff: PointerHandoff?
 
-    init(displayID: CGDirectDisplayID, pointerHandoff: PointerHandoff = .shared) {
+    init(displayID: CGDirectDisplayID, pointerHandoff: PointerHandoff?) {
         self.displayID = displayID
         self.pointerHandoff = pointerHandoff
     }
@@ -131,7 +133,7 @@ final class InputInjector {
             return
         }
 
-        pointerHandoff.touchMovesPointer(to: point, from: currentCursor(), holding: isDown)
+        pointerHandoff?.touchMovesPointer(to: point, from: currentCursor(), holding: isDown)
         postMouse(type, at: point, button: mouseButton, clickState: clickState)
     }
 
@@ -158,7 +160,7 @@ final class InputInjector {
             event.post(tap: .cghidEventTap)
             return
         }
-        scrollQueue.async { [self] in
+        gestureQueue.async { [self] in
             for e in scrollSmoother.receive(phase: phase, dx: dx / scale, dy: dy / scale) { postScroll(e) }
             if !scrollSmoother.isIdle { startScrollTick() }
         }
@@ -167,16 +169,17 @@ final class InputInjector {
     /// Close a scroll, momentum or magnify phase the receiver left open, e.g.
     /// because it disconnected mid-gesture.
     func endScrollGestures() {
-        scrollQueue.async { [self] in
+        gestureQueue.async { [self] in
             for e in scrollSmoother.finish() { postScroll(e) }
             stopScrollTick()
+            if magnifying { applyMagnify(phase: "ended", magnification: 0) }
         }
-        if magnifying { handleMagnify(phase: "ended", magnification: 0) }
     }
 
-    // Phased scrolling is paced by ScrollSmoother on its own queue at 120 Hz;
-    // the tick runs only while a scroll is in flight.
-    private let scrollQueue = DispatchQueue(label: "input.scroll", qos: .userInteractive)
+    // Phased scrolling and magnify run on their own queue: the scroll is paced
+    // there by ScrollSmoother at 120 Hz (the tick runs only while a scroll is
+    // in flight), and closing either on disconnect must not race the stream.
+    private let gestureQueue = DispatchQueue(label: "input.gesture", qos: .userInteractive)
     private var scrollSmoother = ScrollSmoother(timeConstant: InputInjector.scrollSmoothing)
     private var scrollTick: DispatchSourceTimer?
     private var lastScrollTick: TimeInterval = 0
@@ -190,7 +193,7 @@ final class InputInjector {
     private func startScrollTick() {
         guard scrollTick == nil else { return }
         lastScrollTick = ProcessInfo.processInfo.systemUptime
-        let timer = DispatchSource.makeTimerSource(queue: scrollQueue)
+        let timer = DispatchSource.makeTimerSource(queue: gestureQueue)
         timer.schedule(deadline: .now() + .milliseconds(8), repeating: .microseconds(8_333), leeway: .microseconds(500))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
@@ -224,7 +227,7 @@ final class InputInjector {
             let current = currentCursor()
             if !bounds.contains(current) {
                 let center = CGPoint(x: bounds.midX, y: bounds.midY)
-                pointerHandoff.touchMovesPointer(to: center, from: current, holding: false)
+                pointerHandoff?.touchMovesPointer(to: center, from: current, holding: false)
                 postMouse(.mouseMoved, at: center, button: .left, clickState: 0)
             }
         }
@@ -252,14 +255,18 @@ final class InputInjector {
     /// (NSEvent.magnification semantics); `phase` is began, changed, ended or
     /// cancelled.
     func handleMagnify(phase: String, magnification: Double) {
+        gestureQueue.async { [self] in applyMagnify(phase: phase, magnification: magnification) }
+    }
+
+    private func applyMagnify(phase: String, magnification: Double) {
         let bits: Int64
         switch phase {
         case "began":
-            if magnifying { handleMagnify(phase: "ended", magnification: 0) }
+            if magnifying { applyMagnify(phase: "ended", magnification: 0) }
             bits = 1
             magnifying = true
         case "changed":
-            guard magnifying else { return handleMagnify(phase: "began", magnification: magnification) }
+            guard magnifying else { return applyMagnify(phase: "began", magnification: magnification) }
             bits = 2
         case "ended", "cancelled":
             guard magnifying else { return }
@@ -364,6 +371,7 @@ final class InputInjector {
         let p: CGPoint
         if let nx = x, let ny = y { p = screenPoint(nx: nx, ny: ny) }
         else { p = currentCursor() }
+        pointerHandoff?.deviceMovesPointer(to: p, holding: phase == .down || phase == .drag)
 
         let type: CGEventType
         switch phase {

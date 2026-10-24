@@ -95,6 +95,30 @@ final class PointerHandoffTests: XCTestCase {
         XCTAssertEqual(warps, [])
     }
 
+    /// Pencil hover and strokes move the pointer too; that is the device, not
+    /// the user reaching for the mouse.
+    func testPencilMovementKeepsThePointerOnTheDevice() {
+        let h = makeHandoff()
+        tapOnce(h, at: tap)
+        clock += 1
+        let pen = CGPoint(x: tap.x + 80, y: tap.y + 40)
+        h.deviceMovesPointer(to: pen, holding: false)
+        clock += 1
+        h.pointerSampled(at: pen)
+        XCTAssertEqual(warps, [])
+        XCTAssertTrue(h.touchOwnsPointer)
+
+        h.pointerSampled(at: CGPoint(x: pen.x + 3, y: pen.y))   // now the mouse moves
+        XCTAssertEqual(warps, [CGPoint(x: home.x + 3, y: home.y)])
+    }
+
+    /// Without a touch holding the pointer, the pencil doesn't create a home.
+    func testPencilAloneDoesNotBorrowThePointer() {
+        let h = makeHandoff()
+        h.deviceMovesPointer(to: tap, holding: true)
+        XCTAssertFalse(h.touchOwnsPointer)
+    }
+
     func testReturnPointerWhenTheSessionEnds() {
         let h = makeHandoff()
         tapOnce(h, at: tap)

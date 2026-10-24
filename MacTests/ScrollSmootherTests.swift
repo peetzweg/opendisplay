@@ -75,6 +75,22 @@ final class ScrollSmootherTests: XCTestCase {
         XCTAssertEqual(caught.last?.scrollPhase, began)
     }
 
+    /// A finger resting mid-scroll must not keep posting empty events.
+    func testRestingFingerGoesQuiet() {
+        var s = ScrollSmoother(timeConstant: 0.025)
+        _ = s.receive(phase: "began", dx: 0, dy: 3)
+        _ = run(&s, ticks: 120)                    // one second of rest
+        XCTAssertEqual(s.tick(dt: tick), [])
+        XCTAssertFalse(s.isIdle, "the touch phase stays open until the fingers lift")
+    }
+
+    func testTicksNeverPostEmptyEvents() {
+        var s = ScrollSmoother(timeConstant: 0.025)
+        _ = s.receive(phase: "began", dx: 0.6, dy: 0)
+        let events = run(&s, ticks: 60)
+        XCTAssertFalse(events.contains { $0.dx == 0 && $0.dy == 0 })
+    }
+
     func testFinishFlushesAndCloses() {
         var s = ScrollSmoother(timeConstant: 0.025)
         _ = s.receive(phase: "began", dx: 0, dy: 20)

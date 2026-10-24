@@ -67,7 +67,9 @@ enum SystemAction: String, CaseIterable {
             return Self.postSymbolicHotKey(id, action: rawValue)
         case .app(let path):
             NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path),
-                                               configuration: NSWorkspace.OpenConfiguration())
+                                               configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                if let error { Log.info("system action \(rawValue): could not open \(path): \(error.localizedDescription)") }
+            }
             return true
         }
     }

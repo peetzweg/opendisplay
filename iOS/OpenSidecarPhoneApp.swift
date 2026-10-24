@@ -1069,8 +1069,9 @@ struct VideoLayerView: UIViewRepresentable {
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] in self?.updateActionsButton($0) }
                 .store(in: &actionsSubscriptions)
-            // The settings toggle writes the default.
-            NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            // The settings toggle writes this one default; watch only it.
+            UserDefaults.standard.publisher(for: \.actionsButton)
+                .dropFirst()
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in self?.updateActionsButton(self?.receiver?.macActions ?? []) }
                 .store(in: &actionsSubscriptions)
@@ -1078,7 +1079,7 @@ struct VideoLayerView: UIViewRepresentable {
 
         private func updateActionsButton(_ actions: [String]) {
             guard let button = actionsButton else { return }
-            let enabled = UserDefaults.standard.object(forKey: Self.actionsButtonKey) as? Bool ?? true
+            let enabled = UserDefaults.standard.actionsButton
             let items = Self.actionItems.filter { actions.contains($0.name) }.map { item in
                 UIAction(title: item.title, image: UIImage(systemName: item.symbol)) { [weak self] _ in
                     self?.receiver?.sendGesture(action: item.name)
@@ -1170,7 +1171,7 @@ struct VideoLayerView: UIViewRepresentable {
             guard recognizer.state == .ended, receiver?.macSupportsTouchButtons == true,
                   let n = normalized(recognizer.location(in: self)) else { return }
             lastNorm = n
-            receiver?.sendTouch(phase: "began", x: n.x, y: n.y, button: "right")
+            press(at: n, button: "right")
             receiver?.sendTouch(phase: "ended", x: n.x, y: n.y, button: "right")
         }
 
@@ -1189,7 +1190,8 @@ struct VideoLayerView: UIViewRepresentable {
         private let dragSlop: CGFloat = 10
         /// A press this long with no second finger is a deliberate hold, so
         /// commit it: press-and-hold menus and drag handles need the button.
-        /// Only for Macs without `touch.button`; newer ones get `longPressDelay`.
+        /// Only for Macs without the touchscreen rules (see `touchScrolls`),
+        /// which get `longPressDelay` instead.
         private let holdDelay: TimeInterval = 0.12
         /// A press held this long without moving is a secondary click, the way
         /// macOS 27 Sidecar and UIKit's long press read it. Moving first is a drag.
@@ -1204,17 +1206,15 @@ struct VideoLayerView: UIViewRepresentable {
             downSent = true
             holdTimer?.cancel()
             holdTimer = nil
-            receiver?.sendTouch(phase: "began", x: p.x, y: p.y)
+            press(at: p)
         }
 
-        /// The finger stayed put for `longPressDelay`: press the secondary
-        /// button there instead. The rest of the touch drags and releases it.
-        private func commitSecondaryPress() {
-            guard let p = pendingDown, !downSent else { return }
-            downSent = true
-            holdTimer = nil
-            secondaryClickFeedback.impactOccurred()
-            receiver?.sendTouch(phase: "began", x: p.x, y: p.y, button: "right")
+        /// Move the pointer to the press, then press. Some apps act on the
+        /// position the last mouse move left (#310), so the button must not
+        /// arrive with the jump.
+        private func press(at p: (x: Double, y: Double), button: String? = nil) {
+            receiver?.sendTouch(phase: "moved", x: p.x, y: p.y)
+            receiver?.sendTouch(phase: "began", x: p.x, y: p.y, button: button)
         }
 
         /// Drop the press without a trace. Nothing reached the Mac, so there is
@@ -1356,7 +1356,7 @@ struct VideoLayerView: UIViewRepresentable {
                     if downSent { receiver?.sendTouch(phase: "ended", x: norm.x, y: norm.y) }
                 case .held:
                     if let p = pendingDown {
-                        receiver?.sendTouch(phase: "began", x: p.x, y: p.y, button: "right")
+                        press(at: p, button: "right")
                         receiver?.sendTouch(phase: "ended", x: p.x, y: p.y, button: "right")
                     }
                 case .scrolling:
@@ -1421,14 +1421,9 @@ struct VideoLayerView: UIViewRepresentable {
                 pendingDown = norm
                 pendingDownPoint = location
                 downSent = false
-                let secondary = receiver?.macSupportsTouchButtons ?? false
-                if secondary { secondaryClickFeedback.prepare() }
-                let work = DispatchWorkItem { [weak self] in
-                    if secondary { self?.commitSecondaryPress() } else { self?.commitPendingDown() }
-                }
+                let work = DispatchWorkItem { [weak self] in self?.commitPendingDown() }
                 holdTimer = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + (secondary ? longPressDelay : holdDelay),
-                                              execute: work)
+                DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: work)
                 return
             case "ended":
                 // A tap: nothing was posted yet, so post the whole click now.
@@ -1468,17 +1463,8 @@ struct VideoLayerView: UIViewRepresentable {
             guard let touch = touches.first,
                   let norm = normalized(touch.location(in: self)) else { return }
             lastNorm = norm
-            if phase == "moved", let event {
-                for t in event.samples(for: touch) {
-                    if let n = normalized(t.location(in: self)) {
-                        lastNorm = n
-                        receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
-                    }
-                }
-                if let predicted = event.predictedTouches(for: touch)?.last,
-                   let n = normalized(predicted.location(in: self)) {
-                    receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
-                }
+            if phase == "moved" {
+                forwardMoves(touch, event)
                 return
             }
             receiver?.sendTouch(phase: phase, x: norm.x, y: norm.y)
@@ -1515,6 +1501,14 @@ struct VideoLayerView: UIViewRepresentable {
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
             routeTouches("cancelled", touches, event, ended: true)
         }
+    }
+}
+
+extension UserDefaults {
+    /// KVO-observable `VideoView.actionsButtonKey` (the property name must
+    /// equal the key for UserDefaults to emit changes).
+    @objc dynamic var actionsButton: Bool {
+        object(forKey: VideoLayerView.VideoView.actionsButtonKey) as? Bool ?? true
     }
 }
 

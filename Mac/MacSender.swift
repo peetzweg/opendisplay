@@ -217,6 +217,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Escape hatch: `defaults write com.peetzweg.opensidecar.mac localCursor -bool false`.
     private let localCursor = UserDefaults.standard.object(forKey: "localCursor") == nil
         || UserDefaults.standard.bool(forKey: "localCursor")
+    /// Touch mode's pointer handoff hides the pointer on the receiver and gives
+    /// it back from the cursor-echo poll, so it needs the echo.
+    private var pointerHandoff: PointerHandoff? { localCursor ? .shared : nil }
     // Cursor sampling must not share ScreenCaptureKit's serial callback queue:
     // a 4K encode submission can otherwise delay the next poll long before the
     // dedicated UDP channel gets a chance to help. Sampling lives here; only
@@ -855,7 +858,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
 
         try ensureActiveDisplay(vd)
-        inputInjector = InputInjector(displayID: vd.displayID)
+        inputInjector = InputInjector(displayID: vd.displayID, pointerHandoff: pointerHandoff)
         try await startCapture(display: captureDisplay,
                                sourcePixelsWide: vd.pixelsWide,
                                sourcePixelsHigh: vd.pixelsHigh,
@@ -1034,7 +1037,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                receiver: info)
         try ensureActiveDisplay(vd)
         if dimensionsChanged {
-            inputInjector = InputInjector(displayID: vd.displayID)
+            inputInjector = InputInjector(displayID: vd.displayID, pointerHandoff: pointerHandoff)
         }
 
         if dimensionsChanged, UserDefaults.standard.bool(forKey: "testPattern") {
@@ -1066,7 +1069,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                    sourcePixelsHigh: canvas.pixelsHigh,
                                    receiver: info)
             try ensureActiveDisplay(vd)
-            inputInjector = InputInjector(displayID: vd.displayID)
+            inputInjector = InputInjector(displayID: vd.displayID, pointerHandoff: pointerHandoff)
             return true
         } catch {
             try ensureActiveDisplay(vd)
@@ -1346,7 +1349,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
         inputInjector?.endScrollGestures()
-        PointerHandoff.shared.returnPointer()
+        pointerHandoff?.returnPointer()
         cursorImageTimer?.cancel()
         cursorImageTimer = nil
         stream?.stopCapture { _ in }

@@ -73,6 +73,19 @@ final class PointerHandoff: @unchecked Sendable {
         }
     }
 
+    /// The device moved the pointer some other way (Apple Pencil hover and
+    /// strokes). It doesn't take the pointer from the mouse, but while a touch
+    /// holds it, that movement is the device's and must not read as the user
+    /// grabbing the mouse.
+    func deviceMovesPointer(to point: CGPoint, holding: Bool) {
+        lock.withLock {
+            guard isEnabled, home != nil else { return }
+            touchPoint = point
+            lastTouch = now()
+            self.holding = holding
+        }
+    }
+
     /// Feed every pointer sample. When the pointer moved away from where the
     /// touch left it, the user is using the mouse again: send the pointer
     /// home, keeping the distance they already moved it.

@@ -26,6 +26,9 @@ struct ScrollSmoother {
 
     /// Below this many points the reservoir counts as drained.
     static let drained = 0.25
+    /// Below this many points a tick has nothing worth posting (a finger
+    /// resting mid-scroll leaves a reservoir that decays toward zero forever).
+    static let resting = 0.01
 
     init(timeConstant: TimeInterval) {
         self.timeConstant = timeConstant
@@ -91,11 +94,13 @@ struct ScrollSmoother {
         if endRequested, hypot(pendingX, pendingY) < Self.drained {
             return finish()
         }
+        guard hypot(pendingX, pendingY) >= Self.resting else { return [] }
         let share = 1 - exp(-max(dt, 0) / timeConstant)
         let x = pendingX * share, y = pendingY * share
         pendingX -= x; pendingY -= y
-        guard x != 0 || y != 0 else { return [] }
-        return phaser.events(phase: changed, dx: x, dy: y)
+        // Sub-point shares only feed the phaser's carry; posting them would be
+        // a stream of empty events.
+        return phaser.events(phase: changed, dx: x, dy: y).filter { $0.dx != 0 || $0.dy != 0 }
     }
 
     /// Post what is left and close the open phase, e.g. on disconnect.
