@@ -42,7 +42,16 @@ internal class AccessoryLink private constructor(
         /** Null without permission, or when another process holds it. */
         fun open(manager: UsbManager, accessory: UsbAccessory): AccessoryLink? {
             if (!manager.hasPermission(accessory)) return null
-            val fd = manager.openAccessory(accessory) ?: return null
+            // The sender can reset the device between the check and the open:
+            // the attachment is gone (IllegalArgumentException) or its
+            // permission with it (SecurityException). A fresh one follows.
+            val fd = try {
+                manager.openAccessory(accessory)
+            } catch (e: IllegalArgumentException) {
+                null
+            } catch (e: SecurityException) {
+                null
+            } ?: return null
             return AccessoryLink(fd, accessory)
         }
     }

@@ -26,6 +26,9 @@ final class AccessoryDeviceWatcher {
     // end re-enumerates the device, and a probe right after enumeration can
     // go unanswered: a known device is not asked again.
     private var capable: Set<String> = []
+    // Entries whose probe is still running. A device unplugged mid-probe
+    // drops out here, so a late answer cannot list a device that is gone.
+    private var probing: Set<UInt64> = []
     private let onChange: ([UsbmuxDevice]) -> Void
     private let port: IONotificationPortRef
     private var addedIterator: io_iterator_t = 0
@@ -80,6 +83,7 @@ final class AccessoryDeviceWatcher {
             // The control request blocks for up to a second on a device
             // that ignores it — keep it off the main thread. A device still
             // settling after enumeration gets two more tries.
+            probing.insert(entry)
             Task.detached {
                 var version: Int?
                 for attempt in 0..<3 where version == nil {
@@ -87,10 +91,14 @@ final class AccessoryDeviceWatcher {
                     version = AOA.protocolVersion(of: service)
                 }
                 IOObjectRelease(service)
-                guard version != nil else { return }
-                await self.attach(serial: serial, name: name, entry: entry)
+                await self.probed(serial: serial, name: name, entry: entry, capable: version != nil)
             }
         }
+    }
+
+    private func probed(serial: String, name: String?, entry: UInt64, capable: Bool) {
+        guard probing.remove(entry) != nil, capable else { return }
+        attach(serial: serial, name: name, entry: entry)
     }
 
     private func attach(serial: String, name: String?, entry: UInt64) {
@@ -108,6 +116,7 @@ final class AccessoryDeviceWatcher {
             var entry: UInt64 = 0
             IORegistryEntryGetRegistryEntryID(service, &entry)
             IOObjectRelease(service)
+            probing.remove(entry)
             guard let serial = serialByEntry.removeValue(forKey: entry),
                   devices[serial] != nil else { continue }
             pendingDetach[serial]?.cancel()

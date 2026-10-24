@@ -116,12 +116,12 @@ enum AOA {
         var found: Device?
         let deadline = ContinuousClock.now + reenumerationTimeout
         while found == nil, ContinuousClock.now < deadline {
+            try Task.checkCancellation()
             if let current = findDevice(serial: serial) {
                 if current.isAccessory {
                     found = current
                     break
                 }
-                try Task.checkCancellation()
                 // A device mid re-enumeration may not answer; the next round asks again.
                 try? handshake(current.service)
                 current.release()
