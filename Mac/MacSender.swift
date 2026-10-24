@@ -29,6 +29,7 @@ enum CaptureMode: String {
 enum SenderTransport {
     case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
+    case adb(serial: String, port: UInt16) // Android over USB through an adb forward
 }
 
 @available(macOS 14.0, *)
@@ -1379,7 +1380,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     func switchTransport(to newTransport: SenderTransport) {
         queue.async { [weak self] in
             guard let self, !self.stopped else { return }
-            let label = if case .usb = newTransport { "USB" } else { "WiFi" }
+            let label = if case .tcp = newTransport { "WiFi" } else { "USB" }
             Log.info("switching \(self.endpointName) to \(label)")
             self.transport = newTransport
             // Fresh grace window: if the new link can't come up either, the
@@ -1622,7 +1623,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard !stopped else { return }
         switch transport {
         case .tcp(let endpoint): connectTCP(endpoint)
-        case .usb(let udid, let port): connectUSB(udid: udid, port: port)
+        case .usb(let udid, let port):
+            connectWired { (try await Usbmux.dial(udid: udid, port: port, queue: self.queue), nil) }
+        case .adb(let serial, let port):
+            connectWired { try await Adb.dial(serial: serial, port: port, queue: self.queue) }
         }
     }
 
@@ -1954,15 +1958,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         conn.start(queue: queue)
     }
 
-    /// Dial through macOS's built-in usbmuxd — no external tunnel needed.
+    /// Dial over the cable: macOS's built-in usbmuxd for iPhones and iPads,
+    /// an adb forward for Android — no external tunnel needed. The dial may
+    /// already have read the receiver's first message (adb, to tell a live
+    /// receiver from a bare forward); it is handled right after adoption.
     /// The handshake is async, so adoption is gated on `dialGeneration`.
-    private func connectUSB(udid: String?, port: UInt16) {
+    private func connectWired(_ dial: @escaping () async throws -> (NWConnection, Data?)) {
         dialGeneration += 1
         let generation = dialGeneration
         Task { [weak self] in
             guard let self else { return }
             do {
-                let conn = try await Usbmux.dial(udid: udid, port: port, queue: queue)
+                let (conn, firstMessage) = try await dial()
                 queue.async {
                     guard generation == self.dialGeneration, !self.stopped else {
                         conn.cancel()
@@ -1983,6 +1990,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         }
                     }
                     self.becomeReady(conn)
+                    if let firstMessage { self.handleControl(firstMessage) }
                 }
             } catch {
                 queue.async {
@@ -1990,10 +1998,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     // Distinct guidance per failure: cable missing vs app
                     // closed. Composed on `queue`: awaitingWake lives there.
                     let hint: String
-                    switch error as? Usbmux.Failure {
-                    case .noDevice:
+                    switch error {
+                    case Usbmux.Failure.noDevice:
                         hint = "Waiting for a USB device — plug in the iPhone or iPad…"
-                    case .refused:
+                    case Adb.Failure.noDevice:
+                        hint = "Waiting for the Android device — plug it in with USB debugging on…"
+                    case Usbmux.Failure.refused, Adb.Failure.refused:
                         self.dialRefused()
                         hint = self.awaitingWake
                             ? "\(self.endpointName) is asleep — reconnects when it wakes…"

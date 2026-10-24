@@ -1,301 +1,357 @@
-// AdbDeviceWatcher — detects Android devices over USB via ADB and
-// automatically sets up `adb forward tcp:9000 tcp:9000` so the Mac sender
-// can reach the receiver app on 127.0.0.1:9000 without any manual steps.
+// AdbDeviceWatcher — finds Android devices on the USB cable and dials their
+// receiver through an adb forward, so a cabled Android device connects like
+// a cabled iPhone does: no `adb forward` by hand, no -host/-port override.
 //
-// Why a separate watcher: the Mac app's existing UsbmuxDeviceWatcher speaks
-// usbmuxd (macOS's built-in iOS multiplexer on /var/run/usbmuxd), which
-// Android devices never expose. The Android receiver listens on 127.0.0.1:9000
-// specifically for the ADB-forward path — see PhoneReceiver.listenLoop with
-// acceptGate = ::isAdbEnabled.
+// Android has no usbmuxd. What a developer-mode Android device has instead
+// is adb: with USB debugging on, the adb server (127.0.0.1:5037) tracks
+// attached devices and can forward a local TCP port to a port on the device.
+// Like Usbmux.swift, this speaks the server's socket protocol directly
+// instead of spawning the `adb` client:
 //
-// This watcher mirrors UsbmuxDeviceWatcher's lifecycle: seed from the
-// current state on init, then poll for attach/detach. When the set of
-// connected Android devices transitions from empty → non-empty, it fires
-// an adb forward so the existing `.usb(udid: nil) → .tcp(127.0.0.1:9000)`
-// fallback in OpenSidecarMacApp.autoConnect() picks it up.
+//   request: [4 hex digits: length][service, e.g. "host:track-devices-l"]
+//   reply:   "OKAY" | "FAIL" [4 hex length][message]
+//
+// Not spawning the client matters: an `adb` binary whose version differs
+// from the running server's kills and replaces that server, and a Mac with
+// both Homebrew's and Android Studio's adb would have the two fight forever.
+// The binary is only used to start a server when none is running.
+//
+// Android devices join the controller's wired device list under the udid
+// `adb:<serial>` (AdbParsing), so cable upgrade, WiFi failover, per-device
+// opt-out and the device list rows all work exactly as for usbmuxd devices.
 
 import Foundation
+import Network
 
-/// One ADB-connected Android device. Identified by its adb serial number,
-/// which is stable across replugs on the same physical port.
-struct AdbDevice: Hashable, Identifiable {
-    let serial: String   /// ADB serial number (e.g. `ABC1234567`)
-    let name: String?    /// Best-effort device name from `adb -s serial shell getprop ro.product.model`
+enum Adb {
+    static let serverPort: UInt16 = 5037
 
-    var id: String { serial }
-}
+    enum Failure: Error, LocalizedError {
+        case noServer          // nothing listening on 5037
+        case noDevice          // the serial is not attached (or not authorized)
+        case refused           // forward up, but no receiver app behind it
+        case server(String)    // FAIL reply
+        case protocolError(String)
 
-@MainActor
-final class AdbDeviceWatcher {
-    /// The devices currently seen by `adb devices` (only rows with state=device).
-    /// Not @Published — the MainActor controller drives UI through onChange.
-    private(set) var devices: [AdbDevice] = []
-
-    /// Fired whenever the device set changes (attach, detach, or name resolve).
-    /// The OpenSidecar controller uses this to auto-configure the host/port
-    /// defaults and trigger a TCP dial to 127.0.0.1:9000.
-    var onChange: (([AdbDevice]) -> Void)?
-
-    /// Whether `adb` is available on PATH. Checked once at init; if `false`
-    /// the watcher stays quiet and never fires onChange.
-    let adbAvailable: Bool
-
-    /// The adb executable path, cached at init time so a PATH change mid-run
-    /// does not confuse things.
-    private let adbPath: String
-
-    private let queue = DispatchQueue(label: "adb.watcher")
-    private var lastKnown: Set<String> = []
-    private var isForwardActive = false
-
-    /// Cache of serial → product model name. Resolved once on first attach
-    /// per serial; re-plug with the same serial reuses the cache. `adb shell`
-    /// per device per 3s poll was wasteful and could stall on unauthorized
-    /// devices, so we name-resolve lazily and cache aggressively.
-    private var nameCache: [String: String?] = [:]
-
-    /// Timeout for any single `adb` process spawn. A hung adb (unauthorized
-    /// device, adbd crash) must not stall the 3s poll loop indefinitely.
-    private static let adbTimeout: TimeInterval = 5
-
-    init() {
-        let path = Self.locateAdb()
-        self.adbPath = path ?? ""
-        self.adbAvailable = path != nil
-
-        guard adbAvailable else {
-            Log.info("adb not found on PATH — Android USB watcher disabled")
-            return
-        }
-        Log.info("adb watcher started (adb = \(adbPath))")
-        Task {
-            await scanLoop()
+        var errorDescription: String? {
+            switch self {
+            case .noServer: return "adb server not running"
+            case .noDevice: return "Android device not attached"
+            case .refused: return "receiver not listening"
+            case .server(let message): return "adb: \(message)"
+            case .protocolError(let detail): return "adb protocol error: \(detail)"
+            }
         }
     }
 
-    // MARK: - Polling loop
+    /// Forward a local port to `port` on the device and connect through it.
+    /// adb accepts the local connection even when nothing listens on the
+    /// device and then closes it at once, so "connected" only means "reached
+    /// the receiver" once the first message arrives: the receiver always
+    /// opens with hello (PROTOCOL.md). That message is returned for the
+    /// caller to handle; the connection's next read starts after it.
+    static func dial(serial: String, port: UInt16,
+                     queue: DispatchQueue) async throws -> (NWConnection, Data) {
+        let localPort = try await forwardedPort(serial: serial, remotePort: port, queue: queue)
+        let options = NWProtocolTCP.Options()
+        options.noDelay = true
+        let conn = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: localPort)!,
+                                using: NWParameters(tls: nil, tcp: options))
+        // A receiver that accepts but never says hello must not hang the
+        // dial: cancelling fails whichever step is pending.
+        let deadline = DispatchWorkItem { conn.cancel() }
+        queue.asyncAfter(deadline: .now() + 3, execute: deadline)
+        defer { deadline.cancel() }
+        do {
+            try await start(conn, queue: queue)
+            let header = try await receive(exactly: 4, on: conn)
+            let length = Int(UInt32(bigEndian: header.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }))
+            guard length > 0, length < 1 << 20 else {
+                throw Failure.protocolError("bad first message length \(length)")
+            }
+            return (conn, try await receive(exactly: length, on: conn))
+        } catch {
+            conn.cancel()
+            throw Failure.refused
+        }
+    }
 
-    /// Poll `adb devices -l` every 3s and reconcile the device set.
-    /// Slow enough to not hammer adb, fast enough that a plugin-and-wait
-    /// flow connects within ~3s.
-    private func scanLoop() async {
+    /// Reuse this device's forward to `remotePort` if one exists, else let
+    /// adb pick a free local port (`tcp:0`): a fixed 9000 would collide
+    /// with the Mac Receiver, a second Android device, or any local server.
+    /// adb drops the rule itself when the device detaches.
+    static func forwardedPort(serial: String, remotePort: UInt16,
+                              queue: DispatchQueue) async throws -> UInt16 {
+        let listing = try await query("host:list-forward", queue: queue)
+        if let port = AdbParsing.forwardedPort(in: listing, serial: serial, remotePort: remotePort) {
+            return port
+        }
+        let conn = try await open(queue: queue)
+        defer { conn.cancel() }
+        do {
+            try await request("host-serial:\(serial):forward:tcp:0;tcp:\(remotePort)", on: conn)
+            try await expectOkay(on: conn)   // the forward itself, after the host's OKAY
+        } catch Failure.server(let message) where message.contains("not found") {
+            throw Failure.noDevice
+        }
+        guard let port = UInt16(try await readBlock(on: conn)) else {
+            throw Failure.protocolError("forward returned no port")
+        }
+        Log.info("adb forward \(serial) tcp:\(port) → tcp:\(remotePort)")
+        return port
+    }
+
+    /// The device's user-visible name: the same default the receiver
+    /// advertises over Bonjour, so the WiFi twin is matched before the first
+    /// hello pins the install id.
+    static func deviceName(serial: String, queue: DispatchQueue) async -> String? {
+        guard let conn = try? await open(queue: queue) else { return nil }
+        defer { conn.cancel() }
+        do {
+            try await request("host:transport:\(serial)", on: conn)
+            try await request("shell:settings get global device_name; getprop ro.product.model", on: conn)
+            return AdbParsing.deviceName(fromShellOutput: try await readToEnd(on: conn))
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - Socket plumbing
+
+    static func open(queue: DispatchQueue) async throws -> NWConnection {
+        let conn = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: serverPort)!,
+                                using: .tcp)
+        do {
+            try await start(conn, queue: queue)
+        } catch {
+            throw Failure.noServer
+        }
+        return conn
+    }
+
+    /// Send a service request and consume its OKAY.
+    static func request(_ service: String, on conn: NWConnection) async throws {
+        let body = Data(service.utf8)
+        try await send(Data(String(format: "%04x", body.count).utf8) + body, on: conn)
+        try await expectOkay(on: conn)
+    }
+
+    /// One length-prefixed reply block (track-devices snapshots, list-forward).
+    static func readBlock(on conn: NWConnection) async throws -> String {
+        let header = try await receive(exactly: 4, on: conn)
+        guard let length = Int(String(decoding: header, as: UTF8.self), radix: 16) else {
+            throw Failure.protocolError("bad block length")
+        }
+        guard length > 0 else { return "" }
+        return String(decoding: try await receive(exactly: length, on: conn), as: UTF8.self)
+    }
+
+    private static func query(_ service: String, queue: DispatchQueue) async throws -> String {
+        let conn = try await open(queue: queue)
+        defer { conn.cancel() }
+        try await request(service, on: conn)
+        return try await readBlock(on: conn)
+    }
+
+    private static func expectOkay(on conn: NWConnection) async throws {
+        let status = String(decoding: try await receive(exactly: 4, on: conn), as: UTF8.self)
+        switch status {
+        case "OKAY": return
+        case "FAIL": throw Failure.server((try? await readBlock(on: conn)) ?? "unknown")
+        default: throw Failure.protocolError("unexpected status \(status)")
+        }
+    }
+
+    private static func start(_ conn: NWConnection, queue: DispatchQueue) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            var resumed = false   // the handler fires on `queue` (serial)
+            conn.stateUpdateHandler = { state in
+                guard !resumed else { return }
+                switch state {
+                case .ready:
+                    resumed = true
+                    cont.resume()
+                case .failed(let error), .waiting(let error):
+                    // Loopback has no path changes to wait for.
+                    resumed = true
+                    conn.cancel()
+                    cont.resume(throwing: error)
+                case .cancelled:
+                    resumed = true
+                    cont.resume(throwing: Failure.protocolError("cancelled"))
+                default:
+                    break
+                }
+            }
+            conn.start(queue: queue)
+        }
+        conn.stateUpdateHandler = nil
+    }
+
+    private static func send(_ data: Data, on conn: NWConnection) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            conn.send(content: data, completion: .contentProcessed { error in
+                if let error { cont.resume(throwing: error) } else { cont.resume() }
+            })
+        }
+    }
+
+    private static func receive(exactly count: Int, on conn: NWConnection) async throws -> Data {
+        try await withCheckedThrowingContinuation { cont in
+            conn.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
+                if let data, data.count == count {
+                    cont.resume(returning: data)
+                } else {
+                    cont.resume(throwing: error ?? Failure.protocolError("socket closed"))
+                }
+            }
+        }
+    }
+
+    private static func readToEnd(on conn: NWConnection) async throws -> String {
+        var output = Data()
         while true {
-            let current = await scanDevices()
-            let currentSerials = Set(current.map(\.serial))
-            let newlyAttached = currentSerials.subtracting(lastKnown)
-            let nowDetached = lastKnown.subtracting(currentSerials)
-
-            if !newlyAttached.isEmpty {
-                Log.info("adb device attached: \(newlyAttached.sorted())")
+            let (data, done): (Data?, Bool) = try await withCheckedThrowingContinuation { cont in
+                conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
+                    if let error, data == nil {
+                        cont.resume(throwing: error)
+                    } else {
+                        cont.resume(returning: (data, isComplete))
+                    }
+                }
             }
-            if !nowDetached.isEmpty {
-                Log.info("adb device detached: \(nowDetached.sorted())")
-                // Drop name cache for detached devices — serials can be reused
-                // if a different Android device gets the same USB port.
-                for serial in nowDetached { nameCache.removeValue(forKey: serial) }
+            if let data { output.append(data) }
+            if done || data == nil { return String(decoding: output, as: UTF8.self) }
+        }
+    }
+
+    // MARK: - Starting the server
+
+    /// `adb start-server`, bounded: a wedged binary must not hold the watcher.
+    static func startServer(adbPath: String) async -> Bool {
+        await withCheckedContinuation { cont in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: adbPath)
+            process.arguments = ["start-server"]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { cont.resume(returning: $0.terminationStatus == 0) }
+            do {
+                try process.run()
+            } catch {
+                process.terminationHandler = nil
+                cont.resume(returning: false)
+                return
             }
-
-            lastKnown = currentSerials
-            devices = current
-
-            // Manage the adb forward tunnel — only when a device is present.
-            if !current.isEmpty {
-                trySetupForward()
-            } else {
-                tryTeardownForward()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                if process.isRunning { process.terminate() }
             }
+        }
+    }
 
-            if !newlyAttached.isEmpty || !nowDetached.isEmpty {
-                onChange?(current)
+    /// macOS ships no adb. Apps launched from Finder get a minimal PATH, so
+    /// the usual install locations are checked explicitly.
+    static func locate() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let pathDirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
+        let candidates = pathDirs.map { "\($0)/adb" } + [
+            "/opt/homebrew/bin/adb",                          // Homebrew, Apple silicon
+            "/usr/local/bin/adb",                             // Homebrew, Intel
+            "\(home)/Library/Android/sdk/platform-tools/adb", // Android Studio
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+}
+
+/// Long-lived `host:track-devices-l` subscription: the server pushes a full
+/// snapshot on every change, so attach and detach arrive without polling.
+/// Reports USB-attached, authorized devices as wired devices.
+@MainActor
+final class AdbDeviceWatcher {
+    private let queue = DispatchQueue(label: "adb.watcher")
+    private var devices: [String: UsbmuxDevice] = [:]   // by serial
+    private var unauthorizedLogged: Set<String> = []
+    private let onChange: ([UsbmuxDevice]) -> Void
+    // A server is started at most once a minute: someone who ran
+    // `adb kill-server` must not see it come straight back every retry.
+    private var lastServerStart: Date?
+    private var adbPath: String??   // outer nil = not looked up yet
+
+    init(onChange: @escaping ([UsbmuxDevice]) -> Void) {
+        self.onChange = onChange
+        Task { await trackLoop() }
+    }
+
+    private func trackLoop() async {
+        while true {
+            do {
+                let conn = try await Adb.open(queue: queue)
+                defer { conn.cancel() }
+                try await Adb.request("host:track-devices-l", on: conn)
+                while true {
+                    update(AdbParsing.devices(try await Adb.readBlock(on: conn)))
+                }
+            } catch Adb.Failure.noServer {
+                if !devices.isEmpty { update([]) }
+                if await startServerIfDue() { continue }
+            } catch {
+                Log.info("adb watcher: \(error.localizedDescription) — retrying in 3s")
+                if !devices.isEmpty { update([]) }
             }
-
             try? await Task.sleep(for: .seconds(3))
         }
     }
 
-    // MARK: - Device scan
-
-    /// Run `adb devices -l` and parse the output into [AdbDevice].
-    /// Rows with state `device` (not `unauthorized`, `offline`, etc.) count.
-    private func scanDevices() async -> [AdbDevice] {
-        guard let (output, exitCode) = await runAdb(["devices", "-l"]) else {
-            return []
+    private func startServerIfDue() async -> Bool {
+        if adbPath == nil {
+            let path = Adb.locate()
+            adbPath = .some(path)
+            Log.info(path.map { "adb found at \($0)" } ?? "adb not found — Android over USB unavailable")
         }
-        guard exitCode == 0 else {
-            return []
-        }
-
-        var result: [AdbDevice] = []
-        let lines = output.split(separator: "\n", omittingEmptySubsequences: true)
-        for line in lines.dropFirst() {   // skip the "List of devices attached" header
-            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-            guard parts.count >= 2 else { continue }
-            let serial = String(parts[0])
-            let state = String(parts[1])
-            guard state == "device" else { continue }
-
-            // Resolve device name from cache, or lazily on first attach.
-            let name = await resolvedName(serial: serial)
-            result.append(AdbDevice(serial: serial, name: name))
-        }
-        return result
+        guard let path = adbPath ?? nil,
+              lastServerStart.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return false }
+        lastServerStart = Date()
+        Log.info("adb server not running — starting it")
+        return await Adb.startServer(adbPath: path)
     }
 
-    /// Return cached name for `serial`, or resolve and cache on first call.
-    /// Each unique serial triggers at most one `adb shell getprop` call —
-    /// subsequent polls within a session hit the dictionary.
-    private func resolvedName(serial: String) async -> String? {
-        if let cached = nameCache[serial] { return cached }
-        let name = await resolveDeviceName(serial: serial)
-        nameCache[serial] = name
-        return name
-    }
-
-    /// One-shot name resolution for a serial. Called exactly once per serial
-    /// per session. `adb -s serial shell getprop ro.product.model` is fast when
-    /// adb is warm; returns nil on any failure or timeout.
-    private func resolveDeviceName(serial: String) async -> String? {
-        let args = ["-s", serial, "shell", "getprop", "ro.product.model"]
-        guard let (output, exitCode) = await runAdb(args), exitCode == 0 else { return nil }
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    // MARK: - adb forward management
-
-    /// Establish `adb forward tcp:9000 tcp:9000` if it is not already in place.
-    /// Idempotent — calling it twice is harmless; we check first with
-    /// `adb forward --list`.
-    private func trySetupForward() {
-        guard !isForwardActive else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            // Check if already set up (another tool, or a previous run).
-            if let (listOutput, _) = await self.runAdb(["forward", "--list"]),
-               listOutput.contains("tcp:9000 tcp:9000") {
-                Log.info("adb forward tcp:9000 tcp:9000 already active")
-                self.isForwardActive = true
-                self.onChange?(self.devices)
-                return
-            }
-            guard let (_, exitCode) = await self.runAdb(["forward", "tcp:9000", "tcp:9000"]),
-                  exitCode == 0 else {
-                Log.info("adb forward tcp:9000 tcp:9000 failed")
-                return
-            }
-            Log.info("adb forward tcp:9000 tcp:9000 established")
-            self.isForwardActive = true
-            self.onChange?(self.devices)
-        }
-    }
-
-    /// Remove the forward rule when no Android device is attached.
-    /// Called on every scan that returns empty; idempotent.
-    private func tryTeardownForward() {
-        guard isForwardActive else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            _ = await self.runAdb(["forward", "--remove", "tcp:9000"])
-            Log.info("adb forward tcp:9000 removed (no Android device)")
-            self.isForwardActive = false
-            self.onChange?([])
-        }
-    }
-
-    // MARK: - Process helper
-
-    /// Execute `adb <args>` with a hard timeout.
-    /// Returns (stdout, exitCode), or nil if launch fails or the process exceeds
-    /// `adbTimeout` seconds (in which case the process is terminated).
-    @discardableResult
-    private func runAdb(_ args: [String]) async -> (String, Int32)? {
-        let timeout = Self.adbTimeout
-        return await withTaskGroup(of: (String, Int32)?.self) { group in
-            // The process execution task
-            group.addTask { [adbPath] in
-                await withCheckedContinuation { continuation in
-                    let process = Process()
-                    process.launchPath = adbPath
-                    process.arguments = args
-                    let pipe = Pipe()
-                    process.standardOutput = pipe
-                    process.standardError = pipe   // adb writes most errors to stderr
-                    do {
-                        try process.run()
-                    } catch {
-                        Log.info("adb process launch failed: \(error)")
-                        continuation.resume(returning: nil)
-                        return
-                    }
-                    process.terminationHandler = { proc in
-                        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                        let output = String(data: data, encoding: .utf8) ?? ""
-                        continuation.resume(returning: (output, proc.terminationStatus))
-                    }
+    private func update(_ snapshot: [AdbParsing.Device]) {
+        var next: [String: UsbmuxDevice] = [:]
+        for device in snapshot where device.usb {
+            guard device.state == "device" else {
+                if device.state == "unauthorized", unauthorizedLogged.insert(device.serial).inserted {
+                    Log.info("adb: \(device.serial) unauthorized — allow USB debugging on the device")
                 }
+                continue
             }
-            // The timeout task — kills any lingering process after `adbTimeout`.
-            group.addTask {
-                try? await Task.sleep(for: .seconds(timeout))
-                return nil
-            }
-            // First task that completes wins. If the timeout fires first,
-            // the process task is cancelled (but the underlying process may
-            // still be running — we kill it via terminationHandler best-effort).
-            let result = await group.next() ?? nil
-            group.cancelAll()
-            return result
+            next[device.serial] = devices[device.serial]
+                ?? UsbmuxDevice(deviceID: -1, udid: AdbParsing.udid(serial: device.serial),
+                                name: device.model)
+        }
+        guard Set(next.keys) != Set(devices.keys) else { return }
+        let attached = Set(next.keys).subtracting(devices.keys)
+        for serial in Set(devices.keys).subtracting(next.keys) {
+            Log.info("adb detached: \(serial)")
+        }
+        for serial in attached {
+            Log.info("adb attached: \(serial)")
+            unauthorizedLogged.remove(serial)
+        }
+        devices = next
+        publish()
+        attached.forEach(resolveName)
+    }
+
+    private func resolveName(serial: String) {
+        Task {
+            guard let name = await Adb.deviceName(serial: serial, queue: queue),
+                  devices[serial] != nil, devices[serial]?.name != name else { return }
+            devices[serial]?.name = name
+            publish()
         }
     }
 
-    // MARK: - Static helpers
-
-    /// Find adb on PATH, or in well-known install locations (Homebrew, SDK).
-    /// macOS ships no adb by default — users get it via `brew install android-platform-tools`.
-    static func locateAdb() -> String? {
-        // 1. PATH lookup via `which`
-        if let path = which("adb"), FileManager.default.isExecutableFile(atPath: path) {
-            return path
-        }
-        // 2. Homebrew (Apple Silicon: /opt/homebrew/bin/adb, Intel: /usr/local/bin/adb)
-        let brewCandidates = ["/opt/homebrew/bin/adb", "/usr/local/bin/adb"]
-        for candidate in brewCandidates {
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-        // 3. Android SDK (standard location)
-        if let home = ProcessInfo.processInfo.environment["HOME"] {
-            let sdkCandidates = [
-                "\(home)/Library/Android/sdk/platform-tools/adb",
-                "\(home)/Android/Sdk/platform-tools/adb"
-            ]
-            for candidate in sdkCandidates {
-                if FileManager.default.isExecutableFile(atPath: candidate) {
-                    return candidate
-                }
-            }
-        }
-        return nil
-    }
-
-    private static func which(_ name: String) -> String? {
-        let pipe = Pipe()
-        let process = Process()
-        process.launchPath = "/usr/bin/which"
-        process.arguments = [name]
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let path = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return path.isEmpty ? nil : path
-        } catch {
-            return nil
-        }
+    private func publish() {
+        onChange(devices.values.sorted { $0.udid < $1.udid })
     }
 }

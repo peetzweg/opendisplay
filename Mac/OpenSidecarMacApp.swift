@@ -211,7 +211,11 @@ final class SenderController: ObservableObject {
 
     @Published var sessions: [DeviceSession] = []
     @Published var discovered: [NWBrowser.Result] = []
+    // Every cabled device: usbmuxd's iPhones and iPads plus adb's Android
+    // devices (udid `adb:<serial>`). The connection policy treats them alike.
     @Published var usbDevices: [UsbmuxDevice] = []
+    private var usbmuxDevices: [UsbmuxDevice] = []
+    private var adbDevices: [UsbmuxDevice] = []
     // `-host x.x.x.x` / `-port n` bypass usbmuxd with a manual TCP endpoint
     // (debugging escape hatch, e.g. an iproxy or SSH tunnel).
     @Published var host = UserDefaults.standard.string(forKey: "host") ?? "127.0.0.1"
@@ -226,9 +230,6 @@ final class SenderController: ObservableObject {
 
     private var browser: NWBrowser?
     private var usbWatcher: UsbmuxDeviceWatcher?
-    /// Watches for Android devices over ADB and auto-configures host/port
-    /// for the adb-forward path (127.0.0.1:9000). Only runs when adb is
-    /// on PATH; see AdbDeviceWatcher.locateAdb().
     private var adbWatcher: AdbDeviceWatcher?
 
     // Connection policy — one session per physical device, and the cable
@@ -290,70 +291,18 @@ final class SenderController: ObservableObject {
     init() {
         startBrowsing()
         usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
-            guard let self else { return }
-            let detached = Set(self.usbDevices.map(\.udid)).subtracting(devices.map(\.udid))
-            self.usbDevices = devices
-            self.failover(detachedUDIDs: detached)
-            self.autoConnect()
+            self?.usbmuxDevices = devices
+            self?.wiredDevicesChanged()
         }
-        // AdbDeviceWatcher — Android USB support.
-        adbWatcher = AdbDeviceWatcher()
-        adbWatcher?.onChange = { [weak self] devices in
-            Task { @MainActor in
-                guard let self else { return }
-                if !devices.isEmpty {
-                    self.applyAdbHostConfig()
-                    self.autoConnect()
-                } else {
-                    self.removeAdbHostConfigIfManaged()
-                    self.autoConnect()
-                }
-            }
+        adbWatcher = AdbDeviceWatcher { [weak self] devices in
+            self?.adbDevices = devices
+            self?.wiredDevicesChanged()
         }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             self.wifiAutoConnectArmed = true
             self.autoConnect()
         }
-    }
-    // MARK: - ADB auto-config
-
-    private var adbHostManaged: Bool {
-        get { UserDefaults.standard.object(forKey: "adbHostManaged") as? Bool ?? false }
-        set { UserDefaults.standard.set(newValue, forKey: "adbHostManaged") }
-    }
-
-    private func applyAdbHostConfig() {
-        if adbHostManaged { return }
-        let defaults = UserDefaults.standard
-        let existingHost = defaults.string(forKey: "host")
-        let existingPort = defaults.string(forKey: "port")
-        let hostAlreadyUs = (existingHost == "127.0.0.1" && existingPort == "9000")
-        if existingHost == nil || hostAlreadyUs {
-            defaults.set("127.0.0.1", forKey: "host")
-            defaults.set("9000", forKey: "port")
-            self.host = "127.0.0.1"
-            self.port = "9000"
-            adbHostManaged = true
-            Log.info("adb auto-config: host=127.0.0.1 port=9000")
-        } else {
-            Log.info("adb device detected but host/port already set — not overwriting")
-        }
-    }
-
-    private func removeAdbHostConfigIfManaged() {
-        guard adbHostManaged else { return }
-        let defaults = UserDefaults.standard
-        let currentHost = defaults.string(forKey: "host")
-        let currentPort = defaults.string(forKey: "port")
-        if currentHost == "127.0.0.1" && currentPort == "9000" {
-            defaults.removeObject(forKey: "host")
-            defaults.removeObject(forKey: "port")
-            self.host = UserDefaults.standard.string(forKey: "host") ?? "127.0.0.1"
-            self.port = UserDefaults.standard.string(forKey: "port") ?? "9000"
-            Log.info("adb auto-config cleared (host/port removed)")
-        }
-        adbHostManaged = false
     }
 
     private func startBrowsing() {
@@ -505,6 +454,22 @@ final class SenderController: ObservableObject {
         }
     }
 
+    private func wiredDevicesChanged() {
+        let devices = usbmuxDevices + adbDevices
+        let detached = Set(usbDevices.map(\.udid)).subtracting(devices.map(\.udid))
+        usbDevices = devices
+        failover(detachedUDIDs: detached)
+        autoConnect()
+    }
+
+    /// How to dial a cabled device: usbmuxd, or an adb forward for Android.
+    private func wiredTransport(udid: String?, port: UInt16) -> SenderTransport {
+        if let serial = udid.flatMap(AdbParsing.serial(fromUDID:)) {
+            return .adb(serial: serial, port: port)
+        }
+        return .usb(udid: udid, port: port)
+    }
+
     /// Cable plugged in while the device streams over WiFi: migrate the live
     /// session onto USB. No-op when the session is already cabled.
     private func upgradeToUSB(_ session: DeviceSession, device: UsbmuxDevice) {
@@ -515,7 +480,7 @@ final class SenderController: ObservableObject {
         // The match may have been by name only — pin the strong identity so
         // future matching (and the next launch) recognizes the pair.
         if let id = session.deviceID { installIDByUDID[device.udid] = id }
-        session.sender.switchTransport(to: .usb(udid: device.udid, port: portNum))
+        session.sender.switchTransport(to: wiredTransport(udid: device.udid, port: portNum))
     }
 
     /// Cable unplugged under a live session: fail over to the device's WiFi
@@ -599,7 +564,8 @@ final class SenderController: ObservableObject {
             if let device = usbDevices.first(where: { $0.udid == udid }), let name = device.name {
                 return name
             }
-            return udid == nil ? "Manual (\(host):\(port))" : "iPhone / iPad"
+            if udid == nil { return "Manual (\(host):\(port))" }
+            return udid.flatMap(AdbParsing.serial(fromUDID:)) == nil ? "iPhone / iPad" : "Android device"
         case .wifi(let result):
             return serviceName(of: result) ?? "WiFi device"
         }
@@ -675,7 +641,7 @@ final class SenderController: ObservableObject {
                 transport = .tcp(.hostPort(host: NWEndpoint.Host(host),
                                            port: NWEndpoint.Port(rawValue: portNum)!))
             } else {
-                transport = .usb(udid: udid, port: portNum)
+                transport = wiredTransport(udid: udid, port: portNum)
             }
         case .wifi(let result):
             transport = .tcp(result.endpoint)
