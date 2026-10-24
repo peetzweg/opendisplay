@@ -337,6 +337,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    @AppStorage(VideoLayerView.VideoView.actionsButtonKey) private var actionsButton = true
     // Set once the user tapped "Rate on the App Store": the row is an
     // invitation, not a permanent fixture.
     @AppStorage("rateAppTapped") private var rateAppTapped = false
@@ -384,6 +385,14 @@ struct SettingsView: View {
                     Text("Name")
                 } footer: {
                     Text("Shown in the WiFi list of OpenDisplay on your computer. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
+                }
+
+                Section {
+                    Toggle("Mac actions button", isOn: $actionsButton)
+                } header: {
+                    Text("Touch")
+                } footer: {
+                    Text("A floating button for Mission Control, App Exposé, Show Desktop, Apps, Spotlight and Spaces. Drag it to any edge.")
                 }
 
                 Section {
@@ -701,6 +710,7 @@ struct VideoLayerView: UIViewRepresentable {
         view.backgroundColor = .black
         view.isMultipleTouchEnabled = true
         view.receiver = receiver
+        view.installActionsButton()
 
         Log.info("video view: metal=\(useMetal)")
         if useMetal, let renderer = MetalVideoRenderer() {
@@ -745,6 +755,9 @@ struct VideoLayerView: UIViewRepresentable {
         // Pinch = trackpad magnify. Not simultaneous with the two-finger pan:
         // whichever the fingers commit to first wins, as on a trackpad.
         let pinch = UIPinchGestureRecognizer(target: view, action: #selector(VideoView.didPinch(_:)))
+        // A one-finger lift must not wait for the pinch to give up: held
+        // back past the long-press delay, a tap would read as a hold.
+        pinch.delaysTouchesEnded = false
         view.addGestureRecognizer(pinch)
 
         // Local cursor echo: position updates ride the ~2ms control path
@@ -792,6 +805,12 @@ struct VideoLayerView: UIViewRepresentable {
 
         private var lastLoggedLayout = ""
 
+        /// The video layer: the Metal layer or the AVSBDL, found by type —
+        /// subviews (the actions button) add sublayers of their own.
+        private var videoLayer: CALayer? {
+            metalRenderer?.metalLayer ?? layer.sublayers?.first { $0 is AVSampleBufferDisplayLayer }
+        }
+
         override func layoutSubviews() {
             super.layoutSubviews()
             CATransaction.begin()
@@ -802,16 +821,17 @@ struct VideoLayerView: UIViewRepresentable {
                 renderer.metalLayer.frame = videoRect() ?? bounds
             } else {
                 // AVSBDL aspect-fits internally (videoGravity) — full bounds.
-                layer.sublayers?.first?.frame = bounds
+                videoLayer?.frame = bounds
             }
             if cursorLayer.superlayer == nil { layer.addSublayer(cursorLayer) }
             updateCursorLayout()
             CATransaction.commit()
+            layoutActionsButton()
             // Rotation diagnostics — one line per layout change.
             let video = receiver?.videoSize ?? .zero
             let line = "layout: bounds=\(Int(bounds.width))x\(Int(bounds.height))"
                 + " video=\(Int(video.width))x\(Int(video.height))"
-                + " layer=\(Int(layer.sublayers?.first?.frame.width ?? -1))x\(Int(layer.sublayers?.first?.frame.height ?? -1))"
+                + " layer=\(Int(videoLayer?.frame.width ?? -1))x\(Int(videoLayer?.frame.height ?? -1))"
             if line != lastLoggedLayout {
                 lastLoggedLayout = line
                 Log.info(line)
@@ -1002,6 +1022,117 @@ struct VideoLayerView: UIViewRepresentable {
             if newWindow == nil { stopMomentum() }
         }
 
+        // MARK: Mac actions button
+        //
+        // An AssistiveTouch-style floating button: tap for a menu of the Mac's
+        // system actions (`welcome.actions`), drag it to either edge. Shown
+        // only when the Mac offers actions and the user has not turned it off.
+
+        static let actionsButtonKey = "actionsButton"
+        private static let actionsButtonRightKey = "actionsButtonRight"
+        private static let actionsButtonYKey = "actionsButtonY"
+        private static let actionItems: [(name: String, title: String, symbol: String)] = [
+            ("missionControl", "Mission Control", "rectangle.3.group"),
+            ("appExpose", "App Exposé", "macwindow.on.rectangle"),
+            ("showDesktop", "Show Desktop", "menubar.dock.rectangle"),
+            ("apps", "Apps", "square.grid.3x3"),
+            ("spotlight", "Spotlight", "magnifyingglass"),
+            ("spaceLeft", "Previous Space", "arrow.left.square"),
+            ("spaceRight", "Next Space", "arrow.right.square"),
+        ]
+        private let actionsButtonSize: CGFloat = 52
+        private let actionsButtonIdleAlpha: CGFloat = 0.7
+        private var actionsButton: UIButton?
+        private var draggingActionsButton = false
+        private var actionsSubscriptions = Set<AnyCancellable>()
+
+        func installActionsButton() {
+            guard let receiver, actionsButton == nil else { return }
+            var config = UIButton.Configuration.filled()
+            config.image = UIImage(systemName: "circle.grid.2x2.fill")
+            config.cornerStyle = .capsule
+            config.baseBackgroundColor = UIColor.black.withAlphaComponent(0.55)
+            config.baseForegroundColor = .white
+            let button = RoundButton(configuration: config)
+            button.bounds = CGRect(x: 0, y: 0, width: actionsButtonSize, height: actionsButtonSize)
+            button.alpha = actionsButtonIdleAlpha
+            button.layer.zPosition = 20   // above the cursor layer
+            button.showsMenuAsPrimaryAction = true
+            if #available(iOS 16.0, *) { button.preferredMenuElementOrder = .fixed }
+            button.accessibilityLabel = "Mac actions"
+            button.isHidden = true
+            button.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(dragActionsButton(_:))))
+            addSubview(button)
+            actionsButton = button
+
+            receiver.$macActions
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] in self?.updateActionsButton($0) }
+                .store(in: &actionsSubscriptions)
+            // The settings toggle writes the default.
+            NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.updateActionsButton(self?.receiver?.macActions ?? []) }
+                .store(in: &actionsSubscriptions)
+        }
+
+        private func updateActionsButton(_ actions: [String]) {
+            guard let button = actionsButton else { return }
+            let enabled = UserDefaults.standard.object(forKey: Self.actionsButtonKey) as? Bool ?? true
+            let items = Self.actionItems.filter { actions.contains($0.name) }.map { item in
+                UIAction(title: item.title, image: UIImage(systemName: item.symbol)) { [weak self] _ in
+                    self?.receiver?.sendGesture(action: item.name)
+                }
+            }
+            button.menu = UIMenu(children: items)
+            button.isHidden = !enabled || items.isEmpty
+            setNeedsLayout()
+        }
+
+        /// The usable area for the button: inside the safe area, off the edge.
+        private func actionsButtonArea() -> CGRect {
+            bounds.inset(by: safeAreaInsets).insetBy(dx: 8, dy: 8)
+        }
+
+        private func layoutActionsButton() {
+            guard let button = actionsButton, !button.isHidden, !draggingActionsButton else { return }
+            let area = actionsButtonArea()
+            guard area.width > actionsButtonSize, area.height > actionsButtonSize else { return }
+            let defaults = UserDefaults.standard
+            let right = defaults.object(forKey: Self.actionsButtonRightKey) as? Bool ?? true
+            let fraction = defaults.object(forKey: Self.actionsButtonYKey) as? Double ?? 0.75
+            let half = actionsButtonSize / 2
+            button.center = CGPoint(x: right ? area.maxX - half : area.minX + half,
+                                    y: area.minY + half + CGFloat(fraction) * (area.height - actionsButtonSize))
+        }
+
+        /// Drag anywhere; on release it snaps to the nearer side edge and
+        /// remembers the side and height, so it survives rotation.
+        @objc private func dragActionsButton(_ recognizer: UIPanGestureRecognizer) {
+            guard let button = actionsButton else { return }
+            switch recognizer.state {
+            case .began:
+                draggingActionsButton = true
+                button.alpha = 1
+            case .changed:
+                let t = recognizer.translation(in: self)
+                button.center = CGPoint(x: button.center.x + t.x, y: button.center.y + t.y)
+                recognizer.setTranslation(.zero, in: self)
+            default:
+                draggingActionsButton = false
+                let area = actionsButtonArea()
+                let travel = max(area.height - actionsButtonSize, 1)
+                let fraction = (button.center.y - area.minY - actionsButtonSize / 2) / travel
+                UserDefaults.standard.set(button.center.x > bounds.midX, forKey: Self.actionsButtonRightKey)
+                UserDefaults.standard.set(Double(min(max(fraction, 0), 1)), forKey: Self.actionsButtonYKey)
+                UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.8,
+                               initialSpringVelocity: 0) {
+                    self.layoutActionsButton()
+                    button.alpha = self.actionsButtonIdleAlpha
+                }
+            }
+        }
+
         private var lastPinchScale: CGFloat = 1
 
         /// A Mac without `magnify` would drop the pinch, so don't let it take
@@ -1112,6 +1243,9 @@ struct VideoLayerView: UIViewRepresentable {
         private var lastFingerPoint = CGPoint.zero
         /// Recent (timestamp, location) samples for the lift-off velocity.
         private var fingerSamples: [(t: TimeInterval, p: CGPoint)] = []
+        /// When the finger landed (UITouch clock), to judge a hold by when the
+        /// finger actually lifted rather than when UIKit delivered the lift.
+        private var fingerDownTime: TimeInterval = 0
 
         private func videoScale() -> CGFloat? {
             guard let video = receiver?.videoSize, video != .zero else { return nil }
@@ -1187,6 +1321,7 @@ struct VideoLayerView: UIViewRepresentable {
             case "began":
                 pendingDown = norm
                 pendingDownPoint = location
+                fingerDownTime = touch.timestamp
                 downSent = false
                 intent = .deciding
                 secondaryClickFeedback.prepare()
@@ -1209,6 +1344,11 @@ struct VideoLayerView: UIViewRepresentable {
                     forwardMoves(touch, event)
                 }
             case "ended":
+                // A lift delivered late (a gesture recognizer held it back)
+                // after a short press is still a tap, not a hold.
+                if intent == .held, touch.timestamp - fingerDownTime < longPressDelay {
+                    intent = .deciding
+                }
                 switch intent {
                 case .deciding:
                     // A tap: nothing was posted yet, so post the whole click now.
@@ -1375,6 +1515,14 @@ struct VideoLayerView: UIViewRepresentable {
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
             routeTouches("cancelled", touches, event, ended: true)
         }
+    }
+}
+
+/// A button that only takes touches inside its circle, so the square's
+/// corners don't steal taps meant for the desktop around it.
+private final class RoundButton: UIButton {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        hypot(point.x - bounds.midX, point.y - bounds.midY) <= min(bounds.width, bounds.height) / 2
     }
 }
 

@@ -2547,6 +2547,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let phase = obj["phase"] as? String {
                 inputInjector?.handleMagnify(phase: phase, magnification: obj["m"] as? Double ?? 0)
             }
+        case "gesture":
+            if let action = obj["action"] as? String {
+                inputInjector?.handleSystemAction(action)
+            }
         case "pencil":
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
@@ -3157,7 +3161,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// receiver version we still support, and the input features we handle.
     private func sendWelcome() {
         let input = InputFeature.sender.map { "\"\($0)\"" }.joined(separator: ",")
-        sendJSONFrame("{\"type\":\"\(WireMessage.welcome)\",\"pv\":\(WireProtocol.version),\"min\":\(WireProtocol.minSupportedPeer),\"input\":[\(input)]}")
+        let actions = SystemAction.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ",")
+        sendJSONFrame("{\"type\":\"\(WireMessage.welcome)\",\"pv\":\(WireProtocol.version),\"min\":\(WireProtocol.minSupportedPeer),\"input\":[\(input)],\"actions\":[\(actions)]}")
     }
 
     /// Announce the operating point before video. Legacy receivers ignore the

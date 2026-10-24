@@ -79,6 +79,8 @@ final class StreamReceiver: ObservableObject {
 
     /// Input features from the most recent `welcome.input` (see InputFeature).
     @Published private(set) var macInputFeatures: Set<String> = []
+    /// System actions from the most recent `welcome.actions`, in the Mac's order.
+    @Published private(set) var macActions: [String] = []
 
     /// True when the connected Mac understands pencil/proximity wire messages.
     var macSupportsPencilWire: Bool { macProtocolVersion >= WireProtocol.pencilWireVersion }
@@ -872,9 +874,11 @@ final class StreamReceiver: ObservableObject {
             // old Mac can't diagnose that itself, so we surface it here.
             let macPV = obj["pv"] as? Int ?? WireProtocol.assumedWhenAbsent
             let input = Set(obj["input"] as? [String] ?? [])
+            let actions = input.contains(InputFeature.gesture) ? obj["actions"] as? [String] ?? [] : []
             DispatchQueue.main.async {
                 self.macProtocolVersion = macPV
                 self.macInputFeatures = input
+                if self.macActions != actions { self.macActions = actions }
             }
             if macPV < WireProtocol.minSupportedPeer {
                 let msg = "OpenDisplay on the connecting computer is too old for this \(deviceKind) app. Update it there to reconnect."
@@ -1104,6 +1108,11 @@ final class StreamReceiver: ObservableObject {
     /// message. Only when `macSupportsMagnify`.
     func sendMagnify(phase: String, magnification: Double) {
         sendControl(["type": "magnify", "phase": phase, "m": magnification])
+    }
+
+    /// Ask the Mac to perform a system action named in `macActions`.
+    func sendGesture(action: String) {
+        sendControl(["type": "gesture", "action": action])
     }
 
     /// Apple Pencil stroke/hover. azimuth and altitude are radians.
@@ -1617,6 +1626,7 @@ final class StreamReceiver: ObservableObject {
             if !value {
                 self.macProtocolVersion = WireProtocol.assumedWhenAbsent
                 self.macInputFeatures = []
+                self.macActions = []
             }
         }
         if !value { setStatus("Ready to connect") }

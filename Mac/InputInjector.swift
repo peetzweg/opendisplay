@@ -208,6 +208,29 @@ final class InputInjector {
         scrollTick = nil
     }
 
+    // MARK: System actions
+
+    /// The wire's `gesture.action` (see SystemAction). Unknown names are
+    /// logged and ignored, so newer receivers never break older senders.
+    func handleSystemAction(_ name: String) {
+        guard let action = SystemAction(rawValue: name) else {
+            Log.info("system action: unknown \(name)")
+            return
+        }
+        if action.needsPointerOnDisplay {
+            // Spaces switch on the display under the pointer: bring it to this
+            // device's display (borrowed, like a touch) unless it is already there.
+            let bounds = CGDisplayBounds(displayID)
+            let current = currentCursor()
+            if !bounds.contains(current) {
+                let center = CGPoint(x: bounds.midX, y: bounds.midY)
+                pointerHandoff.touchMovesPointer(to: center, from: current, holding: false)
+                postMouse(.mouseMoved, at: center, button: .left, clickState: 0)
+            }
+        }
+        action.perform()
+    }
+
     // MARK: Magnify
     //
     // A pinch becomes the trackpad's magnify gesture. There is no public API

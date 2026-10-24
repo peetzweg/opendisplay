@@ -48,9 +48,12 @@ enum InputFeature {
     static let scrollPhase = "scrollPhase"
     /// `magnify` messages (two-finger pinch → trackpad magnify gesture).
     static let magnify = "magnify"
+    /// `gesture` messages: system actions (Mission Control, Spaces, …) named
+    /// in `welcome.actions`.
+    static let gesture = "gesture"
 
     /// Everything this build's sender handles, as announced in `welcome`.
-    static let sender = [button, scrollPhase, magnify]
+    static let sender = [button, scrollPhase, magnify, gesture]
 }
 
 /// What a `power` message asks the receiver to do (PROTOCOL.md 6.6). The

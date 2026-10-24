@@ -162,6 +162,7 @@ targets:
       - Mac/ClickCounter.swift
       - Mac/ScrollPhaser.swift
       - Mac/ScrollSmoother.swift
+      - Mac/SystemActions.swift
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/Protocol.swift

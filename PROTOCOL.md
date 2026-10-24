@@ -295,6 +295,7 @@ Coordinates use the conventions of section 7.
 | `pencil` | pv 3 | `phase`, `x`, `y`, `pressure`, `azimuth`, `altitude`, `rotation`, `t`? | Stylus input |
 | `proximity` | pv 3 | `entering`, `x`, `y` | Stylus hover enter/leave |
 | `magnify` | pv 3 (additive) | `phase`, `m` | Two-finger pinch |
+| `gesture` | pv 3 (additive) | `action` | Ask for a system action |
 | `kf` | pv 1 | none | Request an IDR (section 5.3) |
 | `stats` | pv 1 | free-form | Receiver-side telemetry for the sender's log |
 | `sleeping` | pv 2 | none | Device locked; session ends, reconnect on wake expected |
@@ -405,6 +406,15 @@ sits under the pointer, so receivers move the pointer to the pinch first
 (a `touch` `"moved"`). A receiver MUST NOT send `magnify` unless
 `welcome.input` contains `"magnify"`; an older sender would drop it.
 
+**`gesture`** (additive at `pv` 3) carries `action` (string): one of the
+names the sender listed in `welcome.actions`. The name says what, never
+which keys: each sender decides how. Defined names: `"missionControl"`,
+`"appExpose"` (the front app's windows), `"showDesktop"`, `"apps"` (the app
+launcher), `"spotlight"`, `"spaceLeft"`, `"spaceRight"` (previous / next
+Space on the receiver's display). Senders MUST ignore names they don't know.
+A receiver MUST NOT send `gesture` unless `welcome.input` contains
+`"gesture"`, and SHOULD offer only the listed actions.
+
 **Pencil fallback (normative):** a receiver MUST NOT send `pencil` or
 `proximity` to a sender whose `pv` is below 3; it MUST degrade the stylus
 to `touch` events instead. (An old sender would ignore the unknown types
@@ -434,7 +444,7 @@ section 4.
 | `ping` | pv 1 | `drops`?, `encDrops`?, `netDrops`?, `pending`?, `inp50`?, `inp95`?, `capFps`? | Liveness + sender health |
 | `cursor` | pv 1 | `x`?, `y`?, `v` | Cursor position/visibility |
 | `cursorImg` | pv 1 | `nw`, `nh`, `ax`, `ay`, `png` | Cursor sprite |
-| `welcome` | pv 2 | `pv`, `min`, `input`? | Sender's side of the version handshake |
+| `welcome` | pv 2 | `pv`, `min`, `input`?, `actions`? | Sender's side of the version handshake |
 | `updateRequired` | pv 2 | `target`, `store`, `message` | Peer must update to continue |
 | `streamConfig` | pv 3 (additive) | `codec`, `width`, `height`, `framesPerSecond` | Selected video operating point |
 | `power` | pv 3 (additive) | `action` | Ask the receiver to power off (6.6) |
@@ -563,7 +573,10 @@ sender handles beyond the `pv` baseline. Absent means none. Receivers MUST
 ignore names they don't know and MUST NOT use a feature the sender didn't
 list. Defined names: `"button"` (`touch.button`, section 6.1),
 `"scrollPhase"` (`scroll.phase`, section 6.1), `"magnify"` (`magnify`,
-section 6.1).
+section 6.1), `"gesture"` (`gesture`, section 6.1).
+
+`actions` (array of strings, optional, additive at `pv` 3): the `gesture`
+actions this sender can perform, in the order it suggests showing them.
 
 **`updateRequired`**: the sender declares the pairing unsupported until the
 receiver updates. `target` names the end that must act (`"ios"` today),
