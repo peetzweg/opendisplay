@@ -839,7 +839,7 @@ final class SenderController: ObservableObject {
                 name: device.name
                     ?? twin.flatMap(serviceName)
                     ?? session(for: usbTarget.sessionID)?.deviceKind
-                    ?? "iPhone / iPad",
+                    ?? label(for: usbTarget),
                 usbTarget: usbTarget,
                 wifiTarget: twin.map { .wifi($0) }))
         }

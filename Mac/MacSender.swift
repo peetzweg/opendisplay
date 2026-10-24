@@ -1975,6 +1975,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         conn.cancel()
                         return
                     }
+                    // A dial deadline can fire between the dial returning
+                    // and this block; adopting the cancelled socket would
+                    // look connected until the watchdog noticed.
+                    guard conn.state == .ready else {
+                        conn.cancel()
+                        self.scheduleReconnect()
+                        return
+                    }
                     self.connection = conn
                     conn.stateUpdateHandler = { [weak self] state in
                         guard let self else { return }

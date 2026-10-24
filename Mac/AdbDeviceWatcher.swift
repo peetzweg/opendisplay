@@ -118,9 +118,16 @@ enum Adb {
 
     // MARK: - Socket plumbing
 
-    static func open(queue: DispatchQueue) async throws -> NWConnection {
+    /// Connect to the adb server. One-shot requests get a deadline: a
+    /// server that accepts but never answers (wedged mid version fight)
+    /// must fail the dial so the session's retry loop keeps running. Only
+    /// the long-lived track-devices subscription passes nil.
+    static func open(queue: DispatchQueue, deadline: TimeInterval? = 5) async throws -> NWConnection {
         let conn = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: serverPort)!,
                                 using: .tcp)
+        if let deadline {
+            queue.asyncAfter(deadline: .now() + deadline) { conn.cancel() }
+        }
         do {
             try await start(conn, queue: queue)
         } catch {
@@ -211,9 +218,12 @@ enum Adb {
     private static func readToEnd(on conn: NWConnection) async throws -> String {
         var output = Data()
         while true {
+            // An error after partial output (the deadline, a reset) keeps
+            // what arrived: the name is usually complete by then.
+            let keepPartial = !output.isEmpty
             let (data, done): (Data?, Bool) = try await withCheckedThrowingContinuation { cont in
                 conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
-                    if let error, data == nil {
+                    if let error, data == nil, !keepPartial {
                         cont.resume(throwing: error)
                     } else {
                         cont.resume(returning: (data, isComplete))
@@ -275,7 +285,7 @@ final class AdbDeviceWatcher {
     // A server is started at most once a minute: someone who ran
     // `adb kill-server` must not see it come straight back every retry.
     private var lastServerStart: Date?
-    private var adbPath: String??   // outer nil = not looked up yet
+    private var adbPath: String??   // last lookup, for logging changes only
 
     init(onChange: @escaping ([UsbmuxDevice]) -> Void) {
         self.onChange = onChange
@@ -285,7 +295,7 @@ final class AdbDeviceWatcher {
     private func trackLoop() async {
         while true {
             do {
-                let conn = try await Adb.open(queue: queue)
+                let conn = try await Adb.open(queue: queue, deadline: nil)
                 defer { conn.cancel() }
                 try await Adb.request("host:track-devices-l", on: conn)
                 while true {
@@ -293,7 +303,13 @@ final class AdbDeviceWatcher {
                 }
             } catch Adb.Failure.noServer {
                 if !devices.isEmpty { update([]) }
-                if await startServerIfDue() { continue }
+                guard let path = locateAdb() else {
+                    // Most Macs: no adb at all. Look again now and then, so
+                    // installing it later needs no relaunch.
+                    try? await Task.sleep(for: .seconds(30))
+                    continue
+                }
+                if await startServerIfDue(adbPath: path) { continue }
             } catch {
                 Log.info("adb watcher: \(error.localizedDescription) — retrying in 3s")
                 if !devices.isEmpty { update([]) }
@@ -302,20 +318,24 @@ final class AdbDeviceWatcher {
         }
     }
 
-    private func startServerIfDue() async -> Bool {
-        if adbPath == nil {
-            let path = Adb.locate()
-            adbPath = .some(path)
+    private func locateAdb() -> String? {
+        let path = Adb.locate()
+        if adbPath != .some(path) {
             Log.info(path.map { "adb found at \($0)" } ?? "adb not found — Android over USB unavailable")
+            adbPath = .some(path)
         }
-        guard let path = adbPath ?? nil,
-              lastServerStart.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return false }
+        return path
+    }
+
+    private func startServerIfDue(adbPath: String) async -> Bool {
+        guard lastServerStart.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return false }
         lastServerStart = Date()
         Log.info("adb server not running — starting it")
-        return await Adb.startServer(adbPath: path)
+        return await Adb.startServer(adbPath: adbPath)
     }
 
     private func update(_ snapshot: [AdbParsing.Device]) {
+        unauthorizedLogged.formIntersection(snapshot.map(\.serial))
         var next: [String: UsbmuxDevice] = [:]
         for device in snapshot where device.usb {
             guard device.state == "device" else {
