@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Must match the identity the Mac sender sends in the AOA handshake. -->
+<resources>
+    <usb-accessory manufacturer="OpenDisplay" model="OpenDisplay Receiver" />
+</resources>

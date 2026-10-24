@@ -29,8 +29,9 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
- * The receiver end of PROTOCOL.md: listens on TCP 9000, serves one sender at a
- * time, speaks hello/ping/kf/input, and hands video and the sender's control
+ * The receiver end of PROTOCOL.md: listens on TCP 9000 (and takes the USB
+ * accessory, see [adoptAccessory]), serves one sender at a time, speaks
+ * hello/ping/kf/input, and hands video and the sender's control
  * messages to [listener]. Callbacks arrive on network threads.
  */
 class ReceiverServer(
@@ -155,7 +156,7 @@ class ReceiverServer(
         Log.i(TAG, "connection from ${socket.remoteSocketAddress}")
         val live = synchronized(lock) { current?.takeIf { it.isOpen } }
         if (live == null) {
-            adopt(socket, null)
+            adopt(SocketLink(socket), null)
             return
         }
         // A Bonjour dial races IPv4 and IPv6 and the sender cancels the loser
@@ -180,7 +181,7 @@ class ReceiverServer(
             val stillCandidate = synchronized(lock) { candidates.remove(socket) }
             if (n > 0 && stillCandidate && running) {
                 Log.i(TAG, "newcomer proved itself; adopting it as the session")
-                adopt(socket, buf.copyOf(n))
+                adopt(SocketLink(socket), buf.copyOf(n))
             } else {
                 Log.i(TAG, "dropped a newcomer that sent nothing")
                 closeQuietly(socket)
@@ -192,14 +193,23 @@ class ReceiverServer(
         }
     }
 
-    private fun adopt(socket: Socket, initial: ByteArray?) {
-        val transport = if (socket.inetAddress.isLoopbackAddress) "USB" else "WiFi"
-        val session = Session(socket, initial)
+    /**
+     * The sender switched this device into accessory mode: that is a fresh
+     * cable session, adopted at once (no dial race to prove against). False
+     * while stopped, so the caller keeps the accessory for later.
+     */
+    internal fun adoptAccessory(link: Link): Boolean {
+        Log.i(TAG, "connection from ${link.remote}")
+        return adopt(link, null)
+    }
+
+    private fun adopt(link: Link, initial: ByteArray?): Boolean {
+        val session = Session(link, initial)
         val old: Session?
         synchronized(lock) {
             if (!running) {
-                closeQuietly(socket)
-                return
+                closeQuietly(link)
+                return false
             }
             old = current
             current = session
@@ -213,9 +223,10 @@ class ReceiverServer(
             senderPv = WireProtocol.ASSUMED_WHEN_ABSENT
         }
         old?.close()
-        listener.onSessionStarted(transport)
+        listener.onSessionStarted(link.transport)
         session.start()
         sendHello()
+        return true
     }
 
     // endregion
@@ -356,7 +367,7 @@ class ReceiverServer(
 
     // endregion
 
-    private inner class Session(private val socket: Socket, private val initial: ByteArray?) {
+    private inner class Session(private val link: Link, private val initial: ByteArray?) {
         private val outbox = LinkedBlockingQueue<ByteArray>()
         @Volatile var isOpen = true
             private set
@@ -381,7 +392,7 @@ class ReceiverServer(
             if (!isOpen) return
             isOpen = false
             outbox.offer(POISON)
-            closeQuietly(socket)
+            closeQuietly(link)
         }
 
         /** Flush [last] (best effort, briefly) and then close. */
@@ -390,10 +401,10 @@ class ReceiverServer(
                 send(last)
                 isOpen = false
                 outbox.offer(POISON)
-                // The writer closes the socket after the poison; don't wait long.
+                // The writer closes the link after the poison; don't wait long.
                 Thread {
                     SystemClock.sleep(300)
-                    closeQuietly(socket)
+                    closeQuietly(link)
                 }.apply { isDaemon = true }.start()
             } else {
                 close()
@@ -402,7 +413,7 @@ class ReceiverServer(
 
         private fun writeLoop() {
             try {
-                val out = socket.getOutputStream()
+                val out = link.output
                 while (true) {
                     val first = outbox.take()
                     if (first === POISON) break
@@ -422,7 +433,7 @@ class ReceiverServer(
                 if (isOpen) Log.i(TAG, "write failed: $e")
             } catch (_: InterruptedException) {
             } finally {
-                if (!isOpen) closeQuietly(socket) else close()
+                if (!isOpen) closeQuietly(link) else close()
             }
         }
 
@@ -430,7 +441,7 @@ class ReceiverServer(
             try {
                 // 8.2 counts silence in bytes, not frames: a big keyframe on
                 // slow Wi-Fi can take longer than the watchdog to arrive.
-                var stream: InputStream = object : FilterInputStream(socket.getInputStream()) {
+                var stream: InputStream = object : FilterInputStream(link.input) {
                     override fun read(): Int = super.read().also { lastReceive = SystemClock.elapsedRealtime() }
                     override fun read(b: ByteArray, off: Int, len: Int): Int =
                         super.read(b, off, len).also { lastReceive = SystemClock.elapsedRealtime() }

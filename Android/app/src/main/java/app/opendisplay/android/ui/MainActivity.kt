@@ -1,9 +1,16 @@
 package app.opendisplay.android.ui
 
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.BitmapFactory
+import android.hardware.usb.UsbAccessory
+import android.hardware.usb.UsbManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
@@ -25,6 +32,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import app.opendisplay.android.R
+import app.opendisplay.android.net.AccessoryLink
 import app.opendisplay.android.net.Advertiser
 import app.opendisplay.android.net.ReceiverServer
 import app.opendisplay.android.protocol.AnnexB
@@ -67,6 +75,16 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     private val stats = StreamStats()
 
     private lateinit var installId: String
+    // The accessory attachment a session already ran over. One attachment is
+    // one session: the sender resets the device to start another, which
+    // detaches it, so a used one is never reopened mid-stream.
+    private var usedAccessory: UsbAccessory? = null
+    private val accessoryDetached = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.i(TAG, "USB accessory detached")
+            usedAccessory = null
+        }
+    }
     private lateinit var wifiLock: android.net.wifi.WifiManager.WifiLock
 
     // Read by network threads to build `hello`.
@@ -121,6 +139,8 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
             scheduler = gestureScheduler,
             senderPv = { server.senderPv },
         )
+        ContextCompat.registerReceiver(this, accessoryDetached,
+            IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED), ContextCompat.RECEIVER_NOT_EXPORTED)
         updatePanel()
         main.post(statsTick)
         // First run: OpenDisplay is two apps; say so until the first connection.
@@ -214,6 +234,17 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         server.start()
         advertiser.register(DeviceIdentity.serviceName(this), installId)
         refreshIdle()
+        // Launched by the attach intent, or attached while we were away.
+        takeAccessory()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // A stopped activity gets this before onStart, which takes it then.
+        if (intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED &&
+            lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+            takeAccessory()
+        }
     }
 
     override fun onStop() {
@@ -227,6 +258,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterReceiver(accessoryDetached)
         if (wifiLock.isHeld) wifiLock.release()
         main.removeCallbacksAndMessages(null)
         decoder.release()
@@ -236,6 +268,28 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) enterImmersive()
     }
+
+    // region USB accessory
+
+    /**
+     * The sender switched this device into accessory mode (see
+     * AccessoryLink): take the attachment as the session, unless one already
+     * ran over it. The attached list, not the intent's extra: an old launch
+     * intent outlives its attachment.
+     */
+    private fun takeAccessory() {
+        val usb = getSystemService(USB_SERVICE) as UsbManager
+        val accessory = usb.accessoryList?.firstOrNull(AccessoryLink::isOurs) ?: return
+        if (accessory == usedAccessory) return
+        val link = AccessoryLink.open(usb, accessory)
+        if (link == null) {
+            Log.w(TAG, "could not open the USB accessory (permission ${usb.hasPermission(accessory)})")
+            return
+        }
+        if (server.adoptAccessory(link)) usedAccessory = accessory
+    }
+
+    // endregion
 
     // region Views
 
