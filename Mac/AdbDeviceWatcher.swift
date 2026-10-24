@@ -170,7 +170,7 @@ enum Adb {
         }
     }
 
-    private static func start(_ conn: NWConnection, queue: DispatchQueue) async throws {
+    static func start(_ conn: NWConnection, queue: DispatchQueue) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             var resumed = false   // the handler fires on `queue` (serial)
             conn.stateUpdateHandler = { state in
@@ -204,7 +204,7 @@ enum Adb {
         }
     }
 
-    private static func receive(exactly count: Int, on conn: NWConnection) async throws -> Data {
+    static func receive(exactly count: Int, on conn: NWConnection) async throws -> Data {
         try await withCheckedThrowingContinuation { cont in
             conn.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
                 if let data, data.count == count {

@@ -211,11 +211,13 @@ final class SenderController: ObservableObject {
 
     @Published var sessions: [DeviceSession] = []
     @Published var discovered: [NWBrowser.Result] = []
-    // Every cabled device: usbmuxd's iPhones and iPads plus adb's Android
-    // devices (udid `adb:<serial>`). The connection policy treats them alike.
+    // Every cabled device: usbmuxd's iPhones and iPads plus Android devices,
+    // in accessory mode (udid `aoa:<serial>`) or through adb (`adb:<serial>`).
+    // The connection policy treats them alike.
     @Published var usbDevices: [UsbmuxDevice] = []
     private var usbmuxDevices: [UsbmuxDevice] = []
     private var adbDevices: [UsbmuxDevice] = []
+    private var accessoryDevices: [UsbmuxDevice] = []
     // `-host x.x.x.x` / `-port n` bypass usbmuxd with a manual TCP endpoint
     // (debugging escape hatch, e.g. an iproxy or SSH tunnel).
     @Published var host = UserDefaults.standard.string(forKey: "host") ?? "127.0.0.1"
@@ -231,6 +233,7 @@ final class SenderController: ObservableObject {
     private var browser: NWBrowser?
     private var usbWatcher: UsbmuxDeviceWatcher?
     private var adbWatcher: AdbDeviceWatcher?
+    private var accessoryWatcher: AccessoryDeviceWatcher?
 
     // Connection policy — one session per physical device, and the cable
     // wins whenever it's available (lower, steadier latency than WiFi):
@@ -284,6 +287,11 @@ final class SenderController: ObservableObject {
     // same, so the opt-out simply holds until the user connects by hand.
     // In memory: a relaunched sender starts fresh.
     private var cableOptOut: Set<String> = []
+    // Accessory-mode devices whose receiver app quit (`closing`). Dialing one
+    // opens the app again, so the next wired-list change must not redial it:
+    // the opt-out holds until the device is unplugged or the user connects it.
+    // In memory, like cableOptOut.
+    private var receiverClosedOnCable: Set<String> = []
     // Every service seen on the cable this run: a Disconnect counts as a
     // cable opt-out even while the record is briefly gone (receiver asleep).
     private var everOnCable: Set<String> = []
@@ -296,6 +304,10 @@ final class SenderController: ObservableObject {
         }
         adbWatcher = AdbDeviceWatcher { [weak self] devices in
             self?.adbDevices = devices
+            self?.wiredDevicesChanged()
+        }
+        accessoryWatcher = AccessoryDeviceWatcher { [weak self] devices in
+            self?.accessoryDevices = devices
             self?.wiredDevicesChanged()
         }
         Task { @MainActor in
@@ -388,12 +400,14 @@ final class SenderController: ObservableObject {
             connect(to: .usb(udid: nil))
         }
         for device in usbDevices {
+            // Not even a cable upgrade: the dial would reopen the app.
+            guard !receiverClosedOnCable.contains(device.udid) else { continue }
             if let covering = activeSession(coveringUSB: device) {
                 // usbDisabled gates auto-connecting a device, not the
                 // transport of a session the user deliberately has running —
                 // however it was started, the cable is better: take it.
                 upgradeToUSB(covering, device: device)
-            } else if !usbDisabled.contains("usb:\(device.udid)") {
+            } else if !usbDisabled.contains("usb:\(device.udid)"), connectsOnAttach(device) {
                 connect(to: .usb(udid: device.udid))
             }
         }
@@ -412,8 +426,22 @@ final class SenderController: ObservableObject {
     /// the cable — its WiFi service must not be grabbed in the launch race.
     private func cabled(_ result: NWBrowser.Result) -> Bool {
         usbDevices.contains {
-            sameDevice(result, $0) && !usbDisabled.contains("usb:\($0.udid)")
+            sameDevice(result, $0) && !usbDisabled.contains("usb:\($0.udid)") && connectsOnAttach($0)
         }
+    }
+
+    /// Dialing an Android device in accessory mode switches its USB mode and
+    /// opens the receiver app on it, so plugging in only connects a device
+    /// that streamed over the cable before (its install id is known) or has
+    /// USB debugging on (a developer who connects it on purpose). Anything
+    /// else is any Android phone plugged in to charge: the first connect is
+    /// a click in the device list.
+    private func connectsOnAttach(_ device: UsbmuxDevice) -> Bool {
+        guard let serial = AOA.serial(fromUDID: device.udid) else { return true }
+        guard !receiverClosedOnCable.contains(device.udid) else { return false }
+        let adbUDID = AdbParsing.udid(serial: serial)
+        return installIDByUDID[device.udid] != nil || installIDByUDID[adbUDID] != nil
+            || adbDevices.contains { $0.udid == adbUDID }
     }
 
     /// A Mac receiver just appeared on the direct cable: connect to it unless
@@ -455,17 +483,28 @@ final class SenderController: ObservableObject {
     }
 
     private func wiredDevicesChanged() {
-        let devices = usbmuxDevices + adbDevices
+        // An Android device with USB debugging on shows up through both adb
+        // and accessory mode. Accessory mode wins: it needs no receiver
+        // already open on the device (attaching launches it).
+        let accessorySerials = Set(accessoryDevices.compactMap { AOA.serial(fromUDID: $0.udid) })
+        let devices = usbmuxDevices + accessoryDevices + adbDevices.filter {
+            AdbParsing.serial(fromUDID: $0.udid).map { !accessorySerials.contains($0) } ?? true
+        }
         let detached = Set(usbDevices.map(\.udid)).subtracting(devices.map(\.udid))
         usbDevices = devices
+        receiverClosedOnCable.subtract(detached)
         failover(detachedUDIDs: detached)
         autoConnect()
     }
 
-    /// How to dial a cabled device: usbmuxd, or an adb forward for Android.
+    /// How to dial a cabled device: usbmuxd, or accessory mode or an adb
+    /// forward for Android.
     private func wiredTransport(udid: String?, port: UInt16) -> SenderTransport {
         if let serial = udid.flatMap(AdbParsing.serial(fromUDID:)) {
             return .adb(serial: serial, port: port)
+        }
+        if let serial = udid.flatMap(AOA.serial(fromUDID:)) {
+            return .accessory(serial: serial)
         }
         return .usb(udid: udid, port: port)
     }
@@ -626,7 +665,9 @@ final class SenderController: ObservableObject {
 
         // Connecting a device clears its "don't auto-connect" state.
         switch target {
-        case .usb: usbDisabled.remove(id)
+        case .usb(let udid):
+            usbDisabled.remove(id)
+            if userInitiated, let udid { receiverClosedOnCable.remove(udid) }
         case .wifi(let result):
             wifiRemembered.insert(id)
             if userInitiated, let name = serviceName(of: result) { cableOptOut.remove(name) }
@@ -731,6 +772,9 @@ final class SenderController: ObservableObject {
             // the normal discovery/auto-connect paths.
             guard let self, let session else { return }
             Log.info("session \(session.id) closed by the receiver — ending")
+            if session.onUSB, let udid = session.usbUDID, AOA.serial(fromUDID: udid) != nil {
+                self.receiverClosedOnCable.insert(udid)
+            }
             self.end(session)
         }
         sessions.append(session)

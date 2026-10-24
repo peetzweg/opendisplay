@@ -30,6 +30,7 @@ enum SenderTransport {
     case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
     case adb(serial: String, port: UInt16) // Android over USB through an adb forward
+    case accessory(serial: String)         // Android over USB in accessory mode (AOA)
 }
 
 @available(macOS 14.0, *)
@@ -1627,6 +1628,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             connectWired { (try await Usbmux.dial(udid: udid, port: port, queue: self.queue), nil) }
         case .adb(let serial, let port):
             connectWired { try await Adb.dial(serial: serial, port: port, queue: self.queue) }
+        case .accessory(let serial):
+            connectWired { try await AOA.dial(serial: serial, queue: self.queue) }
         }
     }
 
@@ -2011,6 +2014,23 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         hint = "Waiting for a USB device — plug in the iPhone or iPad…"
                     case Adb.Failure.noDevice:
                         hint = "Waiting for the Android device — plug it in with USB debugging on…"
+                    case AOA.Failure.noDevice:
+                        hint = "Waiting for the Android device — plug it in…"
+                    case AOA.Failure.noApp:
+                        // Every accessory dial opens the app on the device,
+                        // so retrying a device that never answered would
+                        // keep popping a dialog: give up unless the session
+                        // already streamed (a dropped link) or waits for
+                        // the device to wake (it answers once unlocked).
+                        if self.awaitingWake {
+                            hint = "\(self.endpointName) is asleep — reconnects when it wakes…"
+                        } else if self.everConnected {
+                            self.dialRefused()
+                            hint = "Device found — open the OpenDisplay app on it…"
+                        } else {
+                            self.reportGone("OpenDisplay did not open on the Android device — install it and allow USB access")
+                            hint = "Install OpenDisplay on the Android device and allow it to use the USB accessory"
+                        }
                     case Usbmux.Failure.refused, Adb.Failure.refused:
                         self.dialRefused()
                         hint = self.awaitingWake
