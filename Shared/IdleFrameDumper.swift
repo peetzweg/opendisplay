@@ -2,7 +2,6 @@
 import CoreMedia
 import Foundation
 import ImageIO
-import UniformTypeIdentifiers
 import VideoToolbox
 
 /// Dev-only sharpness probe (#322): decodes every received sample on a side
@@ -130,7 +129,7 @@ final class IdleFrameDumper {
                                       | CGBitmapInfo.byteOrder32Little.rawValue),
               let cg = ctx.makeImage() else { return false }
         let url = directory.appendingPathComponent(name)
-        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil)
         else { return false }
         CGImageDestinationAddImage(dest, cg, nil)
         guard CGImageDestinationFinalize(dest) else {

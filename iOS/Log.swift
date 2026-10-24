@@ -69,7 +69,11 @@ enum Log {
         if let handle = try? FileHandle(forWritingTo: fileURL) {
             handle.seekToEndOfFile()
             handle.write(data)
-            try? handle.close()
+            if #available(iOS 13, *) {
+                try? handle.close()
+            } else {
+                handle.closeFile()   // iOS 12
+            }
         } else {
             try? data.write(to: fileURL, options: .atomic)
         }
