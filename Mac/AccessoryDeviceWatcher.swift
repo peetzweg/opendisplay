@@ -17,7 +17,7 @@ import IOKit
 
 @MainActor
 final class AccessoryDeviceWatcher {
-    private static let detachGrace: Duration = .seconds(6)
+    private static let detachGrace: UInt64 = 6_000_000_000   // 6 s, in nanoseconds
 
     private var devices: [String: UsbmuxDevice] = [:]          // by serial
     private var serialByEntry: [UInt64: String] = [:]          // registry entry id
@@ -40,13 +40,13 @@ final class AccessoryDeviceWatcher {
         IONotificationPortSetDispatchQueue(port, .main)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         let added: IOServiceMatchingCallback = { refcon, iterator in
-            MainActor.assumeIsolated {
+            assumeMainActor {
                 Unmanaged<AccessoryDeviceWatcher>.fromOpaque(refcon!).takeUnretainedValue()
                     .attached(iterator)
             }
         }
         let removed: IOServiceMatchingCallback = { refcon, iterator in
-            MainActor.assumeIsolated {
+            assumeMainActor {
                 Unmanaged<AccessoryDeviceWatcher>.fromOpaque(refcon!).takeUnretainedValue()
                     .detached(iterator)
             }
@@ -84,10 +84,10 @@ final class AccessoryDeviceWatcher {
             // that ignores it — keep it off the main thread. A device still
             // settling after enumeration gets two more tries.
             probing.insert(entry)
-            Task.detached {
+            Task.detached { [entry] in
                 var version: Int?
                 for attempt in 0..<3 where version == nil {
-                    if attempt > 0 { try? await Task.sleep(for: .milliseconds(500)) }
+                    if attempt > 0 { try? await Task.sleep(nanoseconds: 500_000_000) }
                     version = AOA.protocolVersion(of: service)
                 }
                 IOObjectRelease(service)
@@ -121,7 +121,7 @@ final class AccessoryDeviceWatcher {
                   devices[serial] != nil else { continue }
             pendingDetach[serial]?.cancel()
             pendingDetach[serial] = Task {
-                try? await Task.sleep(for: Self.detachGrace)
+                try? await Task.sleep(nanoseconds: Self.detachGrace)
                 guard !Task.isCancelled else { return }
                 pendingDetach[serial] = nil
                 Log.info("Android device detached: \(serial)")

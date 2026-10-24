@@ -16,6 +16,7 @@ struct PerfOverlay: View {
             // Metrics wrap onto extra rows when the width doesn't fit —
             // portrait iPhone is ~390pt, far less than one full row.
             MetricsRow {
+              Group {  // split in two: pre-Xcode-15 SwiftUI caps a builder at 10 children
                 // Transport badge — the question "is this cable or WiFi?"
                 Text(stats.transport)
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -66,6 +67,8 @@ struct PerfOverlay: View {
                     metric("input", String(format: "%.0f ms", stats.inputP50))
                 }
                 metric("rtt", String(format: "%.0f ms", stats.rttMs))
+              }
+              Group {
                 if stats.capFps > 0 {
                     metric("Mac cap", "\(stats.capFps)")
                 }
@@ -84,6 +87,7 @@ struct PerfOverlay: View {
                     metric("flushes", "\(stats.decodeFlushes)")
                 }
                 metric("res", "\(Int(videoSize.width))×\(Int(videoSize.height))")
+              }
             }
             // Two graphs side by side where they fit (landscape), stacked
             // where they don't (portrait). Without ViewThatFits (iOS 15,

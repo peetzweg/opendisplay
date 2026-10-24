@@ -106,7 +106,7 @@ final class VirtualDisplay {
                     if self.selectTargetMode(recover: settled) { settled = true }
                     self.manageOrigin()
                 }
-                try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
+                try? await Task.sleep(nanoseconds: settled ? 2_000_000_000 : 200_000_000)
             }
         }
     }
@@ -335,7 +335,7 @@ enum DisplayUnits {
     static func clash(for id: CGDirectDisplayID) async -> (unit: UInt32, other: CGDirectDisplayID)? {
         var unit = CGDisplayUnitNumber(id)
         for _ in 0..<40 where unit == UInt32.max {
-            try? await Task.sleep(for: .milliseconds(50))
+            try? await Task.sleep(nanoseconds: 50_000_000)
             unit = CGDisplayUnitNumber(id)
         }
         guard unit != UInt32.max else { return nil }
@@ -357,7 +357,7 @@ enum DisplayUnits {
             var list = [CGDirectDisplayID](repeating: 0, count: Int(count))
             CGGetOnlineDisplayList(count, &list, &count)
             if !ids.contains(where: list.prefix(Int(count)).contains) { return }
-            try? await Task.sleep(for: .milliseconds(50))
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 }
