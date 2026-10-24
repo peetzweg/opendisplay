@@ -79,10 +79,19 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     // one session: the sender resets the device to start another, which
     // detaches it, so a used one is never reopened mid-stream.
     private var usedAccessory: UsbAccessory? = null
+    // Asked once per attachment: the user declined the system dialog that
+    // launched us, or opened the app by hand while the sender waits.
+    private var permissionAsked: UsbAccessory? = null
     private val accessoryDetached = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             Log.i(TAG, "USB accessory detached")
             usedAccessory = null
+            permissionAsked = null
+        }
+    }
+    private val accessoryPermission = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) takeAccessory()
         }
     }
     private lateinit var wifiLock: android.net.wifi.WifiManager.WifiLock
@@ -141,6 +150,8 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         )
         ContextCompat.registerReceiver(this, accessoryDetached,
             IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED), ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, accessoryPermission,
+            IntentFilter(ACTION_USB_PERMISSION), ContextCompat.RECEIVER_NOT_EXPORTED)
         updatePanel()
         main.post(statsTick)
         // First run: OpenDisplay is two apps; say so until the first connection.
@@ -260,6 +271,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(accessoryDetached)
+        unregisterReceiver(accessoryPermission)
         if (wifiLock.isHeld) wifiLock.release()
         main.removeCallbacksAndMessages(null)
         decoder.release()
@@ -277,11 +289,28 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
      * AccessoryLink): take the attachment as the session, unless one already
      * ran over it. The attached list, not the intent's extra: an old launch
      * intent outlives its attachment.
+     *
+     * Not while locked: the sender's redial launches this activity behind
+     * the lock screen, where a session would end at once with `sleeping`
+     * and the sender would redial again. The attachment waits; unlocking
+     * starts the activity and takes it here.
      */
     private fun takeAccessory() {
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
+        if (keyguard.isKeyguardLocked) return
         val usb = getSystemService(USB_SERVICE) as UsbManager
         val accessory = usb.accessoryList?.firstOrNull(AccessoryLink::isOurs) ?: return
         if (accessory == usedAccessory) return
+        if (!usb.hasPermission(accessory)) {
+            if (accessory != permissionAsked) {
+                permissionAsked = accessory
+                // UsbManager fills in the grant extras, so the intent must be mutable.
+                val flags = if (Build.VERSION.SDK_INT >= 31) android.app.PendingIntent.FLAG_MUTABLE else 0
+                val intent = Intent(ACTION_USB_PERMISSION).setPackage(packageName)
+                usb.requestPermission(accessory, android.app.PendingIntent.getBroadcast(this, 0, intent, flags))
+            }
+            return
+        }
         val link = AccessoryLink.open(usb, accessory)
         if (link == null) {
             Log.w(TAG, "could not open the USB accessory (permission ${usb.hasPermission(accessory)})")
@@ -688,6 +717,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     companion object {
         private const val TAG = "OpenDisplay"
+        private const val ACTION_USB_PERMISSION = "app.opendisplay.android.USB_PERMISSION"
 
         /**
          * Locked or backgrounded: the sender keeps waiting for us to come
