@@ -21,6 +21,7 @@
 // opt-out and the device list rows all work exactly as for usbmuxd devices.
 
 import Foundation
+import IOKit
 import Network
 
 enum Adb {
@@ -276,12 +277,19 @@ enum Adb {
 /// Long-lived `host:track-devices-l` subscription: the server pushes a full
 /// snapshot on every change, so attach and detach arrive without polling.
 /// Reports USB-attached, authorized devices as wired devices.
+///
+/// Dormant until a USB interface with adb's signature appears: most users
+/// never plug in an Android device with USB debugging on, and for them
+/// nothing here runs, no adb server gets started, no socket is touched.
 @MainActor
 final class AdbDeviceWatcher {
     private let queue = DispatchQueue(label: "adb.watcher")
     private var devices: [String: UsbmuxDevice] = [:]   // by serial
     private var unauthorizedLogged: Set<String> = []
     private let onChange: ([UsbmuxDevice]) -> Void
+    private var interfaces: AdbInterfaceMonitor?
+    private var trackTask: Task<Void, Never>?
+    private var trackConnection: NWConnection?
     // A server is started at most once a minute: someone who ran
     // `adb kill-server` must not see it come straight back every retry.
     private var lastServerStart: Date?
@@ -289,28 +297,49 @@ final class AdbDeviceWatcher {
 
     init(onChange: @escaping ([UsbmuxDevice]) -> Void) {
         self.onChange = onChange
-        Task { await trackLoop() }
+        interfaces = AdbInterfaceMonitor { [weak self] present in
+            self?.interfacesChanged(present: present)
+        }
+    }
+
+    private func interfacesChanged(present: Bool) {
+        if present, trackTask == nil {
+            Log.info("adb USB interface attached — tracking adb devices")
+            trackTask = Task { await trackLoop() }
+        } else if !present, let task = trackTask {
+            Log.info("no adb USB interface left — adb tracking stopped")
+            task.cancel()
+            trackTask = nil
+            trackConnection?.cancel()
+            trackConnection = nil
+            if !devices.isEmpty { update([]) }
+        }
     }
 
     private func trackLoop() async {
-        while true {
+        while !Task.isCancelled {
             do {
                 let conn = try await Adb.open(queue: queue, deadline: nil)
                 defer { conn.cancel() }
+                guard !Task.isCancelled else { return }
+                trackConnection = conn
                 try await Adb.request("host:track-devices-l", on: conn)
                 while true {
-                    update(AdbParsing.devices(try await Adb.readBlock(on: conn)))
+                    let snapshot = AdbParsing.devices(try await Adb.readBlock(on: conn))
+                    guard !Task.isCancelled else { return }
+                    update(snapshot)
                 }
             } catch Adb.Failure.noServer {
                 if !devices.isEmpty { update([]) }
                 guard let path = locateAdb() else {
-                    // Most Macs: no adb at all. Look again now and then, so
-                    // installing it later needs no relaunch.
+                    // Debugging is on but this Mac has no adb. Look again
+                    // now and then, so installing it needs no replug.
                     try? await Task.sleep(for: .seconds(30))
                     continue
                 }
                 if await startServerIfDue(adbPath: path) { continue }
             } catch {
+                guard !Task.isCancelled else { return }
                 Log.info("adb watcher: \(error.localizedDescription) — retrying in 3s")
                 if !devices.isEmpty { update([]) }
             }
@@ -373,5 +402,63 @@ final class AdbDeviceWatcher {
 
     private func publish() {
         onChange(devices.values.sorted { $0.udid < $1.udid })
+    }
+}
+
+/// Watches IOKit for USB interfaces with adb's class triple (vendor-specific
+/// 0xFF, subclass 0x42, protocol 1). An Android device exposes one exactly
+/// while USB debugging is on, whatever USB mode it is in, so this is the
+/// cheap trigger for everything above: notifications, no polling.
+@MainActor
+private final class AdbInterfaceMonitor {
+    private let port: IONotificationPortRef
+    private var count = 0
+    private let onChange: (Bool) -> Void
+
+    init(onChange: @escaping (Bool) -> Void) {
+        self.onChange = onChange
+        port = IONotificationPortCreate(kIOMainPortDefault)
+        IONotificationPortSetDispatchQueue(port, .main)
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let added: IOServiceMatchingCallback = { refcon, iterator in
+            MainActor.assumeIsolated {
+                Unmanaged<AdbInterfaceMonitor>.fromOpaque(refcon!).takeUnretainedValue()
+                    .drain(iterator, delta: 1)
+            }
+        }
+        let removed: IOServiceMatchingCallback = { refcon, iterator in
+            MainActor.assumeIsolated {
+                Unmanaged<AdbInterfaceMonitor>.fromOpaque(refcon!).takeUnretainedValue()
+                    .drain(iterator, delta: -1)
+            }
+        }
+        for (type, callback, delta) in [(kIOFirstMatchNotification, added, 1),
+                                         (kIOTerminatedNotification, removed, -1)] {
+            // IOPropertyMatch, not the USB family's own interface keys: those
+            // only match together with a vendor/product id.
+            let matching = IOServiceMatching("IOUSBHostInterface") as NSMutableDictionary
+            matching[kIOPropertyMatchKey] = [
+                "bInterfaceClass": 0xFF, "bInterfaceSubClass": 0x42, "bInterfaceProtocol": 1,
+            ]
+            var iterator: io_iterator_t = 0
+            guard IOServiceAddMatchingNotification(port, type, matching, callback, refcon,
+                                                   &iterator) == KERN_SUCCESS else {
+                Log.info("adb interface monitor: IOKit registration failed")
+                continue
+            }
+            // Draining arms the notification; for first-match it also counts
+            // devices already plugged in at launch.
+            drain(iterator, delta: delta)
+        }
+    }
+
+    private func drain(_ iterator: io_iterator_t, delta: Int) {
+        var changed = false
+        while case let service = IOIteratorNext(iterator), service != 0 {
+            IOObjectRelease(service)
+            count = max(0, count + delta)
+            changed = true
+        }
+        if changed { onChange(count > 0) }
     }
 }
