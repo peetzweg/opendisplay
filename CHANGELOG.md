@@ -1,5 +1,120 @@
 # Changelog
 
+## [1.26.0](https://github.com/peetzweg/opendisplay/compare/v1.25.0...v1.26.0) (2026-10-22)
+
+
+### Features
+
+* **linux:** Linux sender and receiver (beta) ([#298](https://github.com/peetzweg/opendisplay/issues/298)) ([195d823](https://github.com/peetzweg/opendisplay/commit/195d8233ab06f034ba7ce63db3479e591e465335))
+* **site:** Android receiver public beta ([#379](https://github.com/peetzweg/opendisplay/issues/379)) ([839c3ce](https://github.com/peetzweg/opendisplay/commit/839c3ce5b695e874d3aff3c9fc66239fa69b746b))
+* **site:** animated og:video splash ([#385](https://github.com/peetzweg/opendisplay/issues/385)) ([e2cc20d](https://github.com/peetzweg/opendisplay/commit/e2cc20d920e9ba4634d2168745e67611c7d79e66))
+* **site:** QR code for the Android beta ([#381](https://github.com/peetzweg/opendisplay/issues/381)) ([819e95d](https://github.com/peetzweg/opendisplay/commit/819e95dfcbb9ce6be7629fc3e8b396f1f37afb63))
+
+## [1.25.0](https://github.com/peetzweg/opendisplay/compare/v1.24.0...v1.25.0) (2026-10-01)
+
+
+### Features
+
+* **ios:** tidy idle screen, rate prompt and About links ([#350](https://github.com/peetzweg/opendisplay/issues/350)) ([472e785](https://github.com/peetzweg/opendisplay/commit/472e785a619e71373d4dfd9205ee13d100ac0da4))
+* **mac:** per-device Display size on the sender ([#347](https://github.com/peetzweg/opendisplay/issues/347)) ([a930071](https://github.com/peetzweg/opendisplay/commit/a9300712e97185608b21b7e8a12bf5e7f35fdbbd))
+* **mac:** sender decides the desktop from hello.panel ([#345](https://github.com/peetzweg/opendisplay/issues/345)) ([f0d211a](https://github.com/peetzweg/opendisplay/commit/f0d211a0615c4adef31d57fb88a836c18c4af891))
+
+
+### Bug Fixes
+
+* **mac:** Display size popover hugs its content, captions show only the size ([#352](https://github.com/peetzweg/opendisplay/issues/352)) ([b3c909a](https://github.com/peetzweg/opendisplay/commit/b3c909adbf2e13710718cbec7f371d068e5d5be4))
+* **mac:** keep small iPhones at 2x with the macOS minimum ([#346](https://github.com/peetzweg/opendisplay/issues/346)) ([d24afad](https://github.com/peetzweg/opendisplay/commit/d24afad70333cd83b14412305522b8ee62c30db0))
+
+## [1.24.0](https://github.com/peetzweg/opendisplay/compare/v1.23.0...v1.24.0) (2026-09-30)
+
+
+### Features
+
+* **mac:** auto-connect a Mac receiver when the cable is plugged in ([#338](https://github.com/peetzweg/opendisplay/issues/338)) ([42ad6fb](https://github.com/peetzweg/opendisplay/commit/42ad6fbdb4b9f9f1da29d11afd60b44cf7628cd4))
+* **receiver:** shut down a cabled Mac receiver from the sender ([#332](https://github.com/peetzweg/opendisplay/issues/332)) ([d2dfb3f](https://github.com/peetzweg/opendisplay/commit/d2dfb3f744d020f66f60956c52ed4f4dc7c4a3b2))
+
+
+### Bug Fixes
+
+* **mac:** show Retry only on a failed session ([#335](https://github.com/peetzweg/opendisplay/issues/335)) ([c27e538](https://github.com/peetzweg/opendisplay/commit/c27e538c0cb86b075e7129a176a163654627efe4))
+
+## [1.23.0](https://github.com/peetzweg/opendisplay/compare/v1.22.1...v1.23.0) (2026-09-30)
+
+
+### Features
+
+* **video:** use HEVC automatically when both sides support it in hardware ([#325](https://github.com/peetzweg/opendisplay/issues/325)) ([91ca272](https://github.com/peetzweg/opendisplay/commit/91ca272debd4615d134f18a5bc98f0ef8a236544))
+
+## [1.22.1](https://github.com/peetzweg/opendisplay/compare/v1.22.0...v1.22.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **mac:** capture the virtual display 1:1 when the stream is smaller than the panel ([#323](https://github.com/peetzweg/opendisplay/issues/323)) ([f244d63](https://github.com/peetzweg/opendisplay/commit/f244d63025d66fd8dcfbddffc2beceab0eb43ee2)), closes [#322](https://github.com/peetzweg/opendisplay/issues/322)
+* **mac:** keep the session through display sleep and screen lock ([#320](https://github.com/peetzweg/opendisplay/issues/320)) ([09e717e](https://github.com/peetzweg/opendisplay/commit/09e717edf3ed795869fc8c5a5b094dabb95701d6))
+
+## [1.22.0](https://github.com/peetzweg/opendisplay/compare/v1.21.0...v1.22.0) (2026-09-23)
+
+
+### Features
+
+* **receiver:** enter fullscreen when streaming starts ([#304](https://github.com/peetzweg/opendisplay/issues/304)) ([04f33ad](https://github.com/peetzweg/opendisplay/commit/04f33adb1a34f07b4bfa088eb12b9a14384239c0))
+
+
+### Bug Fixes
+
+* **readme:** use a transparent app icon ([#305](https://github.com/peetzweg/opendisplay/issues/305)) ([71ed45d](https://github.com/peetzweg/opendisplay/commit/71ed45d907012a58beae225449822f04c9bf0b45))
+
+## [1.21.0](https://github.com/peetzweg/opendisplay/compare/v1.20.0...v1.21.0) (2026-09-18)
+
+
+### Features
+
+* **ios:** lower deployment target to iOS 15 ([#291](https://github.com/peetzweg/opendisplay/issues/291)) ([4eef347](https://github.com/peetzweg/opendisplay/commit/4eef347e811d8b3610e012efb43065c6933083d9))
+
+## [1.20.0](https://github.com/peetzweg/opendisplay/compare/v1.19.0...v1.20.0) (2026-09-18)
+
+
+### Features
+
+* **web:** add App Store QR and demo video ([#285](https://github.com/peetzweg/opendisplay/issues/285)) ([542eae4](https://github.com/peetzweg/opendisplay/commit/542eae4582641c932432a9d0c3673daf095b1c15))
+* **web:** redesign sender and receiver downloads ([#264](https://github.com/peetzweg/opendisplay/issues/264)) ([d0ee974](https://github.com/peetzweg/opendisplay/commit/d0ee9745c94bf056f8b644d15cf1fc20e6eaf821))
+
+
+### Bug Fixes
+
+* **dev:** grayscale Debug icon instead of inverted ([#263](https://github.com/peetzweg/opendisplay/issues/263)) ([4a23a16](https://github.com/peetzweg/opendisplay/commit/4a23a16d8ef41518618839db937aa292af6043a4))
+* **dev:** make Debug builds distinct (name + inverted icon) ([#261](https://github.com/peetzweg/opendisplay/issues/261)) ([238b0ff](https://github.com/peetzweg/opendisplay/commit/238b0ffa4b0475eecaccd4e01f9517df5e2eb632))
+* **mac:** strictly validate CGDisplayIsInMirrorSet return value ([#142](https://github.com/peetzweg/opendisplay/issues/142)) ([#250](https://github.com/peetzweg/opendisplay/issues/250)) ([02b917e](https://github.com/peetzweg/opendisplay/commit/02b917e8e0425a0f439a5003030e2353703d569d))
+* negotiate capability-safe stream configurations ([#288](https://github.com/peetzweg/opendisplay/issues/288)) ([d04a439](https://github.com/peetzweg/opendisplay/commit/d04a4396f121a985d6590e7e03ef41d01b813c6d))
+
+## [1.19.0](https://github.com/peetzweg/opendisplay/compare/v1.18.0...v1.19.0) (2026-09-01)
+
+
+### Features
+
+* **mac:** full-pixel mirror capture and a receiver decode ceiling ([#258](https://github.com/peetzweg/opendisplay/issues/258)) ([f1f3ec5](https://github.com/peetzweg/opendisplay/commit/f1f3ec57540cb42325fc57d0f79b6a8d740744a5))
+
+## [1.18.0](https://github.com/peetzweg/opendisplay/compare/v1.17.0...v1.18.0) (2026-09-01)
+
+
+### Features
+
+* **mac:** standalone OpenDisplay Receiver app, a spare Mac as a display ([#145](https://github.com/peetzweg/opendisplay/issues/145)) ([23b62b3](https://github.com/peetzweg/opendisplay/commit/23b62b3da59fbb3ce2836a29aec34c7f7bf71a1d))
+* **web:** add coverage showcase ([#239](https://github.com/peetzweg/opendisplay/issues/239)) ([89d9902](https://github.com/peetzweg/opendisplay/commit/89d9902857e23c67c77b7e845ddbd7b8e99d4aea))
+
+## [1.17.0](https://github.com/peetzweg/opendisplay/compare/v1.16.1...v1.17.0) (2026-08-20)
+
+
+### Features
+
+* **ios:** share the phone's connection log from Settings & Help ([#227](https://github.com/peetzweg/opendisplay/issues/227)) ([ba2ddb2](https://github.com/peetzweg/opendisplay/commit/ba2ddb2ceae30577a1d872f12425aa18a1cd3bde))
+
+
+### Bug Fixes
+
+* Honor the system capture stop and survive poisoned display identities ([#231](https://github.com/peetzweg/opendisplay/issues/231)) ([87b000b](https://github.com/peetzweg/opendisplay/commit/87b000b9906587d793c642e0dcd1b1032069f2e8))
+
 ## [1.16.1](https://github.com/peetzweg/opendisplay/compare/v1.16.0...v1.16.1) (2026-08-10)
 
 

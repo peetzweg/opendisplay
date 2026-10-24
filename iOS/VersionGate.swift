@@ -3,14 +3,9 @@ import SwiftUI
 // `AppStore` (the App Store identity + deep link) lives in Shared/AppStore.swift
 // so the Mac can reference the same link when it asks the phone to update.
 
-// MARK: - Peer-driven update signals (issue #132)
-
-/// What the connected Mac (or its absence) tells us about compatibility. Fed
-/// into the same gate as the remote-config check so there is one update UI.
-enum PeerUpdateSignal: Equatable {
-    case updateIPhone(message: String, storeURL: URL)   // Mac sent `updateRequired`
-    case updateMac(message: String)                     // Mac's pv is below our floor
-}
+// `PeerUpdateSignal` (what the connected Mac tells us about compatibility)
+// lives with the receiver core in Shared/StreamReceiver.swift — the Mac app's
+// receiver mode consumes the same signals.
 
 // MARK: - Version gate (issue #135)
 
@@ -83,13 +78,13 @@ final class VersionGate: ObservableObject {
         recompute()
     }
 
-    /// Fold in what the connected Mac told us. `updateIPhone` is a hard gate
+    /// Fold in what the connected Mac told us. `updateReceiver` is a hard gate
     /// (the Mac refuses this pairing); `updateMac` is a soft nag pointing at the
     /// Mac app download, since the fix is on the other device. Passing `nil`
     /// clears the peer signal (e.g. on disconnect).
     func applyPeer(_ signal: PeerUpdateSignal?) {
         switch signal {
-        case let .updateIPhone(message, storeURL):
+        case let .updateReceiver(message, storeURL):
             peerStatus = .required(Update(message: message, url: storeURL))
         case let .updateMac(message):
             peerStatus = .recommended(Update(message: message, url: macAppURL))

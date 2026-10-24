@@ -37,4 +37,4 @@ fastlane/test_output/
 # deployed straight to GitHub Pages, so the build output is not committed.
 node_modules/
 dist-ssr/
-docs/
+/docs/

@@ -1,0 +1,305 @@
+name: Linux
+
+# The Rust workspace in linux/ (protocol crates, fake sender, and later the
+# Linux receiver and sender) is built natively on both architectures it
+# targets. Cross-compiling is deliberately not attempted: the moment
+# GStreamer / libva enter the link it stops being worth it, and arm64
+# hosted runners are free for public repositories.
+on:
+  pull_request:
+    paths:
+      - "linux/**"
+      - "PROTOCOL.md"
+      - ".github/workflows/linux.yml"
+  # The release commit gets the full suite here too (linux-release.yml only
+  # unit-tests od-sender): release-please's release PR bumps linux/Cargo.toml,
+  # so merging it is a push to main under linux/**. The vX.Y.Z tag itself
+  # triggers nothing (tags created with GITHUB_TOKEN start no workflows).
+  push:
+    branches: [main]
+    paths:
+      - "linux/**"
+      - "PROTOCOL.md"
+      - ".github/workflows/linux.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    name: rust (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v6
+
+      # Build-time: GStreamer core/base/app/video headers, GTK 4 and libwayland
+      # for od-receiver; FFmpeg headers plus libclang (bindgen) for od-sender.
+      # Run-time: a software H.264 decoder so the fake-sender -> receiver
+      # test exercises real decode (into fakesink) on the runner.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libwayland-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libclang-dev \
+            libpipewire-0.3-dev libgtk-4-dev nasm
+      # nasm: OpenH264's x86 assembly, as the AUR package builds it (a
+      # PKGBUILD makedepend on x86_64); without it CI tests the C fallback.
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: linux
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # --locked everywhere: a stale Cargo.lock must fail here, not first in
+      # the AUR build (--frozen) or at tag time.
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      # Includes the fake-sender end-to-end run over a real TCP socket against
+      # a ReceiverSession null sink: the protocol conformance check.
+      - name: Test
+        run: cargo test --locked --workspace
+
+      # Detection and its tests must hold for builds without the optional
+      # backends too (the static tarball or a distro may drop them).
+      - name: Test od-sender without optional backends
+        run: cargo test --locked -p od-sender --no-default-features
+
+      - name: Build release binaries
+        run: cargo build --locked --workspace --release
+
+  # The AUR package, built the way an Arch/Omarchy user's AUR helper builds it
+  # from this checkout instead of the tag.
+  # Arch rather than Ubuntu: it is the package's target, and its sway (>= 1.10,
+  # ext-image-copy-capture) hosts the headless smoke test below. x86_64 only:
+  # archlinux:latest has no arm64 image.
+  arch-package:
+    name: arch package (x86_64)
+    runs-on: ubuntu-24.04
+    # Package, sway smoke, then the GTK receiver build and its two smokes.
+    timeout-minutes: 45
+    container: archlinux:latest
+    steps:
+      # git before checkout, or actions/checkout falls back to a tarball and
+      # from-checkout.sh has nothing to `git archive`.
+      - name: Install base tools
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git namcap
+          useradd --create-home builder
+          echo 'builder ALL=(ALL) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/builder
+
+      - uses: actions/checkout@v6
+
+      - name: makepkg opendisplay-sender
+        run: |
+          chown -R builder: "$GITHUB_WORKSPACE"
+          sudo -u builder git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cd linux/packaging/arch/opendisplay-sender
+          sudo -u builder ./from-checkout.sh --syncdeps --noconfirm
+
+      - name: Inspect package
+        working-directory: linux/packaging/arch/opendisplay-sender
+        run: |
+          pkg="$(ls opendisplay-sender-[0-9]*.pkg.tar.*)"
+          pacman -Qlp "$pkg"
+          namcap PKGBUILD "$pkg"
+          # .SRCINFO is what the AUR shows; it must match the PKGBUILD.
+          sudo -u builder makepkg --printsrcinfo | diff -u .SRCINFO -
+
+      # The packaged /usr/bin/od-sender on a headless Sway (wlroots, pixman,
+      # no GPU): adopt and wlroots backends, capture, input placement, a full
+      # stream into od-receiver --sink none, crash recovery with `clean`.
+      # See linux/testbench/sway-smoke.sh.
+      - name: Install package and Sway
+        working-directory: linux/packaging/arch/opendisplay-sender
+        run: |
+          pacman -U --noconfirm opendisplay-sender-[0-9]*.pkg.tar.*
+          pacman -S --noconfirm --needed sway foot wlr-randr jq libcap
+          # Executing /usr/bin/sway in this container failed with "Operation
+          # not permitted" (#298): a file capability outside Docker's default
+          # set. A plain copy carries none; the smoke step puts it first.
+          getcap /usr/bin/sway || true
+          install -m755 /usr/bin/sway /usr/local/bin/sway
+
+      # The far end for the streaming step: no GStreamer needed for --sink
+      # none. Cargo is still installed from makepkg's makedepends.
+      - name: Build od-receiver (null sink)
+        run: |
+          sudo -u builder -H cargo build --locked --release \
+            --manifest-path linux/Cargo.toml -p od-receiver --no-default-features
+
+      - name: Sway headless smoke
+        run: |
+          install -d -o builder "$RUNNER_TEMP/sway-smoke"
+          sudo -u builder -H env LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin \
+            OD_RECEIVER="$GITHUB_WORKSPACE/linux/target/release/od-receiver" \
+            timeout 180 linux/testbench/sway-smoke.sh /usr/bin/od-sender "$RUNNER_TEMP/sway-smoke"
+
+      # The receiver presenting for real: GTK window, GStreamer decode, the
+      # packaged sender streaming into it on the same headless Sway, input
+      # back (linux/testbench/receiver-smoke.sh).
+      - name: Build od-receiver (GTK)
+        run: |
+          pacman -S --noconfirm --needed gtk4 gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav
+          sudo -u builder -H cargo build --locked --release \
+            --manifest-path linux/Cargo.toml -p od-receiver
+
+      - name: Receiver smoke
+        run: |
+          install -d -o builder "$RUNNER_TEMP/receiver-smoke"
+          sudo -u builder -H env LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin \
+            timeout 180 linux/testbench/receiver-smoke.sh /usr/bin/od-sender \
+            "$GITHUB_WORKSPACE/linux/target/release/od-receiver" "$RUNNER_TEMP/receiver-smoke"
+
+      # The NixOS kiosk shape: cage runs od-receiver as its only
+      # application; od-fake-sender streams into it.
+      - name: Receiver kiosk smoke (cage)
+        run: |
+          pacman -S --noconfirm --needed cage
+          sudo -u builder -H cargo build --locked --release \
+            --manifest-path linux/Cargo.toml -p od-fake-sender
+          install -d -o builder "$RUNNER_TEMP/cage-smoke"
+          sudo -u builder -H env LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin \
+            timeout 120 linux/testbench/cage-smoke.sh \
+            "$GITHUB_WORKSPACE/linux/target/release/od-receiver" \
+            "$GITHUB_WORKSPACE/linux/target/release/od-fake-sender" \
+            linux/testdata/clip-640x360-30.h264 "$RUNNER_TEMP/cage-smoke"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sway-smoke-logs
+          path: |
+            ${{ runner.temp }}/sway-smoke
+            ${{ runner.temp }}/receiver-smoke
+            ${{ runner.temp }}/cage-smoke
+          if-no-files-found: ignore
+
+  # The KDE backend on a headless KWin:
+  # zkde_screencast virtual outputs, PipeWire frames, fake input, a stream
+  # into od-receiver --sink none. KWin's virtual backend composites with
+  # OpenGL only on a DRM render node; hosted runners have no GPU, so the vgem
+  # module provides one for Mesa's software renderer. Some runner kernels ship
+  # no vgem: then it is built from source, and only if that fails too is the
+  # smoke skipped and this job passes WITHOUT coverage;
+  # the step summary says so and `kde coverage` below turns red (it is not
+  # required, so it does not block).
+  kde-smoke:
+    name: kde smoke (x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      ran: ${{ steps.dri.outputs.available }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # KWin's virtual outputs need OpenGL, which needs a render node. Some
+      # runner kernels ship no vgem module, not even in linux-modules-extra
+      # (6.17.0-1022-azure on image 20261012): then build it from source. If
+      # that fails too, it is a gap in the infrastructure, not a regression,
+      # so warn and skip.
+      - name: Render node (vgem)
+        id: dri
+        run: |
+          sudo modprobe vgem || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)" &&
+              sudo modprobe vgem
+          } || sudo bash linux/testbench/vgem-from-source.sh || true
+          ls -l /dev/dri || true
+          if ls /dev/dri/renderD* >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::no render node on $(uname -r) (vgem unavailable); KDE smoke skipped"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "### KDE smoke SKIPPED: no render node on $(uname -r); this run has no KDE coverage" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: KDE smoke in an Arch container
+        if: steps.dri.outputs.available == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/kde-smoke"
+          docker run --rm --device /dev/dri \
+            -v "$PWD:/src" -v "$RUNNER_TEMP/kde-smoke:/logs" \
+            archlinux:latest bash /src/linux/testbench/kde-ci-container.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kde-smoke-logs
+          path: ${{ runner.temp }}/kde-smoke
+          if-no-files-found: ignore
+
+  # A separate, non-required check that is red when kde-smoke skipped, so a
+  # green kde-smoke without a run cannot pass for coverage. continue-on-error
+  # keeps the workflow green; the check itself shows the gap.
+  kde-coverage:
+    name: kde coverage
+    needs: kde-smoke
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Did the KDE smoke run?
+        run: |
+          if [ "${{ needs.kde-smoke.outputs.ran }}" != true ]; then
+            echo "::error::KDE smoke did not run (no render node on the runner): no KDE coverage in this run"
+            exit 1
+          fi
+          echo "KDE smoke ran"
+
+  # GNOME backend: a headless Mutter with its own session bus, PipeWire and
+  # WirePlumber. No GPU or render node needed (Mesa's surfaceless platform;
+  # verified with /dev/dri hidden). Virtual monitor
+  # over Mutter's ScreenCast/RemoteDesktop D-Bus APIs, PipeWire frames,
+  # pointer input, scale/position, cleanup after kill -9. The run happens
+  # under strace and fails if anything reaches the system bus. Green since
+  # 2026-10-20, also without a render node. See linux/testbench/gnome-smoke.sh.
+  gnome-smoke:
+    name: gnome smoke (x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: GNOME smoke in an Arch container
+        run: |
+          mkdir -p "$RUNNER_TEMP/gnome-smoke"
+          docker run --rm \
+            -v "$PWD:/src" -v "$RUNNER_TEMP/gnome-smoke:/logs" \
+            archlinux:latest bash /src/linux/testbench/gnome-ci-container.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gnome-smoke-logs
+          path: ${{ runner.temp }}/gnome-smoke
+          if-no-files-found: ignore

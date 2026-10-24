@@ -11,4 +11,7 @@ enum AppStore {
     static let updateURL = URL(string: "itms-apps://apps.apple.com/app/id\(iOSAppID)")!
     /// Web fallback for anywhere the itms-apps scheme can't be handled.
     static let webURL = URL(string: "https://apps.apple.com/app/id\(iOSAppID)")!
+    /// The listing's "Write a Review" sheet: opens in the App Store app on
+    /// device, and in Safari where nothing handles App Store links.
+    static let reviewURL = URL(string: "https://apps.apple.com/app/id\(iOSAppID)?action=write-review")!
 }

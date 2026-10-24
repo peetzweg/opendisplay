@@ -1,35 +1,48 @@
 import { useEffect, useRef, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
 import Showcase from "./components/Showcase"
+import SiteFooter from "./components/SiteFooter"
 import SupportNudge from "./components/SupportNudge"
 import TextRotate from "./components/TextRotate"
 
+const APP_STORE_URL = "https://apps.apple.com/us/app/opendisplay/id6780264891"
+// Android is a public beta on Google Play (Android 7.0+). The store page only
+// opens for testers, so the site links the group and the tester opt-in page.
+const ANDROID_BETA_GROUP_URL = "https://groups.google.com/g/opendisplay"
+const ANDROID_BETA_TESTER_URL = "https://play.google.com/apps/testing/com.peetzweg.opendisplay"
+// The Linux sender (od-sender) and receiver (od-receiver) are betas, shipped
+// with the shared vX.Y.Z release: sender tarballs with an installer, receiver
+// Flatpak bundles, and in-repo PKGBUILDs for Arch (the AUR package follows
+// once AUR registration reopens). Docs: /docs/linux/ (content/docs/linux/,
+// prerendered by tools/docs.mjs); linux/README.md mirrors them for GitHub.
+const LINUX_DOCS_URL = "docs/linux/"
+const LINUX_RECEIVER_URL = "docs/linux/receiver/"
+const LINUX_RELEASES_URL = "https://github.com/peetzweg/opendisplay/releases/latest"
+
 const HERO_WORDS = [
+  "partner's iPad",
+  "5K iMac",
+  "spare MacBook",
   "iPhone",
   "girlfriend's iPad",
   "mother's iPad",
-  "partner's iPad",
   "kid's iPad",
   "dusty iPad",
+  "Android tablet",
   "iPad",
 ]
+
+function AppStoreButton() {
+  return (
+    <a className="app-store-button" href={APP_STORE_URL} aria-label="Download on the App Store">
+      <img src="app-store-badge.svg" alt="" width="120" height="40" />
+    </a>
+  )
+}
 
 export default function App() {
   const [macVer, setMacVer] = useState<string | null>(null)
   const [starCount, setStarCount] = useState<string | null>(null)
-  // Step 1 should be whichever platform you're reading this on. Default is
-  // Mac-first (what SSR/prerender emits, and what desktop/Windows/Linux see);
-  // on an iPhone/iPad we flip so the receiver you install here comes first.
-  const [iosFirst, setIosFirst] = useState(false)
-
-  useEffect(() => {
-    const ua = navigator.userAgent
-    const isIosDevice =
-      /iPhone|iPad|iPod/.test(ua) ||
-      // iPadOS 13+ reports as "Macintosh"; a touch-capable one is an iPad.
-      (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
-    if (isIosDevice) setIosFirst(true)
-  }, [])
   // Show the brand icon in the navbar only once the big hero logo has
   // scrolled up behind the sticky nav — it "hands off" from hero to navbar.
   const heroLogoRef = useRef<HTMLImageElement>(null)
@@ -136,7 +149,7 @@ export default function App() {
             <a href="#features">Features</a>
             <a href="#why">Compare</a>
             <a href="#faq">FAQ</a>
-            <a href="#compatible">Other platforms</a>
+            <a href="docs/">Docs</a>
             <a href="#contribute">Contribute</a>
             <a
               className="gh"
@@ -189,9 +202,10 @@ export default function App() {
             A free, open-source alternative to Apple Sidecar, Duet Display and Luna Display.
             Use your iPhone and iPad as a second — and even a third — screen for your Mac.
             A true extended display, not a mirror: USB or WiFi, Retina-sharp, with touch and
-            scroll. No subscription. No dongle. No account.
+            scroll. No subscription. No dongle. No account. Android phones and tablets are
+            in public beta, over WiFi, and so is a sender for Linux desktops.
           </p>
-          <p className="meta">macOS 14+ &nbsp;·&nbsp; iPadOS 16+ &nbsp;·&nbsp; iOS 16+ &nbsp;·&nbsp; GPL-3.0</p>
+          <p className="meta">macOS 14+ &nbsp;·&nbsp; iPadOS 15+ &nbsp;·&nbsp; iOS 15+ &nbsp;·&nbsp; Android 7.0+ (beta) &nbsp;·&nbsp; Receiver Mac 12+ &nbsp;·&nbsp; Linux sender (beta) &nbsp;·&nbsp; Linux receiver (beta) &nbsp;·&nbsp; GPL-3.0</p>
         </div>
       </section>
 
@@ -202,74 +216,128 @@ export default function App() {
       <section className="downloads-sec">
         <div className="wrap">
           <p className="needs-both">
-            OpenDisplay is <strong>two apps that work together</strong> — install both to get going.
+            OpenDisplay is <strong>two apps that work together</strong> — the <strong>Sender</strong> on your Mac (or Linux desktop) and a <strong>Receiver</strong> on the device you want to use as a display. Install both to get going.
           </p>
-          <div className="downloads">
-            {/* Step 1 is whichever platform you're reading this on — on an
-                iPhone/iPad the receiver comes first (see iosFirst). */}
-            {(() => {
-              const macStep = (
-                <div key="mac">
-                  <div className="dl-head">
-                    <span className="step">Step {iosFirst ? 2 : 1}</span> On your Mac{" "}
-                    <span className="ver">{macVer}</span>
-                  </div>
-                  <p className="dl-sub">The sender — captures a virtual display and streams it.</p>
-                  <a
-                    className="btn primary"
-                    href="https://github.com/peetzweg/opendisplay/releases/latest/download/OpenDisplay.dmg"
-                  >
-                    Download for Mac
-                  </a>
+          <div className="download-group sender-group">
+            <h2 className="download-role">Sender</h2>
+            <p className="download-group-intro">Install this on the computer whose desktop you want to extend.</p>
+            <div className="download-options sender-download">
+              <div className="download-option">
+                <div className="platform">macOS <span className="ver">{macVer}</span></div>
+                <p className="dl-sub">Captures a virtual display and streams it.</p>
+                <a className="btn primary" href="https://github.com/peetzweg/opendisplay/releases/latest/download/OpenDisplay.dmg">
+                  Download
+                </a>
+                <p className="note brew">
+                  Or with Homebrew: <code>brew install --cask opendisplay</code>
+                </p>
+                <p className="note">
+                  Signed &amp; notarized — opens normally on macOS&nbsp;14+. Prefer to compile it yourself?{" "}
+                  <a href="https://github.com/peetzweg/opendisplay#quick-start">Build from source ↗</a>
+                </p>
+                <p className="note">
+                  Looking for an older version?{" "}
+                  <a href="https://github.com/peetzweg/opendisplay/releases">Browse all releases ↗</a>
+                </p>
+              </div>
+              <div className="download-option">
+                <div className="platform">Linux <span className="beta-tag">Beta</span></div>
+                <p className="dl-sub">Extends a Wayland desktop onto any receiver.</p>
+                <a className="btn primary" href={LINUX_DOCS_URL}>
+                  Get started
+                </a>
+                <p className="note">
+                  Hyprland tested; Sway, KDE Plasma and GNOME experimental.{" "}
+                  <a href={LINUX_RELEASES_URL}>Downloads ↗</a>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="download-group receiver-group">
+            <h2 className="download-role">Receiver</h2>
+            <p className="download-group-intro">Install one on the device you want to use as your extra display.</p>
+            <div className="download-options receiver-downloads">
+              <div className="download-option">
+                <div className="app-store-qr">
+                  <img
+                    src="app-store-qr.svg"
+                    alt="QR code for OpenDisplay in the App Store"
+                    width="148"
+                    height="148"
+                  />
+                </div>
+                <div className="platform">
+                  <span className="platform-name">iOS</span><span className="platform-separator">&amp;</span><span className="platform-name">iPadOS</span>
+                </div>
+                <p className="dl-sub">The receiver app for your iPhone and iPad.</p>
+                <AppStoreButton />
+                <p className="sub">
+                  Want early builds? <span className="no-break"><a id="testflight" href="https://testflight.apple.com/join/3NYaY11c">Join the TestFlight beta</a></span>, or <span className="no-break"><a href="https://github.com/peetzweg/opendisplay#quick-start">compile from source ↗</a></span>.
+                </p>
+              </div>
+              <div className="download-option">
+                <div className="app-store-qr">
+                  <img
+                    src="android-beta-qr.svg"
+                    alt="QR code for joining the OpenDisplay Android beta Google Group"
+                    width="148"
+                    height="148"
+                  />
+                </div>
+                <div className="platform">Android <span className="beta-tag">Beta</span></div>
+                <p className="dl-sub">Early access for Android phones and tablets.</p>
+                <a className="btn primary" href={ANDROID_BETA_GROUP_URL}>
+                  Join the beta
+                </a>
+                <div className="receiver-copy">
+                  <ol className="beta-steps">
+                    <li>
+                      Join the <a href={ANDROID_BETA_GROUP_URL}>OpenDisplay Google Group</a> with the
+                      Google account you use on the phone.
+                    </li>
+                    <li>
+                      Open the <a href={ANDROID_BETA_TESTER_URL}>tester link</a> on the phone or a
+                      computer, accept, then install OpenDisplay from Google Play.
+                    </li>
+                  </ol>
                   <p className="note">
-                    Signed &amp; notarized — opens normally on macOS&nbsp;14+. Prefer to compile it yourself?{" "}
-                    <a href="https://github.com/peetzweg/opendisplay#quick-start">Build from source ↗</a>
+                    Android&nbsp;7.0 or later, over WiFi. Android&nbsp;5 and 6 support via a direct
+                    download is coming.
+                  </p>
+                </div>
+              </div>
+              <div className="download-option">
+                <div className="platform">macOS</div>
+                <p className="dl-sub">Turns an older Mac into a second display.</p>
+                <a className="btn primary" href="https://github.com/peetzweg/opendisplay/releases/latest/download/OpenDisplayReceiver.dmg">
+                  Download
+                </a>
+                <div className="receiver-copy">
+                  <p className="note brew">
+                    Or with Homebrew: <code>brew install --cask opendisplay-receiver</code>
                   </p>
                   <p className="note">
-                    Looking for an older version?{" "}
+                    Got a spare <em>Mac</em> to use as the display? Install OpenDisplay Receiver on it instead of the iOS app — runs on macOS&nbsp;12+, so older Macs qualify.
+                  </p>
+                  <p className="note">
                     <a href="https://github.com/peetzweg/opendisplay/releases">Browse all releases ↗</a>
                   </p>
                 </div>
-              )
-              const iosStep = (
-                <div key="ios">
-                  <div className="dl-head">
-                    <span className="step">Step {iosFirst ? 1 : 2}</span> On your iPhone &amp; iPad
-                  </div>
-                  <p className="dl-sub">The receiver — displays the stream and sends touch back.</p>
-                  {/* TODO: On desktop only, show a QR code next to the App Store
-                      badge that encodes the App Store link, so visitors on a
-                      desktop PC can scan it with their iPhone or iPad to install
-                      the receiver. Hide it on touch/mobile viewports. */}
-                  <div className="ios-row">
-                    <a
-                      className="badge-wrap"
-                      href="https://apps.apple.com/app/id6780264891"
-                    >
-                      <img
-                        className="appstore-badge"
-                        src="app-store-badge.svg"
-                        alt="Download on the App Store"
-                        width="120"
-                        height="40"
-                      />
-                    </a>
-                  </div>
-                  <p className="sub">
-                    Want early builds? <a id="testflight" href="https://testflight.apple.com/join/3NYaY11c">
-                      Join the TestFlight beta
-                    </a>
-                    ,<br />
-                    or{" "}
-                    <a href="https://github.com/peetzweg/opendisplay#quick-start">
-                      compile it from source ↗
-                    </a>
-                    .
+              </div>
+              <div className="download-option">
+                <div className="platform">Linux <span className="beta-tag">Beta</span></div>
+                <p className="dl-sub">Turns a Linux machine into an extra display.</p>
+                <a className="btn primary" href={LINUX_RECEIVER_URL}>
+                  Get started
+                </a>
+                <div className="receiver-copy">
+                  <p className="note">
+                    Flatpak for any distribution. <a href={LINUX_RELEASES_URL}>Downloads ↗</a>
                   </p>
                 </div>
-              )
-              return iosFirst ? [iosStep, macStep] : [macStep, iosStep]
-            })()}
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -278,12 +346,12 @@ export default function App() {
         <div className="wrap sec">
           <p className="eyebrow">Demo</p>
           <h2>See it in action.</h2>
-          <Showcase />
           <p className="sub">
             Using OpenDisplay in the wild?{" "}
             <a href="https://x.com/peetzweg">Tag @peetzweg on X</a> and your setup might
             end up here.
           </p>
+          <Showcase />
         </div>
       </section>
       </div>
@@ -327,7 +395,7 @@ export default function App() {
           <h2>A true extended display, the way it should be.</h2>
           <div className="fgrid">
             <div className="fcell"><span className="n">001</span><h3>No account, ever</h3><p>No sign-up, no email, no login. And unlike Apple Sidecar — which only works between devices on the <em>same</em> Apple ID — OpenDisplay pairs across different Apple IDs, so you can use a partner's or friend's iPad. Download both apps and go.</p></div>
-            <div className="fcell"><span className="n">002</span><h3>Low-latency pipeline</h3><p>Up to 60 FPS over USB. Hardware H.264 (VideoToolbox real-time mode), TCP_NODELAY, and frame-dropping backpressure with instant keyframe recovery keep it responsive.</p></div>
+            <div className="fcell"><span className="n">002</span><h3>Low-latency pipeline</h3><p>Up to 60 FPS over USB. Hardware H.264 or HEVC (VideoToolbox real-time mode), TCP_NODELAY, and frame-dropping backpressure with instant keyframe recovery keep it responsive.</p></div>
             <div className="fcell"><span className="n">003</span><h3>Two, even three screens</h3><p>You're not limited to one device. Run several iPads and iPhones at once, each as its own extended display — up to three has been tested, and you can freely mix iPads and iPhones. Arrange them all in System Settings like real monitors.</p></div>
             <div className="fcell"><span className="n">004</span><h3>Retina sharp</h3><p>Native Retina resolution — the virtual display matches your device panel pixel-for-pixel at HiDPI (@2x), so text looks exactly like it should.</p></div>
             <div className="fcell"><span className="n">005</span><h3>USB-wired, lowest latency</h3><p>Streams over your charging cable via usbmux. No network, no jitter — and your phone charges while it works.</p></div>
@@ -335,6 +403,8 @@ export default function App() {
             <div className="fcell"><span className="n">007</span><h3>Touch &amp; scroll</h3><p>Tap to click, drag to drag, two-finger pan to scroll. A tiny touchscreen for your Mac.</p></div>
             <div className="fcell"><span className="n">008</span><h3>Portrait mode</h3><p>Rotate the phone and the virtual display rebuilds as a vertical monitor — perfect for chat, logs, or docs.</p></div>
             <div className="fcell"><span className="n">009</span><h3>Private by design</h3><p>One direct TCP connection between your devices. No servers, no accounts, no telemetry. Read the code.</p></div>
+            <div className="fcell"><span className="n">010</span><h3>A spare Mac as a display</h3><p>Install the small <em>OpenDisplay Receiver</em> app (macOS 12+) on an old Mac and another Mac extends onto it — a real Retina extended display, over WiFi or a Thunderbolt or Ethernet cable. An old MacBook becomes a second monitor.</p></div>
+            <div className="fcell"><span className="n">011</span><h3>Android, in beta</h3><p>An Android phone or tablet works as a display too, over WiFi, with touch and scrolling. The app is in public beta on Google Play for Android 7.0 and later; join through the Download section above.</p></div>
           </div>
         </div>
       </section>
@@ -372,14 +442,43 @@ export default function App() {
               </thead>
               <tbody>
                 <tr><td>Price</td><td className="mark-yes os">Free &amp; open source</td><td>Free</td><td className="mark-no">Subscription</td><td className="mark-no">$$$ + dongle</td></tr>
-                <tr><td>iPhone as display</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
+                <tr><td>iPhone as display</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-no">✕</td></tr>
+                <tr><td>Android as display</td><td className="mark-yes os">✓ Beta</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-no">✕</td></tr>
+                <tr><td>Mac as display</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
                 <tr><td>Different Apple IDs</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
-                <tr><td>No account / sign-up</td><td className="mark-yes os">✓</td><td>Apple&nbsp;ID</td><td className="mark-no">✕</td><td>—</td></tr>
-                <tr><td>Wired USB</td><td className="mark-yes os">✓</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td className="mark-no">✕</td></tr>
-                <tr><td>Self-hosted / auditable</td><td className="mark-yes os">✓</td><td>—</td><td className="mark-no">✕</td><td className="mark-no">✕</td></tr>
+                <tr><td>No account / sign-up</td><td className="mark-yes os">✓</td><td>Apple&nbsp;ID</td><td className="mark-no">✕</td><td>?</td></tr>
+                <tr><td>Wired USB</td><td className="mark-yes os">✓</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
+                <tr><td>Open source</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-no">✕</td><td className="mark-no">✕</td></tr>
               </tbody>
             </table>
           </div>
+
+          <h3 className="tbl-head">A spare Mac as the display</h3>
+          <p className="tbl-note">For a Mac receiver, Apple's answer is AirPlay to Mac, not Sidecar. Luna and Duet have
+          Mac-to-Mac modes, and a few newer apps do only this, mostly for a 5K iMac next to an Apple silicon laptop.</p>
+          <div className="tbl-scroll">
+            <table className="wide">
+              <thead>
+                <tr><th></th><th className="os">OpenDisplay</th><th>AirPlay to Mac</th><th>Luna</th><th>Duet Air</th><th><a href="https://github.com/swellweb/targetBridge">TargetBridge</a></th><th><a href="https://github.com/amineross/sharp">Sharp</a></th><th><a href="https://www.retinarelay.com/">RetinaRelay</a></th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Price</td><td className="mark-yes os">Free &amp; open source</td><td>Free</td><td className="mark-no">$89.99 + dongle</td><td className="mark-no">Subscription</td><td className="mark-yes">Free &amp; open source</td><td className="mark-yes">Free &amp; open source</td><td>$49 one-time</td></tr>
+                <tr><td>Receiving Mac</td><td className="mark-yes os">macOS&nbsp;12+</td><td className="mark-no">iMac 2019+, MacBook 2018+</td><td>macOS&nbsp;10.13+</td><td>macOS&nbsp;10.14.6+</td><td>macOS&nbsp;11+</td><td>macOS&nbsp;10.15+</td><td>iMac 2012+</td></tr>
+                <tr><td>Intel Mac as sender</td><td className="mark-yes os">✓</td><td>2018+</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
+                <tr><td>Wi-Fi</td><td className="mark-yes os">✓</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td>Experimental</td><td className="mark-no">✕</td><td>Fallback</td></tr>
+                <tr><td>Cable</td><td className="mark-yes os">Thunderbolt, USB-C, Ethernet</td><td>USB</td><td className="mark-yes">✓</td><td>?</td><td>Thunderbolt</td><td>Ethernet</td><td className="mark-yes">Thunderbolt, USB&nbsp;3, Ethernet</td></tr>
+                <tr><td>Native 5K on a 5K iMac</td><td className="mark-yes os">✓ ~30&nbsp;fps</td><td>?</td><td className="mark-yes">✓</td><td>?</td><td className="mark-yes">✓ 48&nbsp;fps</td><td>Experimental</td><td className="mark-yes">✓ 60&nbsp;fps</td></tr>
+                <tr><td>No account, any Apple&nbsp;ID</td><td className="mark-yes os">✓</td><td className="mark-no">Same Apple&nbsp;ID</td><td className="mark-yes">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
+                <tr><td>Keyboard &amp; mouse at the receiver</td><td className="mark-no os">Planned</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td>?</td><td>?</td></tr>
+                <tr><td>Audio</td><td className="mark-no os">✕</td><td className="mark-yes">✓</td><td>?</td><td>?</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
+                <tr><td>Shut down the receiver from the sender</td><td className="mark-yes os">✓ over a cable</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td><td>?</td></tr>
+                <tr><td>iPhone &amp; iPad too</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td>iPad only</td><td className="mark-yes">✓</td><td className="mark-no">✕</td><td className="mark-no">✕</td><td className="mark-no">✕</td></tr>
+                <tr><td>Open source</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-no">✕</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td><td className="mark-no">✕</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="tbl-note">? means the project doesn't document it. Taken from each project's own site or README,
+          October 2026.</p>
         </div>
       </section>
 
@@ -428,6 +527,67 @@ export default function App() {
               (Apple Pencil, pressure) are on the roadmap.</p>
             </details>
             <details>
+              <summary>How do I get the Android app?</summary>
+              <p>It's in public beta on Google Play, for Android 7.0 and later. Two steps:</p>
+              <ol>
+                <li>Join the <a href={ANDROID_BETA_GROUP_URL}>OpenDisplay Google Group</a> with the
+                Google account you use on the phone.</li>
+                <li>Open the <a href={ANDROID_BETA_TESTER_URL}>tester link</a> on the phone or a
+                computer, accept, then install OpenDisplay from Google Play.</li>
+              </ol>
+              <p>Updates then arrive through Google Play like for any app. It connects over WiFi: open
+              the app, and pick the device in the Mac app (or let <code>od-sender</code> find it on
+              Linux). A USB cable isn't supported yet. Touch,
+              scroll and rotation work like on an iPad; HEVC is used when the device has a hardware
+              decoder, H.264 otherwise. Android 5 and 6 support via a direct download is coming.</p>
+            </details>
+            <details>
+              <summary>Does it work on Linux?</summary>
+              <p>Yes, as a sender in beta: the OpenDisplay Linux sender (<code>od-sender</code>)
+              adds a virtual display to a Linux desktop and shows it on any OpenDisplay receiver,
+              with touch coming back as pointer input. It is tested on Omarchy / Hyprland 0.56 on
+              Apple silicon (Asahi), and x86_64 is expected to work; Sway 1.10+, KDE Plasma 6.8+
+              and GNOME 50+ are experimental. It encodes on the CPU for now (VA-API is planned).
+              Install it from the latest release: a tarball with an installer for any
+              distribution, or on Arch / Omarchy the package built from the repository with
+              makepkg. The stream is not encrypted, so use a network you trust. See the{" "}
+              <a href={LINUX_DOCS_URL}>Linux docs</a> for setup and known issues.</p>
+              <p>A Linux <em>receiver</em>, which turns a Linux machine into the display, is in
+              beta too: a Flatpak bundle for any distribution, or the Arch package built with
+              makepkg. See the <a href={LINUX_RECEIVER_URL}>Linux receiver docs</a>.</p>
+            </details>
+            <details>
+              <summary>Can another Mac be the display?</summary>
+              <p>Yes. Install <em>OpenDisplay Receiver</em>, a separate small app from the same release, on
+              the spare Mac. It needs only macOS 12 Monterey or newer (the sending Mac needs 14), so Macs
+              from around 2015 onward qualify. It appears on the sending Mac like a phone would and
+              becomes a real extended Retina display. WiFi works out of the box. For a cable, use a
+              <em>Thunderbolt or USB4</em> cable (macOS sets up a Thunderbolt Bridge network between
+              the two), Ethernet, or — on recent macOS on both Macs — a plain USB-C data cable (approve
+              the "allow accessory" prompt on each Mac). The sender moves the session onto the cable
+              automatically, even one plugged in mid-session. Keyboard and mouse
+              input from the receiving Mac is a follow-up.</p>
+            </details>
+            <details>
+              <summary>Which settings give the best picture?</summary>
+              <p>The defaults are already the sharpest setup: the sender on Best, the receiver at its Default
+              display setting, and the video fullscreen. A cable gives steadier latency than WiFi, but it
+              doesn't need to be fast: the stream uses at most 18 Mb/s, so any USB data cable works for iPhone
+              and iPad. For Mac to Mac, a Thunderbolt, USB4, Ethernet or USB-C data cable all give the same picture.
+              Balanced and Fast send fewer pixels: softer, but smoother, with lower latency.</p>
+              <p>On WiFi, set AirDrop on the sending Mac to Contacts Only or No One. With Everyone, the Mac's
+              WiFi pauses for about 75 ms twice a second to look for nearby devices, and the picture hitches each
+              time. In our measurements this one setting removed almost all WiFi hitches.</p>
+              <p>On a Mac receiver, the display setting sets the desktop's size, sent 1:1 up to what the codec
+              allows. With an Apple silicon sender and a receiver that decodes HEVC (Apple silicon, most Intel
+              Macs from 2017 on) that is up to 5120×2880, so a 5K iMac at Default gets its full 2560×1440 desktop.
+              Otherwise H.264 tops out at 4096×2304 (a 2048×1152 desktop). More Space gives more room, scaled once on the sender, so a little softer.
+              A non-Retina receiver, such as a 2013 iMac, gets its own 2560×1440 desktop at 1x, sent 1:1 at 60 fps.
+              Measured from an M5 Pro to a 5K iMac: Default + Best is the sharpest at about 30 fps; one or two
+              steps toward Larger Text (1600×900) keeps text crisp at about 55 fps; Default + Fast is soft but
+              about 58 fps for video. The README has the full table.</p>
+            </details>
+            <details>
               <summary>Is any of my screen data sent to a server?</summary>
               <p>No. One direct TCP connection between your Mac and your device. No accounts, no
               analytics, no cloud. The full story — what the apps store locally, which permissions they
@@ -444,52 +604,6 @@ export default function App() {
               to v0.4.x were MIT-licensed and remain available under those terms.)</p>
             </details>
           </div>
-        </div>
-      </section>
-
-      {/* Community clients for hardware the official apps don't cover. Keep in
-          sync with the "Compatible apps" section in the README. */}
-      <section id="compatible">
-        <div className="wrap sec">
-          <p className="eyebrow">Compatible apps</p>
-          <h2>Android, older iPads, Linux.</h2>
-          <p className="compat-lead">
-            The official apps are a Mac sender and an iPhone or iPad receiver. Other people have
-            built their own clients that speak the same protocol, so you can also use an Android
-            device or an older iPad as a display, or drive one from Linux. If your hardware isn't
-            covered yet, start here.
-          </p>
-          <div className="compat">
-            <a className="compat-item" href="https://github.com/gprot42/android-opendisplay">
-              <span className="compat-role">Android receiver</span>
-              <span className="compat-repo">gprot42/android-opendisplay ↗</span>
-              <p>GrapheneOS receiver for de-Googled Pixel phones and tablets. Android 8.0+.</p>
-            </a>
-            <a className="compat-item" href="https://github.com/josepacelli/opendisplay-android">
-              <span className="compat-role">Android receiver</span>
-              <span className="compat-repo">josepacelli/opendisplay-android ↗</span>
-              <p>Android receiver that works with an unmodified Mac app. Android 8.0+.</p>
-            </a>
-            <a
-              className="compat-item"
-              href="https://github.com/cuongpham1/ipad-iphone-second-monitor-ios12-free"
-            >
-              <span className="compat-role">iOS 12 receiver</span>
-              <span className="compat-repo">cuongpham1/ipad-iphone-second-monitor-ios12-free ↗</span>
-              <p>For iPads and iPhones too old to run the official receiver.</p>
-            </a>
-            <a className="compat-item" href="https://github.com/tixwho/opendisplay-linux">
-              <span className="compat-role">Linux sender</span>
-              <span className="compat-repo">tixwho/opendisplay-linux ↗</span>
-              <p>Drive an iPhone or iPad from a Wayland desktop (KDE Plasma, Hyprland).</p>
-            </a>
-          </div>
-          <p className="compat-note">
-            These are fan-made projects, not official builds. They aren't affiliated with
-            OpenDisplay and aren't maintained, reviewed or supported by us, so please report issues
-            with them in their own repositories. Listing them here also says nothing about our own
-            plans: an official OpenDisplay app may still ship for any of these platforms later.
-          </p>
         </div>
       </section>
 
@@ -516,19 +630,7 @@ export default function App() {
         </div>
       </section>
 
-      <footer>
-        <div className="wrap">
-          <div className="links">
-            <a href="https://github.com/peetzweg/opendisplay">GitHub</a>
-            <a href="https://github.com/peetzweg/opendisplay/releases/latest">Releases</a>
-            <a href="https://github.com/peetzweg/opendisplay/issues">Issues</a>
-            <a href="https://ko-fi.com/peetzweg">Support / Ko-fi</a>
-            <a href="privacy.html">Privacy</a>
-            <a href="https://github.com/peetzweg/opendisplay/blob/main/LICENSE">GPL-3.0 License</a>
-          </div>
-          <p className="fine">OpenDisplay — use your iPhone or iPad as a second monitor for your Mac. Free forever.</p>
-        </div>
-      </footer>
+      <SiteFooter />
     </>
   )
 }

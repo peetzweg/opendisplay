@@ -1,4 +1,5 @@
 import SwiftUI
+import VideoToolbox
 import AVFoundation
 import UIKit
 import Combine
@@ -7,7 +8,7 @@ import Combine
 let deviceKind = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
 
 /// Landing page — hosts the Mac app download and explains the two-app setup.
-let macAppURL = URL(string: "https://peetzweg.github.io/opendisplay/")!
+let macAppURL = URL(string: "https://opendisplay.app/")!
 
 @main
 struct OpenSidecarPhoneApp: App {
@@ -100,7 +101,7 @@ struct ReceiverScreen: View {
         }
         .ignoresSafeArea(edges: isStreaming ? .all : [])
         .statusBarHidden(isStreaming)
-        .persistentSystemOverlays(isStreaming ? .hidden : .automatic)
+        .systemOverlaysHidden(isStreaming)
         .sheet(isPresented: $showSettings) {
             SettingsView(receiver: model.receiver)
         }
@@ -178,7 +179,7 @@ struct ReceiverScreen: View {
 // MARK: - Idle view (no Mac connected) — regular iOS look, follows light/dark
 
 struct IdleView: View {
-    @ObservedObject var receiver: PhoneReceiver
+    @ObservedObject var receiver: StreamReceiver
     @Binding var showSettings: Bool
 
     var body: some View {
@@ -204,16 +205,16 @@ struct IdleView: View {
             }
 
             VStack(alignment: .leading, spacing: 14) {
-                Label("Plug in the USB cable and start the Mac app",
-                      systemImage: "cable.connector")
-                Label("Or choose this \(deviceKind) under WiFi in the Mac app",
-                      systemImage: "wifi")
-                Label("Keep this app open — streaming starts automatically",
-                      systemImage: "play.circle")
+                HintRow("Plug in the USB cable and open OpenDisplay on your computer",
+                        systemImage: "cable.connector")
+                HintRow("Or pick this \(deviceKind) under WiFi in OpenDisplay on your computer",
+                        systemImage: "wifi")
+                HintRow("Keep this app open. Streaming starts automatically.",
+                        systemImage: "play.circle")
             }
             .font(.subheadline)
             .padding(20)
-            .frame(maxWidth: 420)
+            .frame(maxWidth: 420, alignment: .leading)
             .background(Color(.secondarySystemBackground),
                         in: RoundedRectangle(cornerRadius: 16))
 
@@ -237,6 +238,30 @@ struct IdleView: View {
     }
 }
 
+/// One hint line: the symbol centered in a fixed-width column, so every
+/// row's text starts at the same edge whatever the symbol's width, and the
+/// text wraps instead of truncating.
+struct HintRow: View {
+    let text: String
+    let systemImage: String
+    @ScaledMetric(relativeTo: .subheadline) private var iconWidth: CGFloat = 24
+
+    init(_ text: String, systemImage: String) {
+        self.text = text
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: systemImage)
+                .frame(width: iconWidth)
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 // MARK: - First-run onboarding (the Mac app is required to connect)
 
 /// Shown on first launch / while the device has never connected: OpenDisplay
@@ -246,7 +271,7 @@ struct OnboardingView: View {
     let onClose: () -> Void
 
     var body: some View {
-        NavigationStack {
+        AdaptiveNavigation {
             ScrollView {
                 VStack(spacing: 28) {
                     Image(systemName: "laptopcomputer.and.iphone")
@@ -258,7 +283,7 @@ struct OnboardingView: View {
                         Text("One more app to go")
                             .font(.title2.bold())
                             .multilineTextAlignment(.center)
-                        Text("OpenDisplay turns this \(deviceKind) into a second screen for your Mac — but it needs the **OpenDisplay Mac app** running on a Mac connected by the same USB cable or on the same WiFi network.")
+                        Text("OpenDisplay turns this \(deviceKind) into a second screen for your Mac. It needs the **OpenDisplay Mac app** running on a Mac connected by the same USB cable or on the same WiFi network.")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -266,9 +291,9 @@ struct OnboardingView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Install the OpenDisplay Mac app on your Mac", systemImage: "1.circle.fill")
-                        Label("Connect the \(deviceKind) by USB, or join the same WiFi", systemImage: "2.circle.fill")
-                        Label("Keep this app open — streaming starts on its own", systemImage: "3.circle.fill")
+                        HintRow("Install the OpenDisplay Mac app on your Mac", systemImage: "1.circle.fill")
+                        HintRow("Connect the \(deviceKind) by USB, or join the same WiFi", systemImage: "2.circle.fill")
+                        HintRow("Keep this app open. Streaming starts automatically.", systemImage: "3.circle.fill")
                     }
                     .font(.subheadline)
                     .padding(20)
@@ -305,206 +330,46 @@ struct OnboardingView: View {
     }
 }
 
-// MARK: - Performance overlay (Steam-Deck style, opt-in via Settings)
-
-struct PerfOverlay: View {
-    let stats: PerfStats
-    let videoSize: CGSize
-
-    var body: some View {
-        VStack(spacing: 8) {
-            // Metrics wrap onto extra rows when the width doesn't fit —
-            // portrait iPhone is ~390pt, far less than one full row.
-            FlowLayout(hSpacing: 14, vSpacing: 8) {
-                // Transport badge — the question "is this cable or WiFi?"
-                Text(stats.transport)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(stats.transport == "USB" ? Color.green.opacity(0.35)
-                                : stats.transport == "WiFi" ? Color.blue.opacity(0.4)
-                                : Color.gray.opacity(0.3),
-                                in: Capsule())
-                    .foregroundStyle(.white)
-
-                if stats.e2eP50 > 0 {
-                    metric("latency", String(format: "%.0f ms", stats.e2eP50))
-                    metric("p95", String(format: "%.0f ms", stats.e2eP95))
-                    metric("encode", String(format: "%.0f ms", stats.encodeP50))
-                }
-                if stats.decodeP50 > 0 {
-                    metric("decode", String(format: "%.1f ms", stats.decodeP50))
-                }
-                if stats.photonP50 > 0 {
-                    // True capture→glass latency (Metal presented handler) —
-                    // the only number that includes display vsync.
-                    metric("photon", String(format: "%.0f ms", stats.photonP50))
-                }
-                if stats.inputP50 > 0 {
-                    // touch→CGEvent on the Mac; full touch-to-photon adds
-                    // the render+capture wait and one e2e on top.
-                    metric("input", String(format: "%.0f ms", stats.inputP50))
-                }
-                metric("rtt", String(format: "%.0f ms", stats.rttMs))
-                metric("FPS", "\(stats.fps)")
-                if stats.capFps > 0 {
-                    metric("Mac cap", "\(stats.capFps)")
-                }
-                metric("Mbit/s", String(format: "%.1f", stats.mbps))
-                metric("stalls", "\(stats.stalls)")
-                metric("enc↓", "\(stats.macEncDrops)")
-                metric("net↓", "\(stats.macNetDrops)")
-                if stats.macPending > 0 {
-                    metric("queue", "\(stats.macPending)")
-                }
-                if stats.decodeFlushes > 0 {
-                    metric("flushes", "\(stats.decodeFlushes)")
-                }
-                metric("res", "\(Int(videoSize.width))×\(Int(videoSize.height))")
-            }
-            // Two graphs side by side where they fit (landscape), stacked
-            // where they don't (portrait).
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 14) { graphs }
-                VStack(spacing: 8) { graphs }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 8)
-    }
-
-    @ViewBuilder
-    private var graphs: some View {
-        graph("latency ms (cap→display)",
-              BarGraph(samples: stats.e2eSamples, ceiling: 80,
-                       good: 25, warn: 40, reference: nil))
-        graph("frame interval ms",
-              BarGraph(samples: stats.samples, ceiling: 60,
-                       good: 25, warn: 50, reference: 16.7))
-    }
-
-    private func metric(_ label: String, _ value: String) -> some View {
-        VStack(spacing: 1) {
-            Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
-            Text(label)
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-        }
-    }
-
-    private func graph(_ label: String, _ content: BarGraph) -> some View {
-        VStack(spacing: 2) {
-            content.frame(width: 220, height: 38)
-            Text(label)
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-        }
-    }
-}
-
-/// Left-aligned wrapping row: children flow onto as many rows as the
-/// proposed width requires. Keeps the perf overlay inside the screen in
-/// portrait instead of clipping off both edges.
-struct FlowLayout: Layout {
-    var hSpacing: CGFloat = 14
-    var vSpacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews,
-                      cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var x: CGFloat = 0, y: CGFloat = 0
-        var rowHeight: CGFloat = 0, width: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > 0, x + size.width > maxWidth {
-                x = 0
-                y += rowHeight + vSpacing
-                rowHeight = 0
-            }
-            x += size.width + hSpacing
-            rowHeight = max(rowHeight, size.height)
-            width = max(width, x - hSpacing)
-        }
-        return CGSize(width: width, height: y + rowHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,
-                       subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + vSpacing
-                rowHeight = 0
-            }
-            subview.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
-            x += size.width + hSpacing
-            rowHeight = max(rowHeight, size.height)
-        }
-    }
-}
-
-/// Bar graph over a rolling sample window with green/yellow/red thresholds
-/// and an optional reference line (e.g. 16.7 ms = 60 fps).
-struct BarGraph: View {
-    let samples: [Double]
-    let ceiling: Double
-    let good: Double
-    let warn: Double
-    let reference: Double?
-
-    var body: some View {
-        Canvas { context, size in
-            guard !samples.isEmpty else { return }
-            let barWidth = size.width / CGFloat(max(samples.count, 1))
-            for (i, ms) in samples.enumerated() {
-                let h = min(ms / ceiling, 1.0) * size.height
-                let rect = CGRect(x: CGFloat(i) * barWidth,
-                                  y: size.height - h,
-                                  width: max(barWidth - 0.5, 0.5),
-                                  height: h)
-                let color: Color = ms <= good ? .green : ms <= warn ? .yellow : .red
-                context.fill(Path(rect), with: .color(color.opacity(0.85)))
-            }
-            if let reference {
-                let y = size.height - (reference / ceiling) * size.height
-                context.stroke(Path { p in
-                    p.move(to: CGPoint(x: 0, y: y))
-                    p.addLine(to: CGPoint(x: size.width, y: y))
-                }, with: .color(.white.opacity(0.35)), lineWidth: 0.5)
-            }
-        }
-    }
-}
-
 // MARK: - Settings / help sheet
 
 struct SettingsView: View {
-    @ObservedObject var receiver: PhoneReceiver
+    @ObservedObject var receiver: StreamReceiver
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    // Set once the user tapped "Rate on the App Store": the row is an
+    // invitation, not a permanent fixture.
+    @AppStorage("rateAppTapped") private var rateAppTapped = false
+    @Environment(\.openURL) private var openURL
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
 
     var body: some View {
-        NavigationStack {
+        AdaptiveNavigation {
             Form {
+                if !rateAppTapped {
+                    Section {
+                        Button {
+                            // Hide only once the App Store actually opened
+                            // (it can be restricted by Screen Time).
+                            openURL(AppStore.reviewURL) { accepted in
+                                if accepted { rateAppTapped = true }
+                            }
+                        } label: {
+                            Label("Rate OpenDisplay on the App Store", systemImage: "star")
+                        }
+                    }
+                }
+
                 Section("Status") {
-                    LabeledContent("Listening", value: "Port 9000")
-                    LabeledContent("Connection",
-                                   value: receiver.connected ? "Connected" : "Waiting for Mac")
+                    LabeledRow("Listening", value: "Port 9000")
+                    LabeledRow("Connection",
+                               value: receiver.connected ? "Connected" : "Waiting for a computer")
                     if receiver.videoSize != .zero {
-                        LabeledContent("Stream",
-                                       value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
+                        LabeledRow("Stream",
+                                   value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
                     }
                 }
 
@@ -518,7 +383,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Name")
                 } footer: {
-                    Text("Shown in the Mac app's WiFi connection menu. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
+                    Text("Shown in the WiFi list of OpenDisplay on your computer. iOS hides this \(deviceKind)'s real name from apps, so set it here once.")
                 }
 
                 Section {
@@ -539,16 +404,28 @@ struct SettingsView: View {
                 } header: {
                     Text("Permissions")
                 } footer: {
-                    Text("WiFi mode needs Local Network access. If your Mac can't find this \(deviceKind), enable it under Settings → Privacy & Security → Local Network → OpenDisplay. USB mode works without it.")
+                    Text("WiFi mode needs Local Network access. If your computer can't find this \(deviceKind), enable it under Settings → Privacy & Security → Local Network → OpenDisplay. USB mode works without it.")
                 }
 
                 Section {
-                    Label("USB: plug in the cable, run the Mac app — it connects automatically through the wire (lowest latency).",
+                    NavigationLink {
+                        DiagnosticsLogView()
+                    } label: {
+                        Label("Connection log", systemImage: "doc.text.magnifyingglass")
+                    }
+                } header: {
+                    Text("Diagnostics")
+                } footer: {
+                    Text("What this \(deviceKind) saw while connecting: sessions, restarts, decoder trouble. No screen content and nothing leaves the \(deviceKind) unless you share it. Attach it to a GitHub issue if a connection won't come up.")
+                }
+
+                Section {
+                    Label("USB: plug in the cable and open OpenDisplay on your computer. It connects through the wire on its own (lowest latency).",
                           systemImage: "cable.connector")
-                    Label("WiFi: both devices on the same network, then pick this \(deviceKind) in the Mac app's Connection menu.",
+                    Label("WiFi: both devices on the same network, then pick this \(deviceKind) in OpenDisplay on your computer.",
                           systemImage: "wifi")
                     Label("Rotate the \(deviceKind) for a vertical second monitor.",
-                          systemImage: "rectangle.portrait.rotate")
+                          systemImage: "rotate.right")
                     Label("Touch: tap to click, drag to drag, two-finger pan to scroll.",
                           systemImage: "hand.tap")
                 } header: {
@@ -564,12 +441,19 @@ struct SettingsView: View {
                 }
 
                 Section("About") {
-                    LabeledContent("Version", value: version)
-                    Link(destination: URL(string: "https://github.com/peetzweg/opendisplay")!) {
-                        Label("GitHub — peetzweg/opendisplay", systemImage: "link")
+                    LabeledRow("Version", value: version)
+                    Link(destination: URL(string: "https://opendisplay.app")!) {
+                        Label("OpenDisplay.app", systemImage: "globe")
                     }
-                    Link(destination: macAppURL) {
-                        Label("Website", systemImage: "globe")
+                    Link(destination: URL(string: "https://github.com/peetzweg/opendisplay")!) {
+                        Label("GitHub: peetzweg/opendisplay", systemImage: "link")
+                    }
+                    Link(destination: URL(string: "https://ko-fi.com/peetzweg")!) {
+                        Label("Support OpenDisplay on Ko-fi", systemImage: "cup.and.saucer")
+                    }
+                    // Permanent counterpart of the one-time row at the top.
+                    Link(destination: AppStore.reviewURL) {
+                        Label("Rate on the App Store", systemImage: "star")
                     }
                 }
             }
@@ -580,6 +464,57 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+}
+
+/// `NavigationStack` where it exists (iOS 16), a single-column
+/// `NavigationView` on the iOS 15 floor. Both sheets here are one level deep,
+/// so the two behave the same; this keeps the modern API where it is available.
+struct AdaptiveNavigation<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        if #available(iOS 16, *) {
+            NavigationStack { content() }
+        } else {
+            NavigationView { content() }
+                .navigationViewStyle(.stack)
+        }
+    }
+}
+
+/// `LabeledContent` where it exists (iOS 16, with its VoiceOver pairing of
+/// label and value); the equivalent HStack on the iOS 15 floor.
+struct LabeledRow: View {
+    let title: String
+    let value: String
+    init(_ title: String, value: String) { self.title = title; self.value = value }
+    var body: some View {
+        if #available(iOS 16, *) {
+            LabeledContent(title, value: value)
+        } else {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(value)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
+extension View {
+    /// Hide the home indicator while streaming. `persistentSystemOverlays`
+    /// is iOS 16; on iOS 15 the indicator simply stays, which is what the
+    /// app did before it existed.
+    @ViewBuilder
+    func systemOverlaysHidden(_ hidden: Bool) -> some View {
+        if #available(iOS 16, *) {
+            persistentSystemOverlays(hidden ? .hidden : .automatic)
+        } else {
+            self
         }
     }
 }
@@ -604,17 +539,40 @@ private struct DeviceNameField: View {
 
 @MainActor
 final class ReceiverModel: ObservableObject {
-    let receiver: PhoneReceiver
+    let receiver: StreamReceiver
     private var started = false
     private var cancellables = Set<AnyCancellable>()
 
     init() {
-        receiver = PhoneReceiver(displayLayer: AVSampleBufferDisplayLayer())
-        // Announce the native panel size to the Mac.
+        // Offer HEVC wherever the hardware decodes it (A9 and later; the A8/A8X
+        // iPads stay on H.264). Panels here fit H.264's raster anyway, so HEVC
+        // buys quality per bit, which matters most over WiFi. Bounded by the
+        // panel in either orientation, so a large mirrored Mac display is
+        // scaled to what this screen can show instead of sent in full.
         let native = UIScreen.main.nativeBounds.size   // portrait pixels
+        let longSide = Int(max(native.width, native.height))
+        var decodesHEVC = VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)
+        #if DEBUG
+        // The simulator has no hardware decoder; -forceHEVCOffer YES exercises
+        // the HEVC receive path there with software decode.
+        if UserDefaults.standard.bool(forKey: "forceHEVCOffer") { decodesHEVC = true }
+        #endif
+        let hevc = decodesHEVC
+            ? VideoCapability(codec: "hevc", maxWidth: longSide, maxHeight: longSide,
+                              maxFrameRate: 60)
+            : nil
+        receiver = StreamReceiver(displayLayer: AVSampleBufferDisplayLayer(),
+                                  deviceKind: deviceKind,
+                                  fallbackServiceName: UIDevice.current.name,
+                                  hevcCapability: hevc)
+        // Announce the native panel size to the Mac.
         receiver.setNativePanel(long: Int(max(native.width, native.height)),
                                 short: Int(min(native.width, native.height)),
                                 scale: Double(UIScreen.main.nativeScale))
+        receiver.setDisplayMaxFrameRate(UIScreen.main.maximumFramesPerSecond)
+        if let budget = DecodeBudget.maxPixelsPerSecond(model: DecodeBudget.currentModel) {
+            receiver.setDecodeBudget(maxPixelsPerSecond: budget)
+        }
         let savedName = UserDefaults.standard.string(forKey: "deviceName")
         receiver.serviceName = (savedName?.isEmpty == false) ? savedName! : UIDevice.current.name
         receiver.objectWillChange
@@ -735,7 +693,7 @@ extension UIEvent {
 /// Forwards touches as normalized video-space coordinates (touchscreen mode).
 struct VideoLayerView: UIViewRepresentable {
     let displayLayer: AVSampleBufferDisplayLayer
-    let receiver: PhoneReceiver
+    let receiver: StreamReceiver
     let useMetal: Bool
 
     func makeUIView(context: Context) -> VideoView {
@@ -785,6 +743,14 @@ struct VideoLayerView: UIViewRepresentable {
         receiver.onCursorImage = { [weak view] image, anchor, normSize in
             view?.setCursorSprite(image, anchor: anchor, normSize: normSize)
         }
+        // Replay the sprite/position that arrived before this view existed
+        // (first frames land after the connect-time sprite) or that the
+        // previous view held (metal-renderer toggle rebuilds the view tree).
+        if let sprite = receiver.cursorSprite {
+            view.setCursorSprite(sprite.image, anchor: sprite.anchor, normSize: sprite.normSize)
+        }
+        let state = receiver.cursorState
+        view.moveCursor(x: state.x, y: state.y, visible: state.visible)
         return view
     }
 
@@ -794,7 +760,7 @@ struct VideoLayerView: UIViewRepresentable {
     }
 
     final class VideoView: UIView {
-        weak var receiver: PhoneReceiver?
+        weak var receiver: StreamReceiver?
         var metalRenderer: MetalVideoRenderer?
         let inputEngine = InputCaptureEngine()
 
@@ -861,10 +827,10 @@ struct VideoLayerView: UIViewRepresentable {
             CATransaction.commit()
         }
 
-        func setCursorSprite(_ image: UIImage, anchor: CGPoint, normSize: CGSize) {
+        func setCursorSprite(_ image: CGImage, anchor: CGPoint, normSize: CGSize) {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            cursorLayer.contents = image.cgImage
+            cursorLayer.contents = image
             cursorLayer.anchorPoint = anchor
             cursorNormSize = normSize
             cursorLayer.isHidden = !cursorVisible
@@ -1127,12 +1093,18 @@ final class InputCaptureEngine: NSObject {
         hostView = view
         view.isMultipleTouchEnabled = true
 
-        let hover = UIHoverGestureRecognizer(target: self, action: #selector(hoverChanged(_:)))
-        hover.allowedTouchTypes = [UITouch.TouchType.pencil.rawValue as NSNumber]
-        view.addGestureRecognizer(hover)
+        // Hover tilt/azimuth on the recognizer is iOS 16.4. Pencil hover needs
+        // an M2 iPad Pro or newer, which never runs anything older, so
+        // skipping the recognizer below 16.4 loses nothing on those devices.
+        if #available(iOS 16.4, *) {
+            let hover = UIHoverGestureRecognizer(target: self, action: #selector(hoverChanged(_:)))
+            hover.allowedTouchTypes = [UITouch.TouchType.pencil.rawValue as NSNumber]
+            view.addGestureRecognizer(hover)
+        }
     }
 
     @objc private func hoverChanged(_ gr: UIHoverGestureRecognizer) {
+        guard #available(iOS 16.4, *) else { return }
         guard activePens.isEmpty, let view = hostView else { return }
         guard let n = normalize?(gr.location(in: view)) else { return }
         switch gr.state {

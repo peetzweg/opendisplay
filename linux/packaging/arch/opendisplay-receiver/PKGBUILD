@@ -1,0 +1,80 @@
+# Maintainer: Philip Poloczek <839848+peetzweg@users.noreply.github.com>
+#
+# AUR source package for od-receiver, built from an OpenDisplay `vX.Y.Z`
+# release tag (one version for all platforms; see RELEASING.md):
+# turns this machine's screen into an OpenDisplay receiver (a GTK 4 window
+# that fullscreens itself, draws the sender's cursor and sends pointer input
+# back).
+#
+#   ./bump.sh 1.26.0            new release: pkgver, sha256sums, .SRCINFO
+#   ./from-checkout.sh          build this checkout's HEAD instead of the tag
+#
+# The desktop entry and user unit ship inside the tag tarball, next to this
+# file, so the AUR repository only needs PKGBUILD and .SRCINFO.
+
+pkgname=opendisplay-receiver
+pkgver=1.25.0
+pkgrel=1
+pkgdesc="OpenDisplay receiver for Linux: use this screen as an extra display for a Mac or Linux desktop"
+arch=('x86_64' 'aarch64')
+url="https://opendisplay.app"
+license=('GPL-3.0-only')
+# GStreamer plugins are loaded by name at run time, so they are real
+# dependencies; gtk4paintablesink is linked into the binary.
+depends=(
+  'gtk4'
+  'gstreamer'
+  'gst-plugins-base-libs'     # app/video/gl libraries
+  'gst-plugins-base'          # glsinkbin, videoconvert
+  'gst-plugins-bad'           # h264parse, V4L2 stateless decoders
+  'gst-libav'                 # avdec_h264: software decode everywhere
+  'gcc-libs'
+  'glibc'
+)
+optdepends=(
+  'gst-plugin-va: hardware H.264 decode via VA-API (Intel/AMD)'
+  'gst-plugins-good: V4L2 stateful hardware decoders (v4l2h264dec)'
+)
+makedepends=('cargo' 'pkgconf')
+provides=('od-receiver')
+options=('!lto')  # cargo profile handles LTO
+
+# GitHub names the tarball's top directory opendisplay-${pkgver}: it drops the
+# tag's leading v.
+_tag="v${pkgver}"
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/peetzweg/opendisplay/archive/refs/tags/${_tag}.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "opendisplay-${pkgver}/linux"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "opendisplay-${pkgver}/linux"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export OD_RECEIVER_VERSION="${pkgver}"  # no .git in the tarball
+  cargo build --frozen --release -p od-receiver
+}
+
+check() {
+  cd "opendisplay-${pkgver}/linux"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export OD_RECEIVER_VERSION="${pkgver}"
+  # Loopback only: a fake sender into the receiver, decoding into fakesink.
+  cargo test --frozen --release -p od-receiver
+}
+
+package() {
+  cd "opendisplay-${pkgver}"
+  local _pkg=linux/packaging/arch/opendisplay-receiver
+  install -Dm755 linux/target/release/od-receiver "${pkgdir}/usr/bin/od-receiver"
+  install -Dm644 "${_pkg}/app.opendisplay.Receiver.desktop" \
+    "${pkgdir}/usr/share/applications/app.opendisplay.Receiver.desktop"
+  install -Dm644 "${_pkg}/od-receiver.service" "${pkgdir}/usr/lib/systemd/user/od-receiver.service"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 PROTOCOL.md "${pkgdir}/usr/share/doc/${pkgname}/PROTOCOL.md"
+}

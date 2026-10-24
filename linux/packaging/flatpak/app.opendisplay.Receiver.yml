@@ -1,0 +1,56 @@
+# Flatpak build of od-receiver: the per-user install path for systems with a
+# read-only root (SteamOS, the Steam Frame) or without GTK 4 / GStreamer.
+#
+#   linux/packaging/flatpak/cargo-sources.py > linux/packaging/flatpak/cargo-sources.json
+#   flatpak-builder --user --install --force-clean build-dir \
+#     linux/packaging/flatpak/app.opendisplay.Receiver.yml
+#   flatpak run app.opendisplay.Receiver
+#
+# H.264 decode: the runtime's GStreamer plays H.264 through openh264dec or,
+# with the auto-installed org.freedesktop.Platform.codecs-extra extension,
+# avdec_h264; V4L2 hardware decoders (gst-plugins-good v4l2h264dec, the
+# Frame's /dev/video-dec0) need --device=all.
+id: app.opendisplay.Receiver
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: od-receiver
+finish-args:
+  # TCP from senders, mDNS advertisement (UDP 5353), the cursor side channel.
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # GPU for GL presentation and V4L2/DRM video decoders.
+  - --device=all
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/od-receiver/cargo
+    CARGO_NET_OFFLINE: 'true'
+modules:
+  - name: od-receiver
+    buildsystem: simple
+    build-commands:
+      - cargo build --offline --locked --release --manifest-path linux/Cargo.toml -p od-receiver
+      - install -Dm755 linux/target/release/od-receiver /app/bin/od-receiver
+      - install -Dm644 linux/packaging/arch/opendisplay-receiver/app.opendisplay.Receiver.desktop
+        /app/share/applications/app.opendisplay.Receiver.desktop
+      - desktop-file-edit --set-key=Exec --set-value=od-receiver
+        /app/share/applications/app.opendisplay.Receiver.desktop
+      - desktop-file-edit --set-icon=app.opendisplay.Receiver
+        /app/share/applications/app.opendisplay.Receiver.desktop
+      - install -Dm644 linux/packaging/flatpak/app.opendisplay.Receiver.metainfo.xml
+        /app/share/metainfo/app.opendisplay.Receiver.metainfo.xml
+      - install -Dm644 public/icon-256.png
+        /app/share/icons/hicolor/256x256/apps/app.opendisplay.Receiver.png
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - linux/target
+          - build
+          - node_modules
+      - cargo-sources.json

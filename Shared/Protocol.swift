@@ -34,4 +34,32 @@ enum WireMessage {
     static let updateRequired = "updateRequired"    // Mac -> phone: peer is below the Mac's floor
     static let sleeping = "sleeping"                // phone -> Mac: device locked, reconnect on wake
     static let closing = "closing"                  // phone -> Mac: app quit, end the session for good
+    static let streamConfig = "streamConfig"        // Mac -> receiver: selected video operating point
+    static let power = "power"                      // Mac -> receiver: shut down (PROTOCOL.md 6.6)
+}
+
+/// What a `power` message asks the receiver to do (PROTOCOL.md 6.6). The
+/// wire says what, each receiver platform decides how.
+enum PowerAction: String, CaseIterable {
+    case shutdown
+}
+
+/// One receiver-supported operating envelope. Every non-nil limit in an
+/// entry applies together; multiple entries for the same codec are alternatives.
+/// Codec names stay strings so older builds can ignore future codecs.
+struct VideoCapability: Codable, Equatable {
+    let codec: String
+    let maxWidth: Int?
+    let maxHeight: Int?
+    let maxFrameRate: Int?
+    let maxPixelsPerSecond: Int?
+
+    init(codec: String, maxWidth: Int? = nil, maxHeight: Int? = nil,
+         maxFrameRate: Int? = nil, maxPixelsPerSecond: Int? = nil) {
+        self.codec = codec
+        self.maxWidth = maxWidth
+        self.maxHeight = maxHeight
+        self.maxFrameRate = maxFrameRate
+        self.maxPixelsPerSecond = maxPixelsPerSecond
+    }
 }

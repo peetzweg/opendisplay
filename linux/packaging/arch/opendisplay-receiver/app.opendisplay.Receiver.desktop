@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OpenDisplay Receiver
+Comment=Use this screen as an extra display for a Mac or Linux desktop running OpenDisplay
+Exec=/usr/bin/od-receiver
+Icon=video-display
+Terminal=false
+Categories=Utility;
+Keywords=display;sidecar;screen;second;monitor;
+StartupWMClass=app.opendisplay.Receiver

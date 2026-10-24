@@ -4,9 +4,9 @@
 
 # OpenDisplay
 
-**Turn your spare Apple devices into second monitors for your Mac — free, open source, no subscription.**
+**Turn your spare devices into second monitors for your Mac — free, open source, no subscription.**
 
-iPhone and iPad today, spare MacBooks on the roadmap. A self-hosted
+iPhone, iPad, spare Macs, and Android (beta); a Linux sender and receiver are in beta too. A self-hosted
 alternative to Apple Sidecar, Duet Display, and Luna Display: true extended
 display (not just mirroring), Retina-sharp, over USB or WiFi, with touch and
 scroll input.
@@ -16,7 +16,10 @@ scroll input.
 <br />
 
 <a href="https://ko-fi.com/peetzweg">
-  <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Buy Me a Coffee on ko-fi.com" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/support_me_on_kofi_beige.png" />
+    <img src="assets/support_me_on_kofi_dark.png" width="256px" alt="Support me on Ko-fi" />
+  </picture>
 </a>
 
 </div>
@@ -56,23 +59,56 @@ pipeline, USB transport, input injection) are already working.
   like a trackpad. (Apple Pencil support is on the roadmap.)
 - 🔄 **Portrait or landscape** — rotate the device and the virtual display
   rebuilds itself as a vertical monitor at native resolution.
-- ⚡ **Low-latency pipeline** — hardware H.264 encode (VideoToolbox,
+- ⚡ **Low-latency pipeline** — hardware H.264 or HEVC encode (VideoToolbox,
   real-time mode, no B-frames), TCP_NODELAY, frame-drop backpressure with
   keyframe recovery, decode-and-render via `AVSampleBufferDisplayLayer`.
+- 💻 **A spare Mac as a display** — install the small *OpenDisplay
+  Receiver* app (macOS 12+) on an old Mac and any other Mac extends onto it
+  over WiFi or a Thunderbolt/Ethernet cable, at native Retina resolution.
 - 🔒 **Self-hosted & private** — your screen never touches anyone's server.
   Two small apps, one TCP connection, that's it.
 
 ## Comparison
 
+OpenDisplay is open source, so you can audit exactly what runs on your Mac
+and build it yourself.
+
 | | OpenDisplay | Apple Sidecar | Duet Display | Luna Display |
 |---|---|---|---|---|
 | Price | **Free, open source** | Free | Subscription | $$$ + dongle |
-| iPhone as display | ✅ | ❌ (iPad only) | ✅ | ✅ |
+| iPhone as display | ✅ | ❌ (iPad only) | ✅ | ❌ (iPad only) |
+| Mac as display | ✅ | ❌ | ✅ | ✅ |
 | Different Apple IDs | ✅ | ❌ | ✅ | ✅ |
-| Wired (USB) | ✅ | ✅ | ✅ | ❌ |
-| True extension | ✅ | ✅ | ✅ | ✅ |
-| Touch input | ✅ | ✅ | ✅ | ✅ |
-| Self-hosted / auditable | ✅ | — | ❌ | ❌ |
+| No account / sign-up | ✅ | Apple ID | ❌ | ? |
+| Wired (USB) | ✅ | ✅ | ✅ | ✅ |
+| Open source | ✅ | ❌ | ❌ | ❌ |
+
+### A spare Mac as the display
+
+For a Mac receiver, the closest Apple feature is AirPlay to Mac, not Sidecar.
+Luna and Duet both have Mac-to-Mac modes. A few newer apps target only this
+use case, mostly a 5K iMac next to an Apple silicon laptop.
+
+| | OpenDisplay | [AirPlay to Mac](https://support.apple.com/guide/mac-help/use-airplay-to-stream-to-a-mac-mchl15c9e4b5/mac) | [Luna Display](https://astropad.com/product/lunadisplay/) | [Duet Air](https://www.duetdisplay.com/) | [TargetBridge](https://github.com/swellweb/targetBridge) | [Sharp](https://github.com/amineross/sharp) | [RetinaRelay](https://www.retinarelay.com/) |
+|---|---|---|---|---|---|---|---|
+| Price | **Free, open source** (GPLv3) | Free | $89.99 + dongle | Subscription | Free, open source (MIT) | Free, open source (GPLv3) | $49 one-time |
+| Receiving Mac | macOS 12+ | iMac 2019+, MacBook 2018+ | macOS 10.13+ | macOS 10.14.6+ | macOS 11+ | macOS 10.15+ | iMac 2012+, macOS 10.15+ |
+| Intel Mac as sender | ✅ | 2018+ | ✅ | ✅ | ❌ (Apple silicon only) | ✅ | ✅ |
+| Wi-Fi | ✅ | ✅ | ✅ | ✅ | Experimental | ❌ | Fallback |
+| Cable | ✅ Thunderbolt, USB-C, Ethernet | ✅ USB | ✅ | ? | ✅ Thunderbolt | ✅ Ethernet only | ✅ Thunderbolt, USB 3, Ethernet |
+| Native 5K on a 5K iMac | ✅ ~30 fps | ? | ✅ | ? | ✅ 48 fps (60 experimental) | Experimental (1440p default) | ✅ 60 fps |
+| Different Apple IDs, no account | ✅ | Same Apple ID for full quality | ✅ | ❌ (account) | ✅ | ✅ | ✅ |
+| Several receiving Macs | ✅ | ? | ? | ✅ | ✅ | ? | ? |
+| Keyboard and mouse at the receiving Mac | ❌ ([planned](https://github.com/peetzweg/opendisplay/issues/16)) | ❌ | ✅ | ✅ | ✅ | ? | ? |
+| Audio | ❌ | ✅ | ? | ? | ✅ | ✅ | ✅ |
+| Shut down the receiving Mac from the sender | ✅ over a cable | ? | ? | ? | ? | ? | ? |
+| iPhone and iPad as displays too | ✅ | ❌ | iPad only | ✅ | ❌ | ❌ | ❌ |
+
+? means the project does not document it. Figures come from each project's own site or README
+as of October 2026. Also in this space: [MacDisplay](https://macdisplay.it)
+(paid), [Phoenix Display](https://fablab503-collab.github.io/PhoenixDisplay/)
+(new; the App Store version mirrors only), and Apple's Target Display Mode,
+which only works on non-Retina iMacs from 2009 to 2014.
 
 ## FAQ
 
@@ -93,7 +129,7 @@ iPhone app open in the foreground. USB mode is unaffected.
 charge-only USB cable will **not** work. Look for a cable described as a
 *data*, *sync*, or *charging and data-transfer* cable. A data-capable USB 2.0
 cable is enough; USB 3, Thunderbolt, and video Alt Mode are not required.
-OpenDisplay streams H.264 over a TCP connection through macOS's built-in
+OpenDisplay streams video over a TCP connection through macOS's built-in
 `usbmuxd`, not as a USB video device. Its highest-quality preset uses 18 Mb/s,
 well below USB 2.0's 480 Mb/s high-speed link rate, so USB 2.0 has ample
 bandwidth for the stream. USB 1.x is not supported or tested. For best
@@ -105,9 +141,119 @@ adapters.
 iPad is the same codebase. iPad-specific polish (Pencil, pressure) is on the
 roadmap.
 
-**Why H.264 and not HEVC/AV1?** Hardware H.264 encode/decode is universally
-fast and the latency is excellent. HEVC is a planned option for better
-quality-per-bit.
+**Can another Mac be the display?** Yes. Install **OpenDisplay Receiver**
+(a separate, small app from the same release) on the spare Mac. It only needs
+**macOS 12 Monterey** or newer, so Macs from around 2015 onward qualify even
+though the sending Mac needs macOS 14. The receiver shows up on the sending Mac
+like a phone does and becomes a real extended Retina display. Over WiFi it works out of the box. For a cable, connect the two
+Macs with a **Thunderbolt or USB4 cable** (macOS creates a *Thunderbolt Bridge*
+network between them), with an **Ethernet** cable or adapters, or — on recent
+macOS on both Macs — a plain **USB-C data cable** (macOS runs a small network
+link over it; approve the *allow accessory to connect* prompt on each Mac,
+which appears depending on which Mac is plugged into which). The sender moves
+the session onto the cable automatically, even one plugged in mid-session, and
+the device row says *Cable*. Older Macs with a Mini DisplayPort-shaped
+Thunderbolt 1 or 2 port work with a Thunderbolt 3 to 2 adapter and a
+Thunderbolt 2 cable.
+Input from the receiving Mac's keyboard and mouse is a follow-up
+([#147](https://github.com/peetzweg/opendisplay/issues/147)).
+
+**Which settings give the best picture?** Out of the box OpenDisplay already
+picks the sharpest setup it can, so you rarely need to change anything. The
+defaults are: sender on **Best**, receiver at its **Default** display
+setting, and video filling the receiver's screen (fullscreen). If you want to
+tune it, four things matter.
+
+*1. The connection.* A cable gives steadier latency than WiFi, but it does not
+need to be fast: the stream uses at most 18 Mb/s.
+
+- iPhone or iPad: any USB data cable (see the USB question above).
+- Mac receiver: a Thunderbolt or USB4 cable, Ethernet, or a USB-C data cable
+  (see *Can another Mac be the display?*). The picture is the same over any of
+  them; a Thunderbolt cable is not sharper than a USB-C data cable.
+- WiFi works well for documents and slower motion. Expect a little more
+  latency and the occasional hitch when the network is busy. 5 GHz or 6 GHz
+  and a nearby access point help. If motion stutters, try **Fast**.
+- On WiFi, set AirDrop on the sending Mac to **Contacts Only** or **No One**
+  (Control Center, AirDrop). With **Everyone**, the Mac's WiFi pauses for about
+  75 ms twice a second to look for nearby devices, and the picture hitches each
+  time. In our measurements this one setting removed almost all WiFi hitches.
+
+*2. The sender's quality setting.* **Best** sends the full resolution.
+**Balanced** and **Fast** send fewer pixels: the image is softer, but encoding
+is faster, so motion is smoother and latency lower. The desktop's size stays
+the same.
+
+*3. Display size,* per device, in the sender's device list (the arrows
+button next to Disconnect): **Larger Text**, **Default**, **More Space** or
+**Native (1x)**. Each choice shows the exact desktop size it gives, like
+macOS's own Displays settings. More Space and Native look a little softer
+when the receiver cannot show that many pixels 1:1. The choice is remembered
+per device across reconnects, cable or WiFi, and rotation. Changing the
+virtual display's resolution in System Settings does not stick (OpenDisplay
+puts its own size back); use Display size instead.
+
+*4. The receiving Mac's display setting* (Larger Text … More Space). In
+Extend mode this sets the default size of the extended desktop, which OpenDisplay
+renders at Retina scale and sends 1:1, up to the largest stream the codec
+allows:
+
+- **HEVC**: up to 5120×2880. It is used when the sending Mac has Apple
+  silicon and the receiving Mac decodes HEVC in hardware (Apple silicon, and
+  most Intel Macs from 2017 on).
+- **H.264**: up to 4096×2304, used otherwise. On a 5K iMac that means a
+  2048×1152-point desktop even at Default.
+- **Non-Retina panels** (a 2013 iMac at 2560×1440, a 1080p display): the
+  desktop is the panel's own size at 1x and goes out 1:1 at 60 fps with
+  either codec, exactly like that Mac's own desktop.
+
+**More Space** gives the extended desktop that much room too, but beyond
+those caps the picture is no longer 1:1: it is scaled once on the sender, so
+text is a little softer. Settings toward **Larger Text** send fewer pixels
+and are smoother.
+
+Measured with an M5 Pro MacBook Pro sending to a 2017 5K iMac over a cable
+(HEVC, moving content; latency is capture to display):
+
+| iMac display setting | Sender | Desktop | Video sent | Motion | Latency |
+| --- | --- | --- | --- | ---: | ---: |
+| Default | Best | 2560×1440 | 5120×2880, 1:1 | ~30 fps | ~30 ms |
+| Default | Balanced | 2560×1440 | 3840×2160 | ~32 fps | ~20 ms |
+| Default | Fast | 2560×1440 | 2560×1440 | ~58 fps | ~12 ms |
+| 2048×1152 | Best | 2048×1152 | 4096×2304, 1:1 | ~31 fps | ~20 ms |
+| 1600×900 | Best | 1600×900 | 3200×1800, 1:1 | ~55 fps | ~15 ms |
+| 3200×1800 | Best | 3200×1800 | 5120×2880, scaled | ~29 fps | ~33 ms |
+
+So on that pair:
+
+- **Reading, writing and code**: Default + Best. It is the sharpest and gives
+  the full desktop. Motion is limited to about 30 fps by the sender's encoder.
+- **Sharp and smooth**: one or two steps toward Larger Text (1600×900 on a 5K
+  iMac) + Best. Text stays crisp and larger, at close to 60 fps.
+- **Video and fast animation**: Default + Fast, which is softer but smooth.
+- **2048×1152 no longer helps with HEVC**: it runs at the same rate as
+  Default with less room.
+
+Other pairs behave the same way with different numbers. A newer or larger
+Apple silicon chip encodes faster; an M1 Pro manages about 23 fps at 5K.
+Receivers with a 4K-or-smaller panel get their full resolution 1:1 with
+either codec and run faster. If the receiver shows the video in a window
+instead of fullscreen, the picture is scaled once more and looks softer. In
+Mirror mode, the sending Mac's display sets the resolution, so the receiver's
+display setting has little effect. Measurements and the tools behind them:
+[research/hevc-m5-2026-09-29](research/hevc-m5-2026-09-29/README.md),
+[tools/quality](tools/quality/README.md).
+
+**Why H.264 and HEVC, and not AV1?** Both have fast hardware encode and
+decode, and the latency is excellent. At the same resolution they run at the
+same frame rate on Apple silicon, but HEVC is sharper right after a window
+change and holds detail much better on a slow link. It is also the only way to
+send a 5K panel 1:1. So OpenDisplay uses HEVC whenever both Macs support it in
+hardware and falls back to H.264 everywhere else, with nothing to configure.
+iPhones and iPads with an A9 chip or later decode HEVC too. Colour detail is
+the same with both, because both send colour at a quarter of the resolution
+(4:2:0); fuller colour is tracked in
+[#322](https://github.com/peetzweg/opendisplay/issues/322).
 
 **Is my screen content sent anywhere?** No. One direct TCP connection
 between your Mac and your device, over your cable or your LAN. No servers,
@@ -128,22 +274,61 @@ The capture/streaming pipeline itself uses only public APIs.
 
 **Audio?** Out of scope for now.
 
-## Compatible apps
+## Linux sender (beta)
 
-The official apps cover a Mac sender and an iPhone/iPad receiver on iOS 16.4+.
-Other people have built their own clients that speak the same protocol, so
-you can also use an Android device or an older iPad as a display, or drive
-one from Linux. If your hardware is not covered yet, start here:
+The OpenDisplay Linux sender (`od-sender`) extends a Linux desktop onto any
+OpenDisplay receiver (iPhone, iPad, Android, or a spare Mac) by creating a
+virtual display sized for it. The beta is tested on **Omarchy / Hyprland 0.56
+on Apple silicon (Asahi)**; x86_64 is expected to work. **Sway 1.10+, KDE
+Plasma 6.8+ and GNOME 50+** are experimental. Video is CPU-encoded for now
+(VA-API planned), and the stream is not encrypted, so use a network you trust.
 
-**Android receivers**
+Install it from the
+[latest release](https://github.com/peetzweg/opendisplay/releases/latest) (Linux ships in every OpenDisplay release, same version as the Mac and iOS apps):
+the x86_64/aarch64 tarball with its `install.sh` works on any distribution,
+and on Arch / Omarchy you can instead build the package from this repository
+with `makepkg -si`
+([linux/README.md#install](linux/README.md#install)). Then, with the
+OpenDisplay app open on the receiver:
+
+```sh
+od-sender doctor              # what it will use on this desktop
+od-sender run --to iPhone     # or just `od-sender run` with one receiver on the network
+```
+
+Setup, the supported matrix, desktop notes, troubleshooting and how to report
+a problem are in [linux/README.md](linux/README.md).
+
+### Linux receiver (beta)
+
+`od-receiver` turns a Linux machine's screen into the display, for a Mac or
+a Linux desktop. It is tested windowed on Asahi Linux / Hyprland (aarch64),
+at 24 ms end to end; other desktops are expected to work. Install it from
+the same release as a Flatpak bundle (any distribution) or, on Arch /
+Omarchy, build its package from this repository with `makepkg -si`; see
+[linux/README.md#linux-receiver-beta](linux/README.md#linux-receiver-beta).
+Reports go to [#284](https://github.com/peetzweg/opendisplay/issues/284).
+
+## Third-party projects
+
+OpenDisplay's own apps cover the Mac and Linux senders and receivers for
+iPhone, iPad, Mac, Android and Linux. Fans have also built their own clients
+against the same protocol ([PROTOCOL.md](PROTOCOL.md)), for example for
+de-Googled Android phones, iPads too old for the official app, or Linux X11
+desktops. Requirements, install steps and comparisons are in the docs:
+[opendisplay.app/docs/third-party](https://opendisplay.app/docs/third-party/).
+
+**Older iOS receivers** ([docs](https://opendisplay.app/docs/third-party/older-ios/))
+* [Francesco149/opendisplay (iOSLegacy)](https://github.com/Francesco149/opendisplay/tree/ios12-legacy-receiver/iOSLegacy) - the official receiver's code in a UIKit shell for iOS 12.2+ (iPad Air, iPad mini 2/3, iPhone 5s/6), built and installed yourself
+* [cuongpham1/ipad-iphone-second-monitor-ios12-free](https://github.com/cuongpham1/ipad-iphone-second-monitor-ios12-free) - iOS 12 client for iPads and iPhones that cannot run the official app, prebuilt `.ipa`
+
+**Linux senders** ([docs](https://opendisplay.app/docs/third-party/linux/))
+* [cray2015/opendisplay-x11](https://github.com/cray2015/opendisplay-x11) - extend an X11 desktop onto an iPad over a USB cable; needs a free HDMI or DP++ port
+* [tixwho/opendisplay-linux](https://github.com/tixwho/opendisplay-linux) - drive an iPhone or iPad from a Wayland desktop (KDE Plasma, Hyprland)
+
+**Android receivers** ([docs](https://opendisplay.app/docs/third-party/android/))
 * [gprot42/android-opendisplay](https://github.com/gprot42/android-opendisplay) - GrapheneOS receiver for de-Googled Pixel phones and tablets, Android 8.0+
 * [josepacelli/opendisplay-android](https://github.com/josepacelli/opendisplay-android) - Android receiver, Android 8.0+, works with an unmodified Mac app
-
-**Older iOS receivers**
-* [cuongpham1/ipad-iphone-second-monitor-ios12-free](https://github.com/cuongpham1/ipad-iphone-second-monitor-ios12-free) - iOS 12 client for iPads and iPhones that cannot run the official app
-
-**Linux senders**
-* [tixwho/opendisplay-linux](https://github.com/tixwho/opendisplay-linux) - drive an iPhone or iPad from a Wayland desktop (KDE Plasma, Hyprland)
 
 These are fan-made projects, not official builds. They are not affiliated
 with OpenDisplay and are not maintained, reviewed, or supported by us, so
@@ -157,7 +342,7 @@ ship for any of these platforms later.
 MAC (sender)                                      iPHONE / iPAD (receiver)
 CGVirtualDisplay  ← macOS believes a monitor is attached
    → ScreenCaptureKit (capture the virtual display)
-   → VideoToolbox H.264 (hardware, real-time)
+   → VideoToolbox H.264 or HEVC (hardware, real-time)
    → TCP  [4-byte length][Annex B frame]  ═══════→  NWListener :9000
                                                       → AVSampleBufferDisplayLayer
    ← JSON control messages (hello, touch, scroll) ═══
@@ -166,9 +351,15 @@ CGVirtualDisplay  ← macOS believes a monitor is attached
 
 The **phone listens and the Mac connects** — that ordering is what makes the
 exact same code work over USB (via the `usbmuxd` daemon built into every
-macOS install) and WiFi. The phone
-announces its native panel size; the Mac creates a `CGVirtualDisplay` at
-exactly half that in points (@2x HiDPI) and streams the pixels back.
+macOS install) and WiFi. An iPhone or iPad announces its panel pixels; a Mac
+receiver announces the backing size of its current scaled display mode. The
+sender creates an @2x `CGVirtualDisplay` with the corresponding logical working
+area, negotiates a codec-safe stream raster, and streams the pixels back.
+
+Everything that crosses the socket — framing, discovery, the video format,
+every control message — is specified in [PROTOCOL.md](PROTOCOL.md). How the
+protocol evolves across releases is covered in
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
 `CGVirtualDisplay` is a **private CoreGraphics API** (the same one used by
 BetterDisplay and DeskPad) — which is precisely why this project can't ship
@@ -177,7 +368,17 @@ on the App Store and lives on GitHub instead.
 ## Install
 
 You need **two apps**: a Mac app (captures and sends) and an iOS app
-(receives and displays).
+(receives and displays). To use a **second Mac** as the display, install
+`OpenDisplay Receiver` on it instead of the iOS app.
+
+### Homebrew (Mac)
+
+```sh
+brew install --cask opendisplay           # the sender
+brew install --cask opendisplay-receiver  # a Mac that should be the display
+```
+
+Both apps keep updating themselves via Sparkle after a Homebrew install.
 
 ### Prebuilt downloads (Mac)
 
@@ -187,12 +388,20 @@ The app is signed with a Developer ID certificate and notarized by Apple, so it
 opens with a plain double-click on macOS 14+ — no Gatekeeper warning. Open the
 `.dmg` and drag the app to Applications.
 
+For a Mac that should *be* the display, grab `OpenDisplayReceiver.dmg` from
+the same release instead. It runs on macOS 12+ and is signed and notarized
+the same way; both apps update themselves via Sparkle.
+
 ### iPhone app
 
-Needs **iOS / iPadOS 16 or newer** — including the 16.7.x line, which is where
-Apple left the iPad 5 (2017), the iPad Pro 1st gen, the iPhone 8 and the
-iPhone X. If your iPad can't be updated past 16.7, it can still be a second
-display ([#72](https://github.com/peetzweg/opendisplay/issues/72)).
+Needs **iOS / iPadOS 15 or newer**. That reaches the 16.7.x line (iPad 5,
+iPad Pro 1st gen, iPhone 8, iPhone X) and the 15.8.x line, where Apple left
+the iPad Air 2, the iPad mini 4, the iPhone 6s, 7 and the first SE. If your
+iPad can't be updated past 15.8, it can still be a second display
+([#72](https://github.com/peetzweg/opendisplay/issues/72)). Apple Pencil
+hover needs iPadOS 16.4 and a hover-capable iPad and Pencil pairing (see
+[Apple's list](https://support.apple.com/guide/ipad/ipadc55b6c7a/ipados));
+everything else works the same on every supported version.
 
 - **TestFlight** (recommended): join the public beta at
   [testflight.apple.com/join/3NYaY11c](https://testflight.apple.com/join/3NYaY11c).
@@ -206,6 +415,9 @@ display ([#72](https://github.com/peetzweg/opendisplay/issues/72)).
 ```sh
 brew install xcodegen   # project generation
 ```
+
+Maintainers preparing a release should use the compatibility and publishing
+checks in [RELEASING.md](RELEASING.md).
 
 Xcode 15+ and a free or paid Apple developer account (to sideload the iOS
 app onto your device).
@@ -263,6 +475,21 @@ All live under **Privacy & Security** in System Settings (Mac) / Settings
 without them. If the prompt never appeared, toggle the entry manually or
 force-quit and reopen the app.
 
+### Getting the logs for a bug report
+
+Both apps keep a local log of connection events. Nothing is uploaded anywhere;
+the logs only leave a device when you share them.
+
+- **Mac:** click **Logs** in the app panel. Finder opens with
+  `~/Library/Logs/OpenDisplay` selected.
+- **iPhone/iPad:** shake the device (or tap **Settings & Help** when idle), then
+  open **Connection log**. Share hands the file to Mail, Messages or Files; copy
+  puts the text on the clipboard for pasting straight into an issue.
+
+The phone log is the half usually missing from a WiFi report: whether the
+receiver ever announced itself, whether its listener restarted, whether the
+decoder was failing. Attach both if you can.
+
 ## Roadmap
 
 Tracked as [roadmap issues](https://github.com/peetzweg/opendisplay/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap) — pick one up if you'd like to contribute!
@@ -281,7 +508,6 @@ Tracked as [roadmap issues](https://github.com/peetzweg/opendisplay/issues?q=is%
 - [#9](https://github.com/peetzweg/opendisplay/issues/9) Resolution & quality settings
 - [#10](https://github.com/peetzweg/opendisplay/issues/10) HEVC encoding
 - [#12](https://github.com/peetzweg/opendisplay/issues/12) Audio forwarding
-- [#17](https://github.com/peetzweg/opendisplay/issues/17) macOS receiver — use another Mac as a display
 
 **Experience**
 - [#11](https://github.com/peetzweg/opendisplay/issues/11) Menu bar app mode with auto-connect
@@ -291,7 +517,7 @@ Tracked as [roadmap issues](https://github.com/peetzweg/opendisplay/issues?q=is%
 - [#14](https://github.com/peetzweg/opendisplay/issues/14) Remote access beyond the local network
 - [#15](https://github.com/peetzweg/opendisplay/issues/15) Additional client platforms
 
-Done: prebuilt releases, built-in USB connectivity (no helper tools), WiFi via Bonjour, portrait mode, touch + two-finger scroll, performance overlay, iPad support, multiple devices at once ([#8](https://github.com/peetzweg/opendisplay/issues/8) — every connected device becomes its own extended display).
+Done: prebuilt releases, built-in USB connectivity (no helper tools), WiFi via Bonjour, portrait mode, touch + two-finger scroll, performance overlay, iPad support, multiple devices at once ([#8](https://github.com/peetzweg/opendisplay/issues/8) — every connected device becomes its own extended display), a Mac as the display ([#17](https://github.com/peetzweg/opendisplay/issues/17), WiFi or Thunderbolt/Ethernet cable).
 
 ## Auto-update (macOS app)
 

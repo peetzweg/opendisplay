@@ -19,10 +19,16 @@ enum Log {
     /// someone tries before filing a bug, so a log there is gone exactly when
     /// it's wanted. Living here also means Console.app lists it under Log
     /// Reports without us doing anything.
+    ///
+    /// The folder is named after the app: the sender logs to `OpenDisplay`,
+    /// the receiver app (a separate bundle sharing this file) to
+    /// `OpenDisplay Receiver`, so running both on one Mac keeps two logs.
     private static let directory: URL = {
         let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
-        return library.appendingPathComponent("Logs/OpenDisplay", isDirectory: true)
+        let product = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? ""
+        let folder = product.hasPrefix("OpenDisplay") ? product : "OpenDisplay"
+        return library.appendingPathComponent("Logs/\(folder)", isDirectory: true)
     }()
 
     /// Sized from the steady-state rate: an active session logs one aggregated

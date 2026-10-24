@@ -8,6 +8,9 @@
   --accent: #0090fc;        /* logo blue */
   --maxw: 1040px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --download-control-height: 44px;
+  --download-control-radius: 7px;
+  --download-control-border: #a6a6a6;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
@@ -112,40 +115,89 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 /* ---- download blocks ---- */
 .needs-both { margin-top: 44px; color: var(--muted); font-size: 0.98rem; }
 .needs-both strong { color: var(--fg); }
-.downloads { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
-  margin-top: 18px; border: 1px solid var(--line); }
-.downloads > div { padding: 28px; }
-.downloads > div + div { border-left: 1px solid var(--line); }
+.download-group { margin-top: 54px; }
+.download-role { font-size: clamp(2rem, 4vw, 2.7rem); }
+.download-group-intro { color: var(--muted); font-size: 0.98rem; margin-top: 8px; }
+.download-options { display: grid; gap: 36px; margin-top: 28px; }
+.sender-download { justify-content: center; grid-template-columns: repeat(2, minmax(0, 440px)); }
 @media (max-width: 720px) {
-  .downloads { grid-template-columns: 1fr; }
-  /* On mobile the phone install takes priority — surface Step 2 first. */
-  .downloads > div:nth-child(2) { order: -1; }
-  .downloads > div + div { border-left: 0; border-top: 0; }
-  /* Divider now sits above the (visually second) Mac card. */
-  .downloads > div:first-child { border-top: 1px solid var(--line); }
+  .sender-download { grid-template-columns: minmax(0, 440px); gap: 48px; }
 }
-.dl-head { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--faint); margin-bottom: 6px;
-  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.dl-head .step { color: var(--fg); border: 1px solid var(--line-strong);
-  padding: 2px 7px; letter-spacing: 0.06em; }
-.dl-head .ver { color: var(--fg); text-transform: none; letter-spacing: 0; }
+.receiver-downloads { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; row-gap: 64px; }
+.download-option { text-align: center; }
+/* Two receivers per row: iOS beside Android (both with a QR code), macOS
+   beside Linux; stacked below 900px. */
+@media (max-width: 899px) {
+  .receiver-downloads { grid-template-columns: 1fr; gap: 48px; }
+}
+.platform { font-size: clamp(2rem, 4vw, 2.7rem); line-height: 1.1; letter-spacing: -0.02em;
+  font-weight: 500; margin-bottom: 10px; }
+.platform-name { font-weight: 600; }
+.platform-separator { color: var(--faint); font-size: 0.55em; font-weight: 400;
+  margin-inline: 0.24em; vertical-align: 0.12em; }
+.platform .ver { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em;
+  color: var(--faint); vertical-align: middle; }
 .dl-sub { color: var(--muted); font-size: 0.86rem; margin-bottom: 18px; }
 
 .btn { display: inline-flex; align-items: center; gap: 8px; font: inherit;
-  font-weight: 600; font-size: 0.95rem; padding: 12px 22px;
-  text-decoration: none; border: 1px solid var(--line-strong); cursor: pointer; }
+  font-weight: 600; font-size: 0.95rem; padding: 10px 18px; height: var(--download-control-height);
+  border-radius: var(--download-control-radius);
+  text-decoration: none; border: 1px solid var(--download-control-border); cursor: pointer; }
+.download-option .btn { display: flex; width: fit-content; margin-inline: auto; }
+.download-option .btn, .app-store-button {
+  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+  box-shadow: 0 1px 1px rgb(0 0 0 / 12%);
+}
+.download-option .btn:hover, .app-store-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 7px rgb(0 0 0 / 16%);
+  filter: brightness(1.04);
+}
+.download-option .btn:active, .app-store-button:active {
+  transform: translateY(1px) scale(0.98);
+  box-shadow: 0 1px 1px rgb(0 0 0 / 10%);
+  transition-duration: 70ms;
+}
+.download-option .btn:focus-visible, .app-store-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .download-option .btn, .app-store-button { transition: none; }
+}
 .btn.primary { background: var(--fg); color: var(--bg); }
 .btn.primary:hover { background: #000; }
 .btn.ghost { background: transparent; color: var(--fg); }
 .btn.ghost:hover { background: var(--fg); color: var(--bg); }
 .note { font-size: 0.84rem; color: var(--muted); margin-top: 14px; line-height: 1.5; }
+/* Homebrew one-liner under the Mac download buttons. */
+.note.brew code { font-family: var(--mono); font-size: 0.8rem; color: var(--fg);
+  user-select: all; overflow-wrap: anywhere; }
 .sub { display: block; font-size: 0.84rem; color: var(--muted); margin-top: 12px; }
+.no-break { white-space: nowrap; }
 /* Secondary links under the download buttons share one subtle treatment
    (they had drifted — the iOS ones were inheriting the darker default link). */
-.note a, .downloads .sub a { color: var(--muted); text-decoration-color: var(--line); }
-.note a:hover, .downloads .sub a:hover { color: var(--fg); text-decoration-color: var(--line-strong); }
+.note a, .download-option .sub a { color: var(--muted); text-decoration-color: var(--line); }
+.note a:hover, .download-option .sub a:hover { color: var(--fg); text-decoration-color: var(--line-strong); }
 .btn-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+
+/* Apple's original badge is transparent around the pill. Its wrapper has the
+   same radius and clips its contents, so the interactive shadow follows the
+   pill rather than the SVG's rectangular viewbox. */
+.app-store-button { display: block; width: 132px; height: var(--download-control-height);
+  margin-inline: auto; border-radius: var(--download-control-radius); overflow: hidden; line-height: 0; }
+.app-store-button img { display: block; width: auto; height: 100%; }
+.beta-tag { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); border: 1px solid var(--line, currentColor);
+  border-radius: 999px; padding: 2px 8px; vertical-align: middle; }
+.beta-steps { text-align: left; color: var(--muted); font-size: 0.86rem;
+  max-width: 34ch; margin: 14px auto 12px; padding-left: 1.3em; }
+.beta-steps li { margin-bottom: 6px; }
+.app-store-qr { height: 166px; }
+.app-store-qr img { display: block; width: 148px; height: 148px; margin-inline: auto; }
+@media (max-width: 680px), (max-height: 500px) and (pointer: coarse) {
+  .app-store-qr { display: none; }
+}
 
 /* Demo video: responsive 16:9 embed matching the bordered, squared aesthetic. */
 .video-embed { position: relative; aspect-ratio: 16 / 9;
@@ -167,30 +219,41 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 .showcase-track::-webkit-scrollbar { display: none; }
 .showcase-item { flex: 0 0 auto; scroll-snap-align: start; }
 .showcase-item.is-video { width: min(84vw, 640px); }
-.showcase-item.is-post { width: min(84vw, 400px); }
-/* Post cards: self-contained, self-hosted renditions of community posts.
-   The whole card is one link to the post on X. */
-a.showcase-item.is-post { display: block; border: 1px solid var(--line);
-  padding: 18px 20px; text-decoration: none;
-  color: var(--fg); background: var(--bg); }
-a.showcase-item.is-post:hover { border-color: var(--line-strong); }
-.post-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.post-avatar { width: 44px; height: 44px; border-radius: 50%; display: block; }
-.post-who { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
-.post-author { font-weight: 600; font-size: 0.95rem; }
-.post-handle { color: var(--muted); font-size: 0.86rem; }
-.post-x { width: 18px; height: 18px; fill: var(--faint); margin-left: auto; flex: none; }
-.showcase-item.is-post:hover .post-x { fill: var(--fg); }
-.post-text { font-size: 0.95rem; margin: 0; }
-.post-text + .post-text { margin-top: 0.5em; }
-.post-trans { font-size: 0.9rem; line-height: 1.45; margin: 12px 0 0;
-  color: var(--muted); font-style: italic; }
-.post-trans + .post-trans { margin-top: 0.5em; }
-.post-photo { display: block; width: 100%; height: auto;
-  margin: 14px 0 12px; border: 1px solid var(--line); }
-.post-date { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em;
-  color: var(--faint); }
-.showcase-item.is-post:hover .post-date { color: var(--muted); }
+.showcase-item.is-coverage { width: min(84vw, 350px); }
+/* External links use their publication's own Open Graph title, description,
+   and image when available. This is intentionally a generic preview rather
+   than a fragile recreation of an article or X post. */
+a.showcase-item.is-coverage { display: flex; min-height: 312px; flex-direction: column;
+  border: 1px solid var(--line); text-decoration: none; color: var(--fg); background: var(--bg); }
+a.showcase-item.is-coverage:hover { border-color: var(--line-strong); }
+.coverage-image, .coverage-placeholder { display: block; width: 100%; height: 150px; object-fit: cover;
+  border-bottom: 1px solid var(--line); }
+.coverage-placeholder { background: linear-gradient(135deg, #eef7ff, #d7edff 48%, #f8fbfd); }
+.coverage-body { display: flex; flex: 1; flex-direction: column; padding: 18px 20px; }
+.coverage-site { display: flex; align-items: center; gap: 6px; color: var(--faint); font-family: var(--mono);
+  font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.coverage-external { width: 13px; height: 13px; fill: currentColor; }
+.coverage-body h3 { font-size: 1rem; line-height: 1.28; letter-spacing: -0.01em; margin-top: 10px; }
+.coverage-body p { color: var(--muted); font-size: 0.86rem; line-height: 1.45; margin-top: 8px; }
+.coverage-cta { color: var(--muted); font-family: var(--mono); font-size: 0.72rem;
+  letter-spacing: 0.04em; margin-top: auto; padding-top: 16px; }
+a.showcase-item.is-coverage:hover .coverage-cta { color: var(--fg); }
+/* X posts use the public oEmbed copy at curation time. Keeping the original
+   language (and a contained excerpt) makes each recommendation recognisable
+   without pulling X's widget or trying to recreate its full interface. */
+a.showcase-item.is-post { min-height: 0; padding: 18px 20px 0; }
+.post-head { display: flex; align-items: center; gap: 10px; }
+.post-monogram { display: grid; flex: none; place-items: center; width: 38px; height: 38px;
+  border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.95rem; font-weight: 700; }
+.post-head > div { display: flex; min-width: 0; flex-direction: column; line-height: 1.25; }
+.post-head strong { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.post-head span:not(.post-monogram):not(.post-x) { color: var(--muted); font-size: 0.8rem; }
+.post-x { margin-left: auto; color: var(--faint); font-size: 1.1rem; }
+.post-quote { display: -webkit-box; margin-top: 16px; overflow: hidden; color: var(--fg);
+  font-size: 0.93rem; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
+.post-date { margin-top: 12px; color: var(--faint); font-family: var(--mono); font-size: 0.7rem;
+  letter-spacing: 0.04em; }
+a.showcase-item.is-post .coverage-body { min-height: 52px; padding: 0; }
 .showcase-nav { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end;
   padding-inline: var(--bleed-pad); }
 .showcase-nav button { font-family: var(--mono); font-size: 1rem; line-height: 1;
@@ -200,13 +263,6 @@ a.showcase-item.is-post:hover { border-color: var(--line-strong); }
 .showcase-nav button:hover:not(:disabled) { background: var(--fg); color: var(--bg); }
 .showcase-nav button:disabled { color: var(--faint); border-color: var(--line); cursor: default; }
 
-/* App Store / TestFlight cluster */
-.ios-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
-.badge-wrap { display: inline-flex; flex-direction: column; gap: 4px; }
-.appstore-badge { height: 44px; width: auto; display: block; }
-.badge-wrap.disabled .appstore-badge { opacity: 0.32; filter: grayscale(1); }
-.badge-wrap .cap { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--faint); }
 .btn.disabled { opacity: 0.5; cursor: not-allowed; border-style: dashed; }
 
 /* ---- feature grid ---- */
@@ -260,6 +316,13 @@ th.os, td.os { border-left: 2px solid var(--accent); border-right: 2px solid var
   background: #fafafa; }
 thead th.os { border-top: 2px solid var(--accent); color: var(--fg); }
 tbody tr:last-child td.os { border-bottom: 2px solid var(--accent); }
+/* the Mac-receiver table has seven products: give it room and let row labels wrap */
+table.wide { min-width: 900px; }
+table.wide th, table.wide td { padding: 12px 9px; }
+table.wide th:first-child, table.wide td:first-child { white-space: normal; min-width: 150px; }
+thead th a { color: inherit; }
+.tbl-note { color: var(--muted); max-width: 80ch; margin: 0 0 16px; font-size: 0.92rem; }
+.tbl-scroll + .tbl-note { margin: 12px 0 0; }
 
 /* ---- FAQ ---- */
 .faq { border-top: 1px solid var(--line); }
@@ -271,29 +334,6 @@ summary::after { content: "+"; font-family: var(--mono); color: var(--faint);
   font-weight: 400; font-size: 1.2rem; }
 details[open] summary::after { content: "–"; }
 details p { color: var(--muted); padding: 0 0 24px; max-width: 78ch; }
-
-/* ---- compatible apps ---- */
-/* Same hairline-cell grid as .fgrid, but every cell is a link to a community
-   repo: mono role label on top, repo path as the heading. */
-.compat-lead { color: var(--muted); max-width: 78ch; margin-top: 8px; }
-.compat { display: grid; grid-template-columns: repeat(2, 1fr);
-  border-top: 1px solid var(--line); border-left: 1px solid var(--line);
-  margin-top: 32px; }
-a.compat-item { display: block; padding: 24px; text-decoration: none; color: var(--fg);
-  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-a.compat-item:hover { background: #fafafa; }
-.compat-role { font-family: var(--mono); font-size: 0.78rem; color: var(--faint);
-  display: block; margin-bottom: 12px; }
-/* Repo paths are long (one runs to 45 chars) — allow a mid-path break so a
-   narrow cell wraps instead of overflowing. */
-.compat-repo { display: block; font-weight: 600; font-size: 1.02rem;
-  letter-spacing: -0.01em; overflow-wrap: anywhere; }
-.compat-item p { color: var(--muted); font-size: 0.92rem; margin-top: 6px; }
-.compat-note { color: var(--muted); font-size: 0.9rem; max-width: 78ch; margin-top: 28px; }
-@media (max-width: 560px) {
-  .compat { grid-template-columns: 1fr; }
-  a.compat-item { padding: 20px; }
-}
 
 /* ---- support / ko-fi ---- */
 .support { text-align: center; }
@@ -353,6 +393,126 @@ footer .fine { color: var(--faint); font-size: 0.84rem; }
   .sec { padding-top: 56px; padding-bottom: 56px; }
   .hero { padding-top: 56px; padding-bottom: 60px; }
   .hero h1 .l1 { white-space: normal; }   /* let the long words wrap on small screens */
-  .downloads > div { padding: 22px; }
   .fcell { padding: 20px; }
+}
+
+/* ---- docs (/docs/**, prerendered by tools/docs.mjs, no client JS) ---- */
+.docs-page .wrap { max-width: 1180px; }
+.docs-page nav.site-nav .brand img { width: 36px; height: 36px; }
+.docs { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 56px;
+  padding-top: 40px; padding-bottom: 88px; }
+/* The site-wide `nav` rule styles the sticky top bar; the docs tree is a nav
+   too, so undo the bar styling for it. */
+nav.docs-nav { position: static; border: 0; background: none; z-index: auto;
+  font-size: 0.9rem; }
+.docs-side { position: sticky; top: 84px; align-self: start;
+  max-height: calc(100vh - 100px); overflow-y: auto; }
+.docs-nav ul { list-style: none; }
+.docs-nav a { display: block; padding: 5px 0 5px 12px; color: var(--muted);
+  text-decoration: none; border-left: 1px solid var(--line); }
+.docs-nav a:hover { color: var(--fg); border-left-color: var(--faint); }
+.docs-nav a[aria-current="page"] { color: var(--fg); font-weight: 600;
+  border-left: 2px solid var(--accent); padding-left: 11px; }
+.docs-nav .docs-nav-root, .docs-nav li.group > a { font-family: var(--mono);
+  font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; }
+.docs-nav li.group > a { margin-top: 18px; }
+.docs-nav li.group > ul a { padding-left: 24px; }
+.docs-nav li.group > ul a[aria-current="page"] { padding-left: 23px; }
+.docs-menu { display: none; }
+
+.docs-crumbs { list-style: none; display: flex; flex-wrap: wrap; gap: 6px;
+  font-family: var(--mono); font-size: 0.74rem; color: var(--faint); margin-bottom: 18px; }
+.docs-crumbs li + li::before { content: "/"; margin-right: 6px; }
+.docs-crumbs a { color: var(--muted); text-decoration: none; }
+.docs-crumbs a:hover { color: var(--fg); }
+
+.doc { max-width: 76ch; }
+.doc h1 { font-size: clamp(2rem, 4.5vw, 2.7rem); line-height: 1.1; }
+.doc .doc-lead { font-size: 1.12rem; color: var(--muted); margin-top: 16px; }
+.doc h2 { font-size: clamp(1.35rem, 2.6vw, 1.6rem); margin-top: 52px;
+  padding-top: 20px; border-top: 1px solid var(--line); }
+.doc h3 { font-size: 1.12rem; font-weight: 600; letter-spacing: -0.01em; margin-top: 34px; }
+.doc h4 { font-size: 1rem; font-weight: 600; margin-top: 26px; }
+.doc h2, .doc h3, .doc h4 { scroll-margin-top: 76px; }
+.doc .h-anchor { color: inherit; text-decoration: none; }
+.doc .h-anchor:hover::after { content: " #"; color: var(--faint); font-weight: 400; }
+.doc p, .doc ul, .doc ol, .doc pre, .doc .tbl-scroll, .doc blockquote { margin-top: 16px; }
+.doc ul, .doc ol { padding-left: 1.4em; }
+.doc li { margin-top: 6px; }
+.doc li > p { margin-top: 6px; }
+.doc a { text-decoration-color: var(--faint); }
+.doc a:hover { text-decoration-color: var(--line-strong); }
+.doc :not(pre) > code { font-size: 0.86em; background: #f2f2f2; padding: 1px 5px;
+  overflow-wrap: anywhere; }
+.doc pre { font-size: 0.82rem; }
+.doc blockquote { border-left: 2px solid var(--accent); padding: 4px 0 4px 16px; color: var(--muted); }
+.doc blockquote p:first-child { margin-top: 0; }
+.doc hr { border: 0; border-top: 1px solid var(--line); margin: 36px 0; }
+.doc table { min-width: 0; font-size: 0.88rem; }
+.doc th, .doc td { padding: 10px 12px; }
+.doc thead th { text-align: left; font-size: 0.88rem; border-bottom: 1px solid var(--line-strong); }
+.doc tbody td:first-child { color: var(--fg); }
+.doc th:first-child, .doc td:first-child { white-space: normal; }
+.doc td:first-child code { white-space: nowrap; }
+
+.docs-pager { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 64px;
+  max-width: 76ch; }
+.docs-pager a { display: block; border: 1px solid var(--line); padding: 14px 18px;
+  text-decoration: none; font-weight: 600; }
+.docs-pager a:hover { border-color: var(--line-strong); }
+.docs-pager a span { display: block; font-family: var(--mono); font-size: 0.7rem; font-weight: 400;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
+.docs-pager .next { text-align: right; grid-column: 2; }
+.docs-meta { margin-top: 28px; font-size: 0.84rem; color: var(--faint); }
+.docs-meta a { color: var(--muted); text-decoration-color: var(--line); }
+
+/* "On this page": a third column on wide screens, a collapsible list under
+   the lead below that. Built at prerender time; no scroll tracking. */
+.docs.has-toc { grid-template-columns: 220px minmax(0, 1fr) 190px; gap: 44px; }
+.docs-toc-side { position: sticky; top: 84px; align-self: start;
+  max-height: calc(100vh - 100px); overflow-y: auto; }
+nav.docs-toc { position: static; border: 0; background: none; z-index: auto;
+  font-size: 0.84rem; }
+.docs-toc-title { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 10px; }
+.docs-toc ul, .doc .docs-toc ul { list-style: none; padding-left: 0; margin-top: 0; }
+.doc .docs-toc li { margin-top: 0; }
+.docs-toc a { display: block; padding: 4px 0 4px 12px; line-height: 1.35; color: var(--muted);
+  text-decoration: none; border-left: 1px solid var(--line); }
+.docs-toc a:hover { color: var(--fg); border-left-color: var(--faint); }
+.docs-toc li.sub a { padding-left: 24px; font-size: 0.8rem; }
+.docs-toc-menu { display: none; }
+@media (max-width: 1180px) {
+  .docs.has-toc { grid-template-columns: 220px minmax(0, 1fr); gap: 56px; }
+  .docs-toc-side { display: none; }
+  .docs-toc-menu { display: block; border: 1px solid var(--line); margin-top: 24px; }
+  .docs-toc-menu summary { padding: 11px 16px; font-size: 0.9rem; cursor: pointer; }
+  .docs-toc-menu nav.docs-toc { padding: 0 16px 12px; }
+  .docs-toc-menu .docs-toc-title { display: none; }
+}
+
+@media (max-width: 860px) {
+  .docs, .docs.has-toc { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: 20px; }
+  .docs-side { display: none; }
+  .docs-menu { display: block; border: 1px solid var(--line); margin-bottom: 22px; }
+  .docs-menu summary { padding: 12px 16px; font-size: 0.92rem; }
+  .docs-menu nav.docs-nav { padding: 0 16px 14px; }
+}
+@media (max-width: 680px) {
+  .docs-page nav .links.docs-links { display: flex; gap: 16px; }
+  .docs-links a:first-child { display: none; }   /* the brand already links home */
+  .docs-links a { white-space: nowrap; }
+}
+@media (max-width: 440px) {
+  .docs-page nav .links.docs-links { gap: 12px; }
+  .docs-links a:last-child { display: none; }    /* GitHub: still in the footer and "Edit" link */
+}
+@media (max-width: 360px) {
+  .docs-page nav .links.docs-links { gap: 10px; margin-left: 10px; font-size: 0.8rem; }
+}
+@media (max-width: 560px) {
+  .docs-pager { grid-template-columns: 1fr; }
+  .docs-pager .next { grid-column: 1; }
+  .doc pre { margin-left: -20px; margin-right: -20px; border-left: 0; border-right: 0;
+    padding: 16px 20px; }
 }

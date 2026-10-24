@@ -95,7 +95,6 @@ enum MainWindow {
 enum ConnectionTarget: Hashable {
     case usb(udid: String?)           // wired via built-in usbmuxd; nil = first device
     case wifi(NWBrowser.Result)       // discovered via Bonjour
-    case accessory                    // Android over USB via AOA
 
     /// Stable identity for sessions and persistence — survives Bonjour
     /// re-discovery (fresh NWBrowser.Result) and USB replugs (new DeviceID).
@@ -105,7 +104,6 @@ enum ConnectionTarget: Hashable {
         case .wifi(let result):
             if case .service(let name, _, _, _) = result.endpoint { return "wifi:\(name)" }
             return "wifi:unknown"
-        case .accessory: return "accessory"
         }
     }
 }
@@ -123,13 +121,19 @@ final class DeviceSession: ObservableObject, Identifiable {
 
     @Published var status = "Starting…"
     @Published var framesSent = 0
-    @Published var mbps = 0.0
+    // The sender's start() threw: the pipeline is freed, only this row's
+    // error text remains. A failed session must never swallow a fresh
+    // connect for its device the way a live one does.
+    @Published var failed = false
     // Receiver's per-install identity (from hello) — the key for recognizing
     // the same physical device across USB and WiFi.
     var deviceID: String?
     // "iPhone" / "iPad" from hello — naming fallback while (or in case)
     // lockdown hasn't resolved the device's real name.
     var deviceKind: String?
+    // Power actions the receiver offers on the live path (PROTOCOL.md 6.6).
+    // Every hello replaces it, so it follows the session on and off the cable.
+    @Published var powerActions: [PowerAction] = []
     // `target` names the identity the session was created for; the live
     // transport can migrate (cable-in upgrade, unplug failover) — these
     // track where the sender actually is right now.
@@ -144,20 +148,47 @@ final class DeviceSession: ObservableObject, Identifiable {
     // and its service row.
     var wifiServiceName: String?
 
-    var transportLabel: String { onUSB ? "USB" : "WiFi" }
+    // The live TCP path runs over a cable (Thunderbolt Bridge / Ethernet)
+    // rather than WiFi — reported by the sender once connected.
+    @Published var wired = false
+
+    var transportLabel: String { onUSB ? "USB" : wired ? "Cable" : "WiFi" }
+
+    // The Display size control (extend only): the choice for this device
+    // and what each choice gives on it, from the latest hello.
+    private var lastHello: PhoneInfo?
+    @Published private(set) var displaySize: DisplaySize = .default
+    @Published private(set) var displaySizeOutcomes: [DisplaySizeOutcome] = []
+
+    func helloArrived(_ info: PhoneInfo) {
+        lastHello = info
+        refreshDisplaySize()
+    }
+
+    func setDisplaySize(_ size: DisplaySize) {
+        guard let info = lastHello else { return }
+        sender.setDisplaySize(size, for: info)
+        refreshDisplaySize()
+    }
+
+    /// Also called when the picker opens: the outcomes can change without a
+    /// hello (an HEVC failure, a refused 2x mode).
+    func refreshDisplaySize() {
+        guard let info = lastHello else { return }
+        displaySize = DisplaySizeStore.load(key: sender.displaySizeKey(for: info))
+        let outcomes = sender.displaySizeOutcomes(for: info)
+        if outcomes != displaySizeOutcomes { displaySizeOutcomes = outcomes }
+    }
 
     init(id: String, target: ConnectionTarget, name: String, sender: MacSender) {
         self.id = id
         self.target = target
         self.name = name
         self.sender = sender
-        switch target {
-        case .usb(let udid):
+        if case .usb(let udid) = target {
             onUSB = true
             usbUDID = udid
-        case .accessory:
-            onUSB = true
-        case .wifi:
+        } else {
             onUSB = false
         }
     }
@@ -180,7 +211,11 @@ final class SenderController: ObservableObject {
 
     @Published var sessions: [DeviceSession] = []
     @Published var discovered: [NWBrowser.Result] = []
+    // Every cabled device: usbmuxd's iPhones and iPads plus adb's Android
+    // devices (udid `adb:<serial>`). The connection policy treats them alike.
     @Published var usbDevices: [UsbmuxDevice] = []
+    private var usbmuxDevices: [UsbmuxDevice] = []
+    private var adbDevices: [UsbmuxDevice] = []
     // `-host x.x.x.x` / `-port n` bypass usbmuxd with a manual TCP endpoint
     // (debugging escape hatch, e.g. an iproxy or SSH tunnel).
     @Published var host = UserDefaults.standard.string(forKey: "host") ?? "127.0.0.1"
@@ -195,6 +230,7 @@ final class SenderController: ObservableObject {
 
     private var browser: NWBrowser?
     private var usbWatcher: UsbmuxDeviceWatcher?
+    private var adbWatcher: AdbDeviceWatcher?
 
     // Connection policy — one session per physical device, and the cable
     // wins whenever it's available (lower, steadier latency than WiFi):
@@ -235,15 +271,32 @@ final class SenderController: ObservableObject {
     // action to confirm, not auto-grab.
     private var wifiAutoConnectArmed = false
     private let wifiAutoConnectDeadline = Date().addingTimeInterval(12)
+    // Services whose Bonjour record is currently seen over the direct
+    // host-to-host cable. Plugging that cable in is a deliberate act, so a
+    // record newly gaining such an interface connects like a cabled iPhone
+    // does; plain WiFi discovery never grabs a (possibly shared) receiver
+    // after the launch window. Transition-based, so a record that stays on
+    // the cable connects once, not on every browse update.
+    private var onDirectCable: Set<String> = []
+    // Service names the user disconnected while cabled. The record can
+    // vanish and return without a replug (the receiver's display sleeps and
+    // wakes, it restarts), and a cable-only receiver's unplug looks the
+    // same, so the opt-out simply holds until the user connects by hand.
+    // In memory: a relaunched sender starts fresh.
+    private var cableOptOut: Set<String> = []
+    // Every service seen on the cable this run: a Disconnect counts as a
+    // cable opt-out even while the record is briefly gone (receiver asleep).
+    private var everOnCable: Set<String> = []
 
     init() {
         startBrowsing()
         usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
-            guard let self else { return }
-            let detached = Set(self.usbDevices.map(\.udid)).subtracting(devices.map(\.udid))
-            self.usbDevices = devices
-            self.failover(detachedUDIDs: detached)
-            self.autoConnect()
+            self?.usbmuxDevices = devices
+            self?.wiredDevicesChanged()
+        }
+        adbWatcher = AdbDeviceWatcher { [weak self] devices in
+            self?.adbDevices = devices
+            self?.wiredDevicesChanged()
         }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
@@ -261,6 +314,7 @@ final class SenderController: ObservableObject {
                 self.discovered = Array(results)
                 self.endSessionsWhoseServiceVanished()
                 self.autoConnect()
+                self.connectNewlyCabled()
             }
         }
         browser.start(queue: .main)
@@ -290,10 +344,12 @@ final class SenderController: ObservableObject {
     }
 
     /// The session (over either transport) already serving this USB device.
+    /// A failed session serves nothing — it must not block auto-connecting
+    /// the same physical device over the other transport.
     private func activeSession(coveringUSB device: UsbmuxDevice) -> DeviceSession? {
-        if let direct = session(for: "usb:\(device.udid)") { return direct }
+        if let direct = session(for: "usb:\(device.udid)"), !direct.failed { return direct }
         return sessions.first { s in
-            guard case .wifi(let result) = s.target else { return false }
+            guard !s.failed, case .wifi(let result) = s.target else { return false }
             if let id = installIDByUDID[device.udid],
                s.deviceID == id || txtID(of: result) == id { return true }
             return serviceName(of: result) != nil && device.name == serviceName(of: result)
@@ -301,18 +357,16 @@ final class SenderController: ObservableObject {
     }
 
     /// The session (over either transport) already serving this WiFi service.
+    /// Failed sessions are excluded for the same reason as above.
     private func activeSession(coveringWiFi result: NWBrowser.Result) -> DeviceSession? {
-        if let name = serviceName(of: result), let direct = session(for: "wifi:\(name)") {
+        if let name = serviceName(of: result), let direct = session(for: "wifi:\(name)"),
+           !direct.failed {
             return direct
         }
         return sessions.first { s in
-            switch s.target {
-            case .usb, .accessory: break
-            case .wifi: return false
-            }
+            guard !s.failed, case .usb(let udid) = s.target else { return false }
             if let id = txtID(of: result), s.deviceID == id { return true }
-            if case .usb(let udid?) = s.target,
-               let device = usbDevices.first(where: { $0.udid == udid }),
+            if let udid, let device = usbDevices.first(where: { $0.udid == udid }),
                sameDevice(result, device) { return true }
             // Browse results routinely lack their TXT record and the USB
             // device is gone after a failover — the service name is then
@@ -332,11 +386,6 @@ final class SenderController: ObservableObject {
         if UserDefaults.standard.object(forKey: "host") != nil,
            !usbDisabled.contains("usb:first"), session(for: "usb:first") == nil {
             connect(to: .usb(udid: nil))
-        }
-        // Escape hatch until there's UI: `defaults write <bundle> accessory -bool YES`.
-        if UserDefaults.standard.bool(forKey: "accessory"),
-           !usbDisabled.contains("accessory"), session(for: "accessory") == nil {
-            connect(to: .accessory)
         }
         for device in usbDevices {
             if let covering = activeSession(coveringUSB: device) {
@@ -367,6 +416,60 @@ final class SenderController: ObservableObject {
         }
     }
 
+    /// A Mac receiver just appeared on the direct cable: connect to it unless
+    /// a session already covers it (a live WiFi session moves onto the cable
+    /// through the sender's own upgrade probe instead).
+    private func connectNewlyCabled() {
+        let nowOnCable = Set(discovered.compactMap { result in
+            result.interfaces.contains(where: DirectCable.isDirectLink) ? serviceName(of: result) : nil
+        })
+        let plugged = nowOnCable.subtracting(onDirectCable)
+        onDirectCable = nowOnCable
+        everOnCable.formUnion(nowOnCable)
+        guard autoConnectEnabled, !plugged.isEmpty else { return }
+        for result in discovered {
+            guard let name = serviceName(of: result), plugged.contains(name),
+                  !cableOptOut.contains(name),
+                  activeSession(coveringWiFi: result) == nil,
+                  !alreadyServedOnCable(result),
+                  // A USB-attached phone belongs to the usbmux path and its
+                  // own opt-out, never this one.
+                  !usbDevices.contains(where: { sameDevice(result, $0) }) else { continue }
+            Log.info("\(name) appeared on the direct cable — connecting")
+            connect(to: .wifi(result))
+        }
+    }
+
+    /// A live session may already talk to this receiver under another
+    /// service name (renamed while streaming). Match the install id when the
+    /// browse result carries TXT; it often does not, so also treat any live
+    /// session already on the cable as covering it: a second cabled Mac
+    /// receiver at the same time is rare, and a click still connects it.
+    private func alreadyServedOnCable(_ result: NWBrowser.Result) -> Bool {
+        let id = txtID(of: result)
+        return sessions.contains { s in
+            guard !s.failed else { return false }
+            if let id, s.deviceID == id { return true }
+            return s.wired && s.deviceKind == "Mac"
+        }
+    }
+
+    private func wiredDevicesChanged() {
+        let devices = usbmuxDevices + adbDevices
+        let detached = Set(usbDevices.map(\.udid)).subtracting(devices.map(\.udid))
+        usbDevices = devices
+        failover(detachedUDIDs: detached)
+        autoConnect()
+    }
+
+    /// How to dial a cabled device: usbmuxd, or an adb forward for Android.
+    private func wiredTransport(udid: String?, port: UInt16) -> SenderTransport {
+        if let serial = udid.flatMap(AdbParsing.serial(fromUDID:)) {
+            return .adb(serial: serial, port: port)
+        }
+        return .usb(udid: udid, port: port)
+    }
+
     /// Cable plugged in while the device streams over WiFi: migrate the live
     /// session onto USB. No-op when the session is already cabled.
     private func upgradeToUSB(_ session: DeviceSession, device: UsbmuxDevice) {
@@ -377,7 +480,7 @@ final class SenderController: ObservableObject {
         // The match may have been by name only — pin the strong identity so
         // future matching (and the next launch) recognizes the pair.
         if let id = session.deviceID { installIDByUDID[device.udid] = id }
-        session.sender.switchTransport(to: .usb(udid: device.udid, port: portNum))
+        session.sender.switchTransport(to: wiredTransport(udid: device.udid, port: portNum))
     }
 
     /// Cable unplugged under a live session: fail over to the device's WiFi
@@ -431,19 +534,20 @@ final class SenderController: ObservableObject {
     /// sessions, the transports steal the receiver's single connection from
     /// each other forever. Keep the cable, drop the WiFi twin.
     private func dedupeSessions() {
-        let cabledDeviceIDs = Set(sessions.compactMap { s -> String? in
-            switch s.target {
-            case .usb, .accessory: return s.deviceID
-            case .wifi: return nil
-            }
+        // Failed sessions hold no pipeline: a USB corpse must never win the
+        // "keep the cable" rule against a working WiFi session.
+        let usbSessionIDs = Set(sessions.compactMap { s -> String? in
+            if case .usb = s.target, !s.failed { return s.deviceID }
+            return nil
         })
-        let cabledNames = Set(usbDevices.compactMap { device in
-            session(for: "usb:\(device.udid)") != nil ? device.name : nil
+        let cabledNames = Set(usbDevices.compactMap { device -> String? in
+            guard let s = session(for: "usb:\(device.udid)"), !s.failed else { return nil }
+            return device.name
         })
         for s in sessions {
             guard case .wifi(let result) = s.target else { continue }
-            let duplicate = (s.deviceID.map { cabledDeviceIDs.contains($0) } ?? false)
-                || (txtID(of: result).map { cabledDeviceIDs.contains($0) } ?? false)
+            let duplicate = (s.deviceID.map { usbSessionIDs.contains($0) } ?? false)
+                || (txtID(of: result).map { usbSessionIDs.contains($0) } ?? false)
                 || (serviceName(of: result).map { cabledNames.contains($0) } ?? false)
             if duplicate {
                 Log.info("two sessions for one device — keeping the cable, dropping \(s.id)")
@@ -460,11 +564,10 @@ final class SenderController: ObservableObject {
             if let device = usbDevices.first(where: { $0.udid == udid }), let name = device.name {
                 return name
             }
-            return udid == nil ? "Manual (\(host):\(port))" : "iPhone / iPad"
+            if udid == nil { return "Manual (\(host):\(port))" }
+            return udid.flatMap(AdbParsing.serial(fromUDID:)) == nil ? "iPhone / iPad" : "Android device"
         case .wifi(let result):
             return serviceName(of: result) ?? "WiFi device"
-        case .accessory:
-            return "Android (USB)"
         }
     }
 
@@ -481,10 +584,24 @@ final class SenderController: ObservableObject {
         return hash == 0 ? 1 : hash
     }
 
+    // A display identity macOS saved hostile state for (see
+    // MacSender.setupExtend) is abandoned permanently: the validated offset
+    // from the device's base identity is persisted per session id and every
+    // future session starts from it.
+    private static func identityOffsetKey(for id: String) -> String { "displaySerialBump.\(id)" }
+    private func identityOffset(for id: String) -> UInt32 {
+        UInt32(clamping: UserDefaults.standard.integer(forKey: Self.identityOffsetKey(for: id)))
+    }
+
     func connect(to target: ConnectionTarget, userInitiated: Bool = false,
                  awaitingWake: Bool = false) {
         let id = target.sessionID
-        guard session(for: id) == nil else { return }
+        if let existing = session(for: id) {
+            // A failed session holds no pipeline — replace the corpse
+            // instead of letting it swallow the fresh attempt.
+            guard existing.failed else { return }
+            end(existing)
+        }
 
         // Never create a second session for the same physical device — the
         // receiver holds one connection, so a twin would steal it. But an
@@ -509,8 +626,10 @@ final class SenderController: ObservableObject {
 
         // Connecting a device clears its "don't auto-connect" state.
         switch target {
-        case .usb, .accessory: usbDisabled.remove(id)
-        case .wifi: wifiRemembered.insert(id)
+        case .usb: usbDisabled.remove(id)
+        case .wifi(let result):
+            wifiRemembered.insert(id)
+            if userInitiated, let name = serviceName(of: result) { cableOptOut.remove(name) }
         }
 
         let transport: SenderTransport
@@ -522,10 +641,8 @@ final class SenderController: ObservableObject {
                 transport = .tcp(.hostPort(host: NWEndpoint.Host(host),
                                            port: NWEndpoint.Port(rawValue: portNum)!))
             } else {
-                transport = .usb(udid: udid, port: portNum)
+                transport = wiredTransport(udid: udid, port: portNum)
             }
-        case .accessory:
-            transport = .accessory
         case .wifi(let result):
             transport = .tcp(result.endpoint)
         }
@@ -533,19 +650,30 @@ final class SenderController: ObservableObject {
         let name = label(for: target)
         let sender = MacSender(transport: transport, name: name, mode: mode,
                                quality: quality, displaySerial: Self.displaySerial(for: id),
+                               identityOffset: identityOffset(for: id),
                                awaitingWake: awaitingWake)
         let session = DeviceSession(id: id, target: target, name: name, sender: sender)
         if case .wifi(let result) = target {
             session.wifiServiceName = serviceName(of: result)
         }
         sender.onStatus = { [weak session] text in
-            session?.status = text
+            // Retry loops re-announce the same status every second (e.g. the
+            // asleep wait) — only a change is worth the UI churn and the log line.
+            guard let session, session.status != text else { return }
+            session.status = text
             Log.info("status[\(id)]: \(text)")
         }
         sender.onHello = { [weak self, weak session] info in
             guard let self, let session else { return }
             session.deviceID = info.id
             session.deviceKind = info.device
+            session.helloArrived(info)
+            let power = (info.power ?? []).compactMap(PowerAction.init(rawValue:))
+            if power != session.powerActions {
+                Log.info("session \(session.id) power actions: "
+                    + (power.isEmpty ? "none" : power.map(\.rawValue).joined(separator: ",")))
+                session.powerActions = power
+            }
             if case .usb(let udid?) = session.target, let installID = info.id {
                 self.installIDByUDID[udid] = installID
             }
@@ -554,9 +682,8 @@ final class SenderController: ObservableObject {
             // is cabled — take the upgrade opportunity right away.
             self.autoConnect()
         }
-        sender.onStats = { [weak session] frames, mbps in
+        sender.onStats = { [weak session] frames, _ in
             session?.framesSent = frames
-            session?.mbps = mbps
         }
         sender.onDisconnected = { [weak self, weak session] in
             // Device unplugged / left the network and stayed gone: end this
@@ -578,6 +705,26 @@ final class SenderController: ObservableObject {
             self.end(session)
             self.connect(to: target, awaitingWake: true)
         }
+        sender.onCaptureStoppedByUser = { [weak self, weak session] in
+            // The user stopped the capture in the system UI — same intent as
+            // the in-app Disconnect, so it also opts the device out of
+            // auto-connect (or the next browse event would resurrect it).
+            guard let self, let session else { return }
+            Log.info("session \(session.id) capture stopped via the system UI — honoring as disconnect")
+            self.disconnect(session)
+        }
+        sender.onDisplayIdentityBumped = { [weak session] totalOffset in
+            // The sender reports the validated absolute offset — store it
+            // as-is. Adding would double-count when a rotation rebuild
+            // re-discovers the same poisoned identity within one session.
+            guard let session else { return }
+            UserDefaults.standard.set(Int(totalOffset), forKey: Self.identityOffsetKey(for: session.id))
+            Log.info("display identity for \(session.id) moved to offset \(totalOffset) — "
+                + "macOS saved hostile state for the old one")
+        }
+        sender.onTransportPath = { [weak session] wired in
+            session?.wired = wired
+        }
         sender.onPeerClosed = { [weak self, weak session] in
             // The receiver app quit — a deliberate goodbye, so no reconnect
             // waits around. Reopening the app is a fresh start handled by
@@ -595,6 +742,11 @@ final class SenderController: ObservableObject {
             } catch {
                 Log.info("sender failed to start: \(error)")
                 session.status = "Failed: \(error.localizedDescription)"
+                // Free the half-built pipeline: a leaked virtual display
+                // would keep holding this device's serial, and a parked
+                // live-looking session would swallow every future connect.
+                session.failed = true
+                sender.stop()
             }
         }
     }
@@ -602,8 +754,12 @@ final class SenderController: ObservableObject {
     /// User-initiated disconnect: also opt the device out of auto-connect.
     func disconnect(_ session: DeviceSession) {
         switch session.target {
-        case .usb, .accessory: usbDisabled.insert(session.id)
-        case .wifi: wifiRemembered.remove(session.id)
+        case .usb: usbDisabled.insert(session.id)
+        case .wifi:
+            wifiRemembered.remove(session.id)
+            if let name = session.wifiServiceName, everOnCable.contains(name) {
+                cableOptOut.insert(name)
+            }
         }
         // A migrated session is also reachable the other way — opt that side
         // out too, or auto-connect resurrects the device moments later.
@@ -614,6 +770,15 @@ final class SenderController: ObservableObject {
 
     func disconnectAll() {
         sessions.forEach { disconnect($0) }
+    }
+
+    /// Restart a session that failed to start (its pipeline is already
+    /// freed): tear the corpse out and dial the same target fresh. The
+    /// socket-only Reconnect can't help there — nothing was ever built.
+    func retry(_ session: DeviceSession) {
+        let target = session.target
+        end(session)
+        connect(to: target, userInitiated: true)
     }
 
     private func end(_ session: DeviceSession) {
@@ -674,7 +839,7 @@ final class SenderController: ObservableObject {
                 name: device.name
                     ?? twin.flatMap(serviceName)
                     ?? session(for: usbTarget.sessionID)?.deviceKind
-                    ?? "iPhone / iPad",
+                    ?? label(for: usbTarget),
                 usbTarget: usbTarget,
                 wifiTarget: twin.map { .wifi($0) }))
         }
@@ -782,7 +947,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("OpenDisplay")
                         .font(.title3.bold())
-                    Text("Your iPads and iPhones as extra displays")
+                    Text("Your iPads, iPhones and Macs as extra displays")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -970,41 +1135,14 @@ struct ContentView: View {
     }
 }
 
-/// "Check for Updates…" button wired to Sparkle. Follows Sparkle 2's
-/// documented SwiftUI pattern: a small view model publishes the updater's
-/// `canCheckForUpdates` so the button disables itself while a check is
-/// already running (or the updater isn't ready).
-@MainActor
-final class CheckForUpdatesViewModel: ObservableObject {
-    @Published var canCheckForUpdates = false
-
-    init(updater: SPUUpdater) {
-        updater.publisher(for: \.canCheckForUpdates)
-            .assign(to: &$canCheckForUpdates)
-    }
-}
-
-struct CheckForUpdatesView: View {
-    @ObservedObject private var viewModel: CheckForUpdatesViewModel
-    private let updater: SPUUpdater
-
-    init(updater: SPUStandardUpdaterController) {
-        self.updater = updater.updater
-        self.viewModel = CheckForUpdatesViewModel(updater: updater.updater)
-    }
-
-    var body: some View {
-        Button("Check for Updates…") { updater.checkForUpdates() }
-            .controlSize(.small)
-            .disabled(!viewModel.canCheckForUpdates)
-    }
-}
-
 /// One connected device: live status, throughput, reconnect + disconnect.
+@MainActor
 struct SessionRow: View {
     let title: String
     @ObservedObject var session: DeviceSession
     let controller: SenderController
+    @State private var confirmingShutdown = false
+    @State private var choosingDisplaySize = false
 
     private var statusColor: Color {
         if session.status.hasPrefix("Extending") || session.status.hasPrefix("Mirroring")
@@ -1030,20 +1168,80 @@ struct SessionRow: View {
                     .lineLimit(2)
             }
             Spacer()
-            if session.mbps > 0 {
-                Text("\(String(format: "%.1f", session.mbps)) Mbit/s")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
+            // A live session recovers on its own (liveness watchdog, redial,
+            // transport failover), so only a failed start gets a button.
+            if session.failed {
+                Button("Retry") { controller.retry(session) }
+                    .controlSize(.small)
+                    .help("Start this connection over")
             }
-            Button {
-                session.sender.forceReconnect()
-            } label: {
-                Image(systemName: "arrow.clockwise")
+            if session.powerActions.contains(.shutdown) {
+                Button {
+                    confirmingShutdown = true
+                } label: {
+                    Image(systemName: "power")
+                }
+                .controlSize(.small)
+                .help("Shut down \(title)")
+                .confirmationDialog("Shut down \(title) now?", isPresented: $confirmingShutdown) {
+                    Button("Shut Down", role: .destructive) { session.sender.requestPower(.shutdown) }
+                } message: {
+                    Text("Apps on it with unsaved changes can still stop the shutdown.")
+                }
             }
-            .controlSize(.small)
-            .help("Drop the connection and pair with the device again")
+            if !session.displaySizeOutcomes.isEmpty {
+                Button {
+                    choosingDisplaySize = true
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .controlSize(.small)
+                .help("Display size of \(title)")
+                .popover(isPresented: $choosingDisplaySize, arrowEdge: .bottom) {
+                    DisplaySizePicker(session: session)
+                }
+            }
             Button("Disconnect") { controller.disconnect(session) }
                 .controlSize(.small)
         }
     }
 }
+
+/// The per-device desktop size, macOS Displays style: each choice with the
+/// exact desktop it gives underneath, and the stream when it is not 1:1.
+@MainActor
+struct DisplaySizePicker: View {
+    @ObservedObject var session: DeviceSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Display size").font(.headline)
+            Picker("Display size", selection: Binding(
+                get: { session.displaySize },
+                set: { session.setDisplaySize($0) })) {
+                ForEach(session.displaySizeOutcomes, id: \.choice) { outcome in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(outcome.choice.title)
+                        Text(caption(for: outcome))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                    .tag(outcome.choice)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+        }
+        .padding(14)
+        .fixedSize()
+        .onAppear { session.refreshDisplaySize() }
+    }
+
+    private func caption(for outcome: DisplaySizeOutcome) -> String {
+        let sameAsDefault = outcome.choice != .default
+            && outcome.desktop == session.displaySizeOutcomes.first(where: { $0.choice == .default })?.desktop
+        return outcome.caption + (sameAsDefault ? " (same as Default)" : "")
+    }
+}
+

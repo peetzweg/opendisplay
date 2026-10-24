@@ -7,6 +7,10 @@ support. This is the spec for issues
 orchestration), [#135](https://github.com/peetzweg/opendisplay/issues/135)
 (force update), and the wire-protocol handshake.
 
+The wire protocol itself — framing, discovery, the video format, and the
+full control-message catalog — is specified in [PROTOCOL.md](PROTOCOL.md).
+This document is the companion policy for *evolving* it.
+
 > Status: **draft / not yet fully implemented.** Phase 1 (version on the wire +
 > the remote-config force lever) is in progress. Sections marked _(planned)_
 > describe target behavior.
@@ -153,6 +157,29 @@ the floor once a force-capable build has spread.
 2. **Release 2**, only after the iOS build has had an App Store adoption window,
    raises the relevant `minPeer` and deletes the old path. Now old peers get a
    clean "please update" instead of a silent break.
+
+**Worked example: `hello.panel` (PROTOCOL.md 6.7).** The deprecated
+`pixelsWide/High` came to mean different things on different receivers (the
+Mac receiver sends points x 2), so instead of changing their meaning a new
+`panel` object carries the facts. Release N: both receivers send `panel`
+next to the old fields; the sender prefers `panel` and falls back to the old
+fields, reproducing the previous desktop exactly. Release N+1, a few weeks
+after N is on the App Store: bump `pv`, raise `minSupportedPeer`, delete the
+old fields and the fallback.
+
+| Sender | Receiver | `panel` | Result in release N |
+|---|---|---|---|
+| new | released Mac receiver | absent | previous behaviour (a 1x Mac still gets the old 2x desktop until Sparkle updates it) |
+| released | new Mac receiver | ignored | previous behaviour: the old fields are unchanged |
+| new | released iOS | absent | same desktop: the old formula is the new one for every iOS device |
+| released | new iOS | ignored | identical |
+| new | new Mac receiver | used | 1x desktops on non-Retina Macs, portrait limits, a scaled receiver mode honoured |
+| N+1 | below the floor | | `updateRequired` and the iOS force gate, never a silent break |
+
+Two stream changes come with the new sender whatever the receiver: a mirror
+stream is bounded by the receiver's panel (Balanced and Fast then scale from
+that bound), and on odd-width iPhone panels (1179 pixels) Balanced is 2
+pixels narrower, because presets scale from the even desktop.
 
 **Not supported / hazards:**
 

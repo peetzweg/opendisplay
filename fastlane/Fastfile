@@ -22,29 +22,58 @@ end
 platform :mac do
   desc "Build Developer ID-signed, notarized macOS app for direct distribution"
   lane :build_release do
+    build_notarized_mac_app(
+      scheme:    "OpenSidecarMac",
+      bundle_id: "com.peetzweg.opensidecar.mac",
+      name:      "OpenDisplay"
+    )
+  end
+
+  # The standalone receiver app (issue #241): same pipeline, own bundle id and
+  # DMG. Its Developer ID profile must exist in the match repo (run
+  # `fastlane match developer_id` once locally after adding the bundle id).
+  desc "Build the Developer ID-signed, notarized OpenDisplay Receiver app"
+  lane :build_receiver_release do
+    build_notarized_mac_app(
+      scheme:    "OpenSidecarMacReceiver",
+      bundle_id: "com.peetzweg.opensidecar.mac.receiver",
+      name:      "OpenDisplay Receiver"
+    )
+  end
+
+  # Shared body of the two Mac lanes. `name` is the PRODUCT_NAME (the .app
+  # basename); the DMG is named without spaces so release-asset URLs stay
+  # clean (`OpenDisplay.dmg`, `OpenDisplayReceiver.dmg`).
+  private_lane :build_notarized_mac_app do |options|
+    scheme    = options[:scheme]
+    bundle_id = options[:bundle_id]
+    name      = options[:name]
+    app       = "build/export/#{name}.app"
+    dmg       = "build/export/#{name.delete(' ')}.dmg"
+
     setup_ci if is_ci
     key = asc_api_key
     # Developer ID certs can't be managed via ASC API key — Apple limitation.
     # CI uses readonly: true so it just reads from the git repo, no Apple auth needed.
     match(
       type:           "developer_id",
-      app_identifier: "com.peetzweg.opensidecar.mac",
+      app_identifier: bundle_id,
       readonly:       is_ci
     )
     update_code_signing_settings(
       use_automatic_signing: false,
       path:                  "OpenSidecar.xcodeproj",
       code_sign_identity:    "Developer ID Application",
-      profile_name:          "match Direct com.peetzweg.opensidecar.mac macos",
-      targets:               ["OpenSidecarMac"]
+      profile_name:          "match Direct #{bundle_id} macos",
+      targets:               [scheme]
     )
     build_mac_app(
       project:          "OpenSidecar.xcodeproj",
-      scheme:           "OpenSidecarMac",
+      scheme:           scheme,
       configuration:    "Release",
       export_method:    "developer-id",
       output_directory: "build/export",
-      output_name:      "OpenDisplay",
+      output_name:      name,
       xcargs:           version_xcargs
     )
     # gym/notarize resolve relative paths against the repo root, but during a
@@ -53,8 +82,8 @@ platform :mac do
     # Keep the fastlane actions on repo-root-relative paths, and cd the shell
     # block to the repo root so every path agrees.
     notarize(
-      package:   "build/export/OpenDisplay.app",
-      bundle_id: "com.peetzweg.opensidecar.mac",
+      package:   app,
+      bundle_id: bundle_id,
       api_key:   key
     )
 
@@ -63,20 +92,19 @@ platform :mac do
     # step that is flaky in headless CI. Sign the DMG with the Developer ID
     # identity match installed, then notarize + staple it too — so the
     # downloaded disk image itself passes Gatekeeper without a prompt.
-    dmg = "build/export/OpenDisplay.dmg"
     sh(<<~BASH)
       set -euo pipefail
       cd "$(git rev-parse --show-toplevel)"
       rm -rf build/dmg-src
       mkdir -p build/dmg-src
-      cp -R build/export/OpenDisplay.app build/dmg-src/
+      cp -R "#{app}" build/dmg-src/
       ln -s /Applications build/dmg-src/Applications
-      hdiutil create -volname OpenDisplay -srcfolder build/dmg-src -ov -format UDZO #{dmg}
-      codesign --force --sign "Developer ID Application" --timestamp #{dmg}
+      hdiutil create -volname "#{name}" -srcfolder build/dmg-src -ov -format UDZO "#{dmg}"
+      codesign --force --sign "Developer ID Application" --timestamp "#{dmg}"
     BASH
     notarize(
       package:   dmg,
-      bundle_id: "com.peetzweg.opensidecar.mac",
+      bundle_id: bundle_id,
       api_key:   key
     )
   end

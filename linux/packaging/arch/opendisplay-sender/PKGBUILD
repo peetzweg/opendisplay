@@ -1,0 +1,70 @@
+# Maintainer: Philip Poloczek <839848+peetzweg@users.noreply.github.com>
+#
+# AUR source package for od-sender, built from an OpenDisplay `vX.Y.Z`
+# release tag (one version for all platforms; see RELEASING.md).
+# It links the system FFmpeg, so it survives FFmpeg soname bumps by being
+# rebuilt (rebuild-detector flags it).
+#
+#   ./bump.sh 1.26.0            new release: pkgver, sha256sums, .SRCINFO
+#   ./from-checkout.sh          build this checkout's HEAD instead of the tag
+#
+# The desktop entry and user unit ship inside the tag tarball, next to this
+# file, so the AUR repository only needs PKGBUILD and .SRCINFO.
+
+pkgname=opendisplay-sender
+pkgver=1.25.0
+# GitHub names the tarball's top directory opendisplay-${pkgver}: it drops the
+# tag's leading v.
+_tag="v${pkgver}"
+pkgrel=1
+pkgdesc="OpenDisplay sender for Wayland: extend a Linux desktop onto an iPhone, iPad, Android device or Mac"
+arch=('x86_64' 'aarch64')
+url="https://opendisplay.app"
+license=('GPL-3.0-only')
+depends=(
+  'ffmpeg'       # libavcodec (libx264, V4L2 M2M) and libswscale; Wayland is pure Rust
+  'libpipewire'  # KDE backend: KWin virtual outputs arrive as PipeWire streams
+  'gcc-libs'
+  'glibc'
+)
+makedepends=('cargo' 'pkgconf' 'clang')  # clang: bindgen for ffmpeg-sys-next
+makedepends_x86_64=('nasm')              # OpenH264's x86 assembly (fallback encoder)
+# No provides=(): it names packages, and nothing depends on one called
+# od-sender (the binary's name).
+options=('!lto')  # cargo profile handles LTO
+
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/peetzweg/opendisplay/archive/refs/tags/${_tag}.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "opendisplay-${pkgver}/linux"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "opendisplay-${pkgver}/linux"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export OD_SENDER_VERSION="${pkgver}"  # no .git in the tarball
+  cargo build --frozen --release -p od-sender
+}
+
+check() {
+  cd "opendisplay-${pkgver}/linux"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export OD_SENDER_VERSION="${pkgver}"  # no .git in the tarball
+  # Unit tests only: nothing here needs a compositor or the network.
+  cargo test --frozen --release -p od-sender
+}
+
+package() {
+  cd "opendisplay-${pkgver}"
+  local _pkg=linux/packaging/arch/opendisplay-sender
+  install -Dm755 linux/target/release/od-sender "${pkgdir}/usr/bin/od-sender"
+  install -Dm644 "${_pkg}/od-sender.desktop" "${pkgdir}/usr/share/applications/od-sender.desktop"
+  install -Dm644 "${_pkg}/od-sender@.service" "${pkgdir}/usr/lib/systemd/user/od-sender@.service"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 PROTOCOL.md "${pkgdir}/usr/share/doc/${pkgname}/PROTOCOL.md"
+}
