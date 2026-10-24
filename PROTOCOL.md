@@ -110,11 +110,11 @@ this has no protocol significance.
 ### 2.3 USB (Android devices)
 
 Android has no usbmuxd. The official sender reaches an Android receiver on
-the cable in one of two ways; either way the byte stream is exactly the one
+the cable through Android Open Accessory (AOA), which works on any Android
+device with no developer settings. The byte stream is exactly the one
 described in this document, and the receiver opens it with `hello`.
 
-**Accessory mode (AOA).** Works on any Android device, with no developer
-settings. The sender sends the Android Open Accessory control requests
+The sender sends the Android Open Accessory control requests
 (`GET_PROTOCOL` 51, `SEND_STRING` 52, `START` 53) with this identity:
 
 | Index | String | Note |
@@ -145,11 +145,6 @@ pair carries the stream, sender to receiver and back. Rules:
 * Because every dial opens the app on the device, a receiver leaving the
   foreground while the screen is on announces `closing` rather than
   `sleeping` on this transport, so the sender does not redial it.
-
-**adb forward.** With USB debugging on, the sender forwards a local port
-to 9000 on the device through the adb server and dials it. adb accepts the
-local connection even when nothing listens on the device, so only the
-receiver's first message proves a live receiver.
 
 ## 3. Framing
 

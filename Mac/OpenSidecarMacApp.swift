@@ -211,12 +211,11 @@ final class SenderController: ObservableObject {
 
     @Published var sessions: [DeviceSession] = []
     @Published var discovered: [NWBrowser.Result] = []
-    // Every cabled device: usbmuxd's iPhones and iPads plus Android devices,
-    // in accessory mode (udid `aoa:<serial>`) or through adb (`adb:<serial>`).
-    // The connection policy treats them alike.
+    // Every cabled device: usbmuxd's iPhones and iPads plus Android devices
+    // in accessory mode (udid `aoa:<serial>`). The connection policy treats
+    // them alike.
     @Published var usbDevices: [UsbmuxDevice] = []
     private var usbmuxDevices: [UsbmuxDevice] = []
-    private var adbDevices: [UsbmuxDevice] = []
     private var accessoryDevices: [UsbmuxDevice] = []
     // `-host x.x.x.x` / `-port n` bypass usbmuxd with a manual TCP endpoint
     // (debugging escape hatch, e.g. an iproxy or SSH tunnel).
@@ -232,7 +231,6 @@ final class SenderController: ObservableObject {
 
     private var browser: NWBrowser?
     private var usbWatcher: UsbmuxDeviceWatcher?
-    private var adbWatcher: AdbDeviceWatcher?
     private var accessoryWatcher: AccessoryDeviceWatcher?
 
     // Connection policy — one session per physical device, and the cable
@@ -300,10 +298,6 @@ final class SenderController: ObservableObject {
         startBrowsing()
         usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
             self?.usbmuxDevices = devices
-            self?.wiredDevicesChanged()
-        }
-        adbWatcher = AdbDeviceWatcher { [weak self] devices in
-            self?.adbDevices = devices
             self?.wiredDevicesChanged()
         }
         accessoryWatcher = AccessoryDeviceWatcher { [weak self] devices in
@@ -432,16 +426,12 @@ final class SenderController: ObservableObject {
 
     /// Dialing an Android device in accessory mode switches its USB mode and
     /// opens the receiver app on it, so plugging in only connects a device
-    /// that streamed over the cable before (its install id is known) or has
-    /// USB debugging on (a developer who connects it on purpose). Anything
-    /// else is any Android phone plugged in to charge: the first connect is
-    /// a click in the device list.
+    /// that streamed over the cable before (its install id is known).
+    /// Anything else is any Android phone plugged in to charge: the first
+    /// connect is a click in the device list.
     private func connectsOnAttach(_ device: UsbmuxDevice) -> Bool {
-        guard let serial = AOA.serial(fromUDID: device.udid) else { return true }
-        guard !receiverClosedOnCable.contains(device.udid) else { return false }
-        let adbUDID = AdbParsing.udid(serial: serial)
-        return installIDByUDID[device.udid] != nil || installIDByUDID[adbUDID] != nil
-            || adbDevices.contains { $0.udid == adbUDID }
+        guard AOA.serial(fromUDID: device.udid) != nil else { return true }
+        return !receiverClosedOnCable.contains(device.udid) && installIDByUDID[device.udid] != nil
     }
 
     /// A Mac receiver just appeared on the direct cable: connect to it unless
@@ -483,13 +473,7 @@ final class SenderController: ObservableObject {
     }
 
     private func wiredDevicesChanged() {
-        // An Android device with USB debugging on shows up through both adb
-        // and accessory mode. Accessory mode wins: it needs no receiver
-        // already open on the device (attaching launches it).
-        let accessorySerials = Set(accessoryDevices.compactMap { AOA.serial(fromUDID: $0.udid) })
-        let devices = usbmuxDevices + accessoryDevices + adbDevices.filter {
-            AdbParsing.serial(fromUDID: $0.udid).map { !accessorySerials.contains($0) } ?? true
-        }
+        let devices = usbmuxDevices + accessoryDevices
         let detached = Set(usbDevices.map(\.udid)).subtracting(devices.map(\.udid))
         usbDevices = devices
         receiverClosedOnCable.subtract(detached)
@@ -497,12 +481,8 @@ final class SenderController: ObservableObject {
         autoConnect()
     }
 
-    /// How to dial a cabled device: usbmuxd, or accessory mode or an adb
-    /// forward for Android.
+    /// How to dial a cabled device: usbmuxd, or accessory mode for Android.
     private func wiredTransport(udid: String?, port: UInt16) -> SenderTransport {
-        if let serial = udid.flatMap(AdbParsing.serial(fromUDID:)) {
-            return .adb(serial: serial, port: port)
-        }
         if let serial = udid.flatMap(AOA.serial(fromUDID:)) {
             return .accessory(serial: serial)
         }
@@ -604,7 +584,7 @@ final class SenderController: ObservableObject {
                 return name
             }
             if udid == nil { return "Manual (\(host):\(port))" }
-            return udid.flatMap(AdbParsing.serial(fromUDID:)) == nil ? "iPhone / iPad" : "Android device"
+            return udid.flatMap(AOA.serial(fromUDID:)) == nil ? "iPhone / iPad" : "Android device"
         case .wifi(let result):
             return serviceName(of: result) ?? "WiFi device"
         }

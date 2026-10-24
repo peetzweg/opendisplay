@@ -10,8 +10,7 @@
 //
 // The bulk pair is a byte stream, which is all the protocol needs, so the
 // sender keeps its NWConnection pipeline unchanged: a relay accepts one
-// loopback TCP connection and pumps it to and from the pipes, the way an
-// adb forward does. One accessory attachment is one session. The relay ends
+// loopback TCP connection and pumps it to and from the pipes. One accessory attachment is one session. The relay ends
 // it by resetting the device, which drops the phone back to its normal USB
 // mode (file transfer works again) and tells the receiver the session is
 // over; the next dial starts with a fresh handshake.
@@ -59,7 +58,7 @@ enum AOA {
     enum Failure: Error, LocalizedError {
         case noDevice          // the serial is not attached
         case notSupported      // the device does not speak AOA
-        case notAccessory      // START sent, but it never came back as an accessory
+        case notAccessory      // START sent, but it never came back as an accessory (locked?)
         case noApp             // accessory up, but the receiver never said hello
         case noInterface
 
@@ -84,11 +83,14 @@ enum AOA {
     private static let dialLock = SerialLock()
 
     /// Walk the device into accessory mode and connect to its receiver
-    /// through a loopback relay. Like Adb.dial, returns the receiver's first
-    /// message (hello): only that proves the app is up behind the pipes.
+    /// through a loopback relay. Returns the receiver's first message
+    /// (hello): only that proves the app is up behind the pipes.
     static func dial(serial: String, queue: DispatchQueue) async throws -> (NWConnection, Data) {
         await dialLock.acquire(serial)
         defer { Task { await dialLock.release(serial) } }
+        // Superseded while queued behind another dial: closing the relay
+        // below would end the newer session.
+        try Task.checkCancellation()
 
         AccessoryRelay.close(serial: serial)
         guard var device = try await waitForDevice(serial: serial, timeout: .seconds(5)) else {
@@ -107,17 +109,26 @@ enum AOA {
             }
             device = normal
         }
-        do {
-            try handshake(device.service)
-        } catch {
-            device.release()
-            throw error
-        }
         device.release()
-        guard let accessory = try await waitForDevice(serial: serial, accessory: true,
-                                                      timeout: reenumerationTimeout) else {
-            throw Failure.notAccessory
+        // A locked Pixel ignores START until it is unlocked, so the handshake
+        // repeats every 2 s until the device re-enumerates or time runs out:
+        // unlocking then connects within seconds instead of after a timeout.
+        var found: Device?
+        let deadline = ContinuousClock.now + reenumerationTimeout
+        while found == nil, ContinuousClock.now < deadline {
+            if let current = findDevice(serial: serial) {
+                if current.isAccessory {
+                    found = current
+                    break
+                }
+                try Task.checkCancellation()
+                // A device mid re-enumeration may not answer; the next round asks again.
+                try? handshake(current.service)
+                current.release()
+            }
+            found = try await waitForDevice(serial: serial, accessory: true, timeout: .seconds(2))
         }
+        guard let accessory = found else { throw Failure.notAccessory }
         defer { accessory.release() }
         let relay: AccessoryRelay
         do {
@@ -230,9 +241,10 @@ enum AOA {
                                       length: UInt16(bytes.length)),
                               data: bytes, bytesTransferred: &transferred, completionTimeout: 1)
         }
-        // The device leaves the bus on this one.
-        try device.__send(request(0x40, start), data: nil as NSMutableData?,
-                          bytesTransferred: nil as UnsafeMutablePointer<Int>?, completionTimeout: 1)
+        // The device leaves the bus on this one, sometimes before the status
+        // stage completes: the caller's wait for the accessory is the verdict.
+        try? device.__send(request(0x40, start), data: nil as NSMutableData?,
+                           bytesTransferred: nil as UnsafeMutablePointer<Int>?, completionTimeout: 1)
         Log.info("AOA: accessory mode requested")
     }
 
@@ -346,14 +358,58 @@ final class AccessoryRelay {
         queue.asyncAfter(deadline: .now() + helloTimeout, execute: deadline)
         defer { deadline.cancel() }
         do {
-            try await Adb.start(conn, queue: queue)
-            let header = try await Adb.receive(exactly: 4, on: conn)
-            let length = Int(UInt32(bigEndian: header.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }))
-            guard length > 0, length < 1 << 20 else { throw AOA.Failure.noApp }
-            return (conn, try await Adb.receive(exactly: length, on: conn))
+            // A superseded dial (the session stopped or moved on) gives up
+            // at once instead of holding the device until the deadline.
+            return try await withTaskCancellationHandler {
+                try await Self.start(conn, queue: queue)
+                let header = try await Self.receive(exactly: 4, on: conn)
+                let length = Int(UInt32(bigEndian: header.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }))
+                guard length > 0, length < 1 << 20 else { throw AOA.Failure.noApp }
+                return (conn, try await Self.receive(exactly: length, on: conn))
+            } onCancel: {
+                conn.cancel()
+            }
         } catch {
             conn.cancel()
-            throw AOA.Failure.noApp
+            throw Task.isCancelled ? CancellationError() : AOA.Failure.noApp
+        }
+    }
+
+    private static func start(_ conn: NWConnection, queue: DispatchQueue) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            var resumed = false   // the handler fires on `queue` (serial)
+            conn.stateUpdateHandler = { state in
+                guard !resumed else { return }
+                switch state {
+                case .ready:
+                    resumed = true
+                    cont.resume()
+                case .failed(let error), .waiting(let error):
+                    // Loopback has no path changes to wait for.
+                    resumed = true
+                    conn.cancel()
+                    cont.resume(throwing: error)
+                case .cancelled:
+                    resumed = true
+                    cont.resume(throwing: CancellationError())
+                default:
+                    break
+                }
+            }
+            conn.start(queue: queue)
+        }
+        conn.stateUpdateHandler = nil
+    }
+
+    private static func receive(exactly count: Int, on conn: NWConnection) async throws -> Data {
+        try await withCheckedThrowingContinuation { cont in
+            conn.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
+                if let data, data.count == count {
+                    cont.resume(returning: data)
+                } else {
+                    cont.resume(throwing: error ?? AOA.Failure.noApp)
+                }
+            }
         }
     }
 
