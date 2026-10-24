@@ -417,7 +417,7 @@ final class AccessoryRelay {
         try await withCheckedThrowingContinuation { continuation in
             let resumed = OSAllocatedUnfairLock(initialState: false)
             let resume: (Result<NWEndpoint.Port, Error>) -> Void = { result in
-                guard !resumed.withLock({ defer { $0 = true }; return $0 }) else { return }
+                guard !resumed.withLock({ done in let was = done; done = true; return was }) else { return }
                 continuation.resume(with: result)
             }
             listener.stateUpdateHandler = { [weak self] state in
@@ -514,7 +514,7 @@ final class AccessoryRelay {
     /// End the session: drop the socket, release the pipes and reset the
     /// device so the phone leaves accessory mode. Idempotent.
     func close() {
-        guard !closed.withLock({ defer { $0 = true }; return $0 }) else { return }
+        guard !closed.withLock({ done in let was = done; done = true; return was }) else { return }
         AccessoryRelay.live.withLock { live in
             if live[serial] === self { live[serial] = nil }
         }
