@@ -113,6 +113,9 @@ class ReceiverServer(
 
     val isConnected: Boolean get() = synchronized(lock) { current?.isOpen == true }
 
+    val isOnAccessory: Boolean
+        get() = synchronized(lock) { current?.takeIf { it.isOpen }?.link is AccessoryLink }
+
     // region Accept and adopt
 
     private fun live(gen: Int) = running && gen == generation
@@ -367,7 +370,7 @@ class ReceiverServer(
 
     // endregion
 
-    private inner class Session(private val link: Link, private val initial: ByteArray?) {
+    private inner class Session(val link: Link, private val initial: ByteArray?) {
         private val outbox = LinkedBlockingQueue<ByteArray>()
         @Volatile var isOpen = true
             private set

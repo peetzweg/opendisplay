@@ -251,9 +251,10 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         super.onStop()
         main.removeCallbacks(resendHello)
         advertiser.unregister()
-        // Locked or backgrounded: the sender keeps waiting for us to come
-        // back (`sleeping`). Finishing ends the session for good (`closing`).
-        server.stop(if (isFinishing) "closing" else "sleeping")
+        val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
+        server.stop(stopAnnouncement(isFinishing, server.isOnAccessory,
+            power.isInteractive, keyguard.isKeyguardLocked))
     }
 
     override fun onDestroy() {
@@ -685,8 +686,26 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
 
-    private companion object {
-        const val TAG = "OpenDisplay"
+    companion object {
+        private const val TAG = "OpenDisplay"
+
+        /**
+         * Locked or backgrounded: the sender keeps waiting for us to come
+         * back (`sleeping`). Finishing ends the session for good (`closing`).
+         * Over the USB accessory the sender's redial re-attaches, and Android
+         * relaunches us for that: right after an unlock, hostile after the
+         * user left for another app with the screen on, so that is `closing`.
+         */
+        internal fun stopAnnouncement(
+            finishing: Boolean,
+            onAccessory: Boolean,
+            interactive: Boolean,
+            keyguardLocked: Boolean,
+        ): String = when {
+            finishing -> "closing"
+            onAccessory && interactive && !keyguardLocked -> "closing"
+            else -> "sleeping"
+        }
         const val SETTINGS = "settings"
         const val MATCH = FrameLayout.LayoutParams.MATCH_PARENT
         const val WRAP = FrameLayout.LayoutParams.WRAP_CONTENT
