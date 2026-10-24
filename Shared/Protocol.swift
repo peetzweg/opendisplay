@@ -38,6 +38,21 @@ enum WireMessage {
     static let power = "power"                      // Mac -> receiver: shut down (PROTOCOL.md 6.6)
 }
 
+/// Input features a sender announces in `welcome.input` (PROTOCOL.md 6.2).
+/// Additive at pv 3, no bump: a receiver uses a feature only when the sender
+/// lists it, so an older sender keeps getting the touch stream it understands.
+enum InputFeature {
+    /// `touch` may carry `button: "right"` (long press, two-finger tap).
+    static let button = "button"
+    /// `scroll` may carry `phase` (trackpad scroll and momentum phases).
+    static let scrollPhase = "scrollPhase"
+    /// `magnify` messages (two-finger pinch → trackpad magnify gesture).
+    static let magnify = "magnify"
+
+    /// Everything this build's sender handles, as announced in `welcome`.
+    static let sender = [button, scrollPhase, magnify]
+}
+
 /// What a `power` message asks the receiver to do (PROTOCOL.md 6.6). The
 /// wire says what, each receiver platform decides how.
 enum PowerAction: String, CaseIterable {

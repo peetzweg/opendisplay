@@ -77,8 +77,20 @@ final class StreamReceiver: ObservableObject {
     /// Mac protocol version from the most recent `welcome` message.
     @Published private(set) var macProtocolVersion = WireProtocol.assumedWhenAbsent
 
+    /// Input features from the most recent `welcome.input` (see InputFeature).
+    @Published private(set) var macInputFeatures: Set<String> = []
+
     /// True when the connected Mac understands pencil/proximity wire messages.
     var macSupportsPencilWire: Bool { macProtocolVersion >= WireProtocol.pencilWireVersion }
+
+    /// True when the connected Mac takes `touch.button` (right click by touch).
+    var macSupportsTouchButtons: Bool { macInputFeatures.contains(InputFeature.button) }
+
+    /// True when the connected Mac takes `scroll.phase` (trackpad-like scrolling).
+    var macSupportsScrollPhase: Bool { macInputFeatures.contains(InputFeature.scrollPhase) }
+
+    /// True when the connected Mac takes `magnify` (pinch to zoom).
+    var macSupportsMagnify: Bool { macInputFeatures.contains(InputFeature.magnify) }
 
     private var listener: NWListener?
     private var listenerHealthy = false
@@ -859,8 +871,10 @@ final class StreamReceiver: ObservableObject {
             // older than we support, it's the Mac that needs updating — and an
             // old Mac can't diagnose that itself, so we surface it here.
             let macPV = obj["pv"] as? Int ?? WireProtocol.assumedWhenAbsent
+            let input = Set(obj["input"] as? [String] ?? [])
             DispatchQueue.main.async {
                 self.macProtocolVersion = macPV
+                self.macInputFeatures = input
             }
             if macPV < WireProtocol.minSupportedPeer {
                 let msg = "OpenDisplay on the connecting computer is too old for this \(deviceKind) app. Update it there to reconnect."
@@ -1069,15 +1083,27 @@ final class StreamReceiver: ObservableObject {
     /// Touch events: x/y normalized [0,1] in video space, origin top-left.
     /// Stamped in *Mac* clock time (our clock + sync offset) so the Mac can
     /// measure touch→injection latency without doing its own clock sync.
-    func sendTouch(phase: String, x: Double, y: Double) {
+    /// `button` is `"right"` for a secondary press; only send it when
+    /// `macSupportsTouchButtons`, since older Macs would treat it as left.
+    func sendTouch(phase: String, x: Double, y: Double, button: String? = nil) {
         var msg: [String: Any] = ["type": "touch", "phase": phase, "x": x, "y": y]
+        if let button { msg["button"] = button }
         if let offset = clockOffsetMs { msg["t"] = nowMs + offset }
         sendControl(msg)
     }
 
     /// Two-finger scroll: dx/dy in video pixels (natural-scrolling sign).
-    func sendScroll(dx: Double, dy: Double) {
-        sendControl(["type": "scroll", "dx": dx, "dy": dy])
+    /// `phase` (PROTOCOL.md 6.1) only when `macSupportsScrollPhase`.
+    func sendScroll(dx: Double, dy: Double, phase: String? = nil) {
+        var msg: [String: Any] = ["type": "scroll", "dx": dx, "dy": dy]
+        if let phase { msg["phase"] = phase }
+        sendControl(msg)
+    }
+
+    /// Pinch: `magnification` is the relative scale change since the last
+    /// message. Only when `macSupportsMagnify`.
+    func sendMagnify(phase: String, magnification: Double) {
+        sendControl(["type": "magnify", "phase": phase, "m": magnification])
     }
 
     /// Apple Pencil stroke/hover. azimuth and altitude are radians.
@@ -1590,6 +1616,7 @@ final class StreamReceiver: ObservableObject {
             self.connected = value
             if !value {
                 self.macProtocolVersion = WireProtocol.assumedWhenAbsent
+                self.macInputFeatures = []
             }
         }
         if !value { setStatus("Ready to connect") }

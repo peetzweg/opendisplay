@@ -735,6 +735,18 @@ struct VideoLayerView: UIViewRepresentable {
         pan.maximumNumberOfTouches = 2
         view.addGestureRecognizer(pan)
 
+        // Two-finger tap = secondary click, as on a Mac trackpad.
+        let twoFingerTap = UITapGestureRecognizer(target: view, action: #selector(VideoView.didTwoFingerTap(_:)))
+        twoFingerTap.numberOfTouchesRequired = 2
+        // Single-finger taps must not wait for this recognizer to give up.
+        twoFingerTap.delaysTouchesEnded = false
+        view.addGestureRecognizer(twoFingerTap)
+
+        // Pinch = trackpad magnify. Not simultaneous with the two-finger pan:
+        // whichever the fingers commit to first wins, as on a trackpad.
+        let pinch = UIPinchGestureRecognizer(target: view, action: #selector(VideoView.didPinch(_:)))
+        view.addGestureRecognizer(pinch)
+
         // Local cursor echo: position updates ride the ~2ms control path
         // instead of the ~30ms video path, so the pointer feels native.
         receiver.onCursor = { [weak view] x, y, visible in
@@ -876,12 +888,22 @@ struct VideoLayerView: UIViewRepresentable {
         private var lastPan = CGPoint.zero
         private var lastNorm: (x: Double, y: Double) = (0.5, 0.5)
 
+        /// This gesture's scroll carries phases (the Mac announced `scrollPhase`).
+        private var scrollPhased = false
+        private var scrollStarted = false
+
         @objc func didTwoFingerPan(_ recognizer: UIPanGestureRecognizer) {
             guard let video = receiver?.videoSize, video != .zero else { return }
+            let scale = min(bounds.width / video.width, bounds.height / video.height)
             switch recognizer.state {
             case .began:
+                stopMomentum()
                 twoFingerActive = true
-                lastPan = .zero
+                // Start from where recognition happened: the slop the fingers
+                // travelled before it would otherwise land as one jump.
+                lastPan = recognizer.translation(in: self)
+                scrollPhased = receiver?.macSupportsScrollPhase ?? false
+                scrollStarted = false
                 // macOS delivers scroll to whatever sits under the cursor, and
                 // the cursor no longer follows the fingers now that a press is
                 // withheld until it commits. Put it on the gesture once, up
@@ -894,14 +916,131 @@ struct VideoLayerView: UIViewRepresentable {
                 }
             case .changed:
                 let t = recognizer.translation(in: self)
-                let scale = min(bounds.width / video.width, bounds.height / video.height)
                 // Deltas in video pixels, natural-scrolling direction.
-                receiver?.sendScroll(dx: (t.x - lastPan.x) / scale,
-                                     dy: (t.y - lastPan.y) / scale)
+                let dx = (t.x - lastPan.x) / scale, dy = (t.y - lastPan.y) / scale
                 lastPan = t
+                if scrollPhased {
+                    receiver?.sendScroll(dx: dx, dy: dy, phase: scrollStarted ? "changed" : "began")
+                    scrollStarted = true
+                } else {
+                    receiver?.sendScroll(dx: dx, dy: dy)
+                }
             default:
                 twoFingerActive = false
+                guard scrollPhased, scrollStarted else { return }
+                scrollStarted = false
+                receiver?.sendScroll(dx: 0, dy: 0, phase: "ended")
+                if recognizer.state == .ended {
+                    startMomentum(velocity: recognizer.velocity(in: self), videoScale: scale)
+                }
             }
+        }
+
+        // MARK: Scroll momentum
+        //
+        // A flick keeps the content coasting after the fingers lift, like a Mac
+        // trackpad. Generated here rather than on the Mac: the phone has the
+        // real finger velocity, the Mac only deltas after network jitter.
+        // Constants from Sill (#372): 0.96 decay per 1/60 s gives a 1–2 s
+        // coast, within a trackpad's 1.5–2.5 s.
+
+        private var momentumLink: CADisplayLink?
+        /// View points per second, natural-scrolling sign.
+        private var momentumVelocity = CGPoint.zero
+        private var momentumVideoScale: CGFloat = 1
+        private var momentumStarted = false
+        private var momentumLastTimestamp: CFTimeInterval = 0
+        /// Slower lift-offs are a deliberate stop, not a flick.
+        private let momentumMinimumSpeed: CGFloat = 150
+        private let momentumDecayPerFrame: CGFloat = 0.96
+        /// Coasting stops once a 60 Hz frame would move less than this (points).
+        private let momentumStopDelta: CGFloat = 0.3
+
+        private func startMomentum(velocity: CGPoint, videoScale: CGFloat) {
+            stopMomentum()
+            guard hypot(velocity.x, velocity.y) >= momentumMinimumSpeed else { return }
+            momentumVelocity = velocity
+            momentumVideoScale = videoScale
+            momentumStarted = false
+            momentumLastTimestamp = 0
+            let link = CADisplayLink(target: MomentumTarget(self), selector: #selector(MomentumTarget.tick(_:)))
+            // 60 Hz on ProMotion too, so the Mac's message rate does not double.
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
+            link.add(to: .main, forMode: .common)
+            momentumLink = link
+        }
+
+        fileprivate func momentumTick(_ link: CADisplayLink) {
+            let dt = momentumLastTimestamp == 0 ? 1.0 / 60 : link.timestamp - momentumLastTimestamp
+            momentumLastTimestamp = link.timestamp
+            let frames = CGFloat(dt * 60)
+            let decay = pow(momentumDecayPerFrame, frames)
+            momentumVelocity = CGPoint(x: momentumVelocity.x * decay, y: momentumVelocity.y * decay)
+            let dx = momentumVelocity.x * CGFloat(dt), dy = momentumVelocity.y * CGFloat(dt)
+            guard hypot(dx, dy) >= momentumStopDelta * frames else {
+                stopMomentum()
+                return
+            }
+            receiver?.sendScroll(dx: dx / momentumVideoScale, dy: dy / momentumVideoScale,
+                                 phase: momentumStarted ? "momentumChanged" : "momentumBegan")
+            momentumStarted = true
+        }
+
+        /// Stop coasting, e.g. because a finger landed: a touch on a trackpad
+        /// catches the content too.
+        private func stopMomentum() {
+            momentumLink?.invalidate()
+            momentumLink = nil
+            if momentumStarted {
+                momentumStarted = false
+                receiver?.sendScroll(dx: 0, dy: 0, phase: "momentumEnded")
+            }
+        }
+
+        override func willMove(toWindow newWindow: UIWindow?) {
+            super.willMove(toWindow: newWindow)
+            if newWindow == nil { stopMomentum() }
+        }
+
+        private var lastPinchScale: CGFloat = 1
+
+        /// A Mac without `magnify` would drop the pinch, so don't let it take
+        /// two fingers away from scrolling there.
+        override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            if recognizer is UIPinchGestureRecognizer, receiver?.macSupportsMagnify != true { return false }
+            return super.gestureRecognizerShouldBegin(recognizer)
+        }
+
+        @objc func didPinch(_ recognizer: UIPinchGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                stopMomentum()
+                // The Mac magnifies the window under the pointer: put it on the pinch.
+                if let n = normalized(recognizer.location(in: self)) {
+                    lastNorm = n
+                    receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
+                }
+                lastPinchScale = 1
+                fallthrough
+            case .changed:
+                // Relative change, so the Mac's running product equals the pinch.
+                let m = recognizer.scale / lastPinchScale - 1
+                lastPinchScale = recognizer.scale
+                receiver?.sendMagnify(phase: recognizer.state == .began ? "began" : "changed",
+                                      magnification: m)
+            case .ended:
+                receiver?.sendMagnify(phase: "ended", magnification: 0)
+            default:
+                receiver?.sendMagnify(phase: "cancelled", magnification: 0)
+            }
+        }
+
+        @objc func didTwoFingerTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended, receiver?.macSupportsTouchButtons == true,
+                  let n = normalized(recognizer.location(in: self)) else { return }
+            lastNorm = n
+            receiver?.sendTouch(phase: "began", x: n.x, y: n.y, button: "right")
+            receiver?.sendTouch(phase: "ended", x: n.x, y: n.y, button: "right")
         }
 
         // A press is only a click once we know a second finger is not coming.
@@ -919,8 +1058,13 @@ struct VideoLayerView: UIViewRepresentable {
         private let dragSlop: CGFloat = 10
         /// A press this long with no second finger is a deliberate hold, so
         /// commit it: press-and-hold menus and drag handles need the button.
+        /// Only for Macs without `touch.button`; newer ones get `longPressDelay`.
         private let holdDelay: TimeInterval = 0.12
+        /// A press held this long without moving is a secondary click, the way
+        /// macOS 27 Sidecar and UIKit's long press read it. Moving first is a drag.
+        private let longPressDelay: TimeInterval = 0.5
         private var pendingDownPoint: CGPoint = .zero
+        private let secondaryClickFeedback = UIImpactFeedbackGenerator(style: .medium)
 
         /// Emit the withheld `began`, at the point the finger first landed so a
         /// drag starts where the user touched rather than where slop was crossed.
@@ -932,6 +1076,16 @@ struct VideoLayerView: UIViewRepresentable {
             receiver?.sendTouch(phase: "began", x: p.x, y: p.y)
         }
 
+        /// The finger stayed put for `longPressDelay`: press the secondary
+        /// button there instead. The rest of the touch drags and releases it.
+        private func commitSecondaryPress() {
+            guard let p = pendingDown, !downSent else { return }
+            downSent = true
+            holdTimer = nil
+            secondaryClickFeedback.impactOccurred()
+            receiver?.sendTouch(phase: "began", x: p.x, y: p.y, button: "right")
+        }
+
         /// Drop the press without a trace. Nothing reached the Mac, so there is
         /// no button to release and no click to suppress.
         private func discardPendingDown() {
@@ -939,6 +1093,160 @@ struct VideoLayerView: UIViewRepresentable {
             downSent = false
             holdTimer?.cancel()
             holdTimer = nil
+            intent = .deciding
+        }
+
+        // MARK: One finger, touchscreen style
+        //
+        // With a Mac that takes `touch.button` and `scroll.phase`, one finger
+        // behaves as on the iPhone itself and as in macOS 27 Sidecar: dragging
+        // scrolls; to select or drag something, hold still for
+        // `longPressDelay` (a tap of haptics confirms), then move; holding and
+        // lifting without moving is a secondary click; a tap is a click.
+
+        private enum FingerIntent { case deciding, scrolling, held, pressing }
+        private var intent = FingerIntent.deciding
+        /// Fixed per press: the touchscreen-style rules apply to this one.
+        private var touchScrolls = false
+        private var fingerScrollStarted = false
+        private var lastFingerPoint = CGPoint.zero
+        /// Recent (timestamp, location) samples for the lift-off velocity.
+        private var fingerSamples: [(t: TimeInterval, p: CGPoint)] = []
+
+        private func videoScale() -> CGFloat? {
+            guard let video = receiver?.videoSize, video != .zero else { return nil }
+            return min(bounds.width / video.width, bounds.height / video.height)
+        }
+
+        /// The finger stayed put for `longPressDelay`: from now on moving drags
+        /// with the button down, lifting is a secondary click.
+        private func armHold() {
+            guard intent == .deciding, pendingDown != nil else { return }
+            intent = .held
+            holdTimer = nil
+            secondaryClickFeedback.impactOccurred()
+        }
+
+        private func beginFingerScroll(at location: CGPoint, time: TimeInterval) {
+            intent = .scrolling
+            holdTimer?.cancel()
+            holdTimer = nil
+            // The Mac scrolls whatever is under the pointer: put it where the
+            // finger landed, once, as the two-finger pan does.
+            if let p = pendingDown { receiver?.sendTouch(phase: "moved", x: p.x, y: p.y) }
+            pendingDown = nil
+            fingerScrollStarted = false
+            // Start from here, not from the landing point, so the slop is not
+            // one jump.
+            lastFingerPoint = location
+            fingerSamples = [(time, location)]
+        }
+
+        private func continueFingerScroll(_ touch: UITouch, _ event: UIEvent?) {
+            guard let scale = videoScale() else { return }
+            var dx: CGFloat = 0, dy: CGFloat = 0
+            for t in event?.samples(for: touch) ?? [touch] {
+                let p = t.location(in: self)
+                dx += p.x - lastFingerPoint.x
+                dy += p.y - lastFingerPoint.y
+                lastFingerPoint = p
+                fingerSamples.append((t.timestamp, p))
+            }
+            if let last = fingerSamples.last?.t {
+                fingerSamples.removeAll { last - $0.t > 0.1 }
+            }
+            guard dx != 0 || dy != 0 else { return }
+            // Natural direction: content follows the finger.
+            receiver?.sendScroll(dx: dx / scale, dy: dy / scale,
+                                 phase: fingerScrollStarted ? "changed" : "began")
+            fingerScrollStarted = true
+        }
+
+        private func endFingerScroll(liftedAt time: TimeInterval?) {
+            if fingerScrollStarted {
+                receiver?.sendScroll(dx: 0, dy: 0, phase: "ended")
+                // Velocity over the last ~0.1 s; a finger that stopped before
+                // lifting has none (it set the content down, no flick).
+                if let time, let scale = videoScale(),
+                   let first = fingerSamples.first, let last = fingerSamples.last,
+                   last.t - first.t > 0.008, time - last.t < 0.05 {
+                    let dt = CGFloat(last.t - first.t)
+                    startMomentum(velocity: CGPoint(x: (last.p.x - first.p.x) / dt,
+                                                    y: (last.p.y - first.p.y) / dt),
+                                  videoScale: scale)
+                }
+            }
+            fingerScrollStarted = false
+            fingerSamples = []
+            intent = .deciding
+        }
+
+        private func sendTouchscreen(_ phase: String, _ touch: UITouch, _ norm: (x: Double, y: Double), _ event: UIEvent?) {
+            let location = touch.location(in: self)
+            switch phase {
+            case "began":
+                pendingDown = norm
+                pendingDownPoint = location
+                downSent = false
+                intent = .deciding
+                secondaryClickFeedback.prepare()
+                let work = DispatchWorkItem { [weak self] in self?.armHold() }
+                holdTimer = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + longPressDelay, execute: work)
+            case "moved":
+                let moved = hypot(location.x - pendingDownPoint.x, location.y - pendingDownPoint.y)
+                switch intent {
+                case .deciding:
+                    if moved > dragSlop { beginFingerScroll(at: location, time: touch.timestamp) }
+                case .scrolling:
+                    continueFingerScroll(touch, event)
+                case .held:
+                    guard moved > dragSlop else { return }
+                    intent = .pressing
+                    commitPendingDown()
+                    forwardMoves(touch, event)
+                case .pressing:
+                    forwardMoves(touch, event)
+                }
+            case "ended":
+                switch intent {
+                case .deciding:
+                    // A tap: nothing was posted yet, so post the whole click now.
+                    commitPendingDown()
+                    if downSent { receiver?.sendTouch(phase: "ended", x: norm.x, y: norm.y) }
+                case .held:
+                    if let p = pendingDown {
+                        receiver?.sendTouch(phase: "began", x: p.x, y: p.y, button: "right")
+                        receiver?.sendTouch(phase: "ended", x: p.x, y: p.y, button: "right")
+                    }
+                case .scrolling:
+                    endFingerScroll(liftedAt: touch.timestamp)
+                case .pressing:
+                    receiver?.sendTouch(phase: "ended", x: norm.x, y: norm.y)
+                }
+                discardPendingDown()
+            default:   // cancelled
+                if intent == .scrolling { endFingerScroll(liftedAt: nil) }
+                if downSent { receiver?.sendTouch(phase: "cancelled", x: norm.x, y: norm.y) }
+                discardPendingDown()
+            }
+        }
+
+        /// Forward every coalesced sample so the Mac gets the full-rate drag,
+        /// then UIKit's predicted touch so the cursor leads toward where the
+        /// finger will be (~1 frame of perceived latency back; corrected by the
+        /// next real sample).
+        private func forwardMoves(_ touch: UITouch, _ event: UIEvent?) {
+            for t in event?.samples(for: touch) ?? [touch] {
+                if let n = normalized(t.location(in: self)) {
+                    lastNorm = n
+                    receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
+                }
+            }
+            if let predicted = event?.predictedTouches(for: touch)?.last,
+               let n = normalized(predicted.location(in: self)) {
+                receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
+            }
         }
 
         private func send(_ phase: String, _ touches: Set<UITouch>, _ event: UIEvent?) {
@@ -947,6 +1255,7 @@ struct VideoLayerView: UIViewRepresentable {
             // Ignore single-finger events while a two-finger gesture runs,
             // and end the click if a second finger joins mid-press.
             if twoFingerActive || (event?.allTouches?.filter { isFinger($0) }.count ?? 1) > 1 {
+                if intent == .scrolling { endFingerScroll(liftedAt: nil) }
                 if downSent {
                     receiver?.sendTouch(phase: "cancelled", x: lastNorm.x, y: lastNorm.y)
                 }
@@ -957,15 +1266,29 @@ struct VideoLayerView: UIViewRepresentable {
                   let norm = normalized(touch.location(in: self)) else { return }
             lastNorm = norm
 
+            if phase == "began" {
+                touchScrolls = (receiver?.macSupportsTouchButtons ?? false)
+                    && (receiver?.macSupportsScrollPhase ?? false)
+            }
+            if touchScrolls {
+                sendTouchscreen(phase, touch, norm, event)
+                return
+            }
+
             switch phase {
             case "began":
                 let location = touch.location(in: self)
                 pendingDown = norm
                 pendingDownPoint = location
                 downSent = false
-                let work = DispatchWorkItem { [weak self] in self?.commitPendingDown() }
+                let secondary = receiver?.macSupportsTouchButtons ?? false
+                if secondary { secondaryClickFeedback.prepare() }
+                let work = DispatchWorkItem { [weak self] in
+                    if secondary { self?.commitSecondaryPress() } else { self?.commitPendingDown() }
+                }
                 holdTimer = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: work)
+                DispatchQueue.main.asyncAfter(deadline: .now() + (secondary ? longPressDelay : holdDelay),
+                                              execute: work)
                 return
             case "ended":
                 // A tap: nothing was posted yet, so post the whole click now.
@@ -994,21 +1317,8 @@ struct VideoLayerView: UIViewRepresentable {
                 break
             }
 
-            if phase == "moved", let event {
-                // Forward every coalesced sample so the Mac gets the full-rate
-                // drag, then UIKit's predicted touch so the cursor leads toward
-                // where the finger will be (~1 frame of perceived latency back;
-                // corrected by the next real sample).
-                for t in event.samples(for: touch) {
-                    if let n = normalized(t.location(in: self)) {
-                        lastNorm = n
-                        receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
-                    }
-                }
-                if let predicted = event.predictedTouches(for: touch)?.last,
-                   let n = normalized(predicted.location(in: self)) {
-                    receiver?.sendTouch(phase: "moved", x: n.x, y: n.y)
-                }
+            if phase == "moved" {
+                forwardMoves(touch, event)
                 return
             }
             receiver?.sendTouch(phase: phase, x: norm.x, y: norm.y)
@@ -1053,6 +1363,7 @@ struct VideoLayerView: UIViewRepresentable {
         }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            stopMomentum()
             routeTouches("began", touches, event, ended: false)
         }
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -1064,6 +1375,18 @@ struct VideoLayerView: UIViewRepresentable {
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
             routeTouches("cancelled", touches, event, ended: true)
         }
+    }
+}
+
+/// CADisplayLink retains its target; this keeps the link from retaining the
+/// view, so a view torn down mid-coast is not kept alive by its own momentum.
+private final class MomentumTarget {
+    weak var view: VideoLayerView.VideoView?
+    init(_ view: VideoLayerView.VideoView) { self.view = view }
+
+    @objc func tick(_ link: CADisplayLink) {
+        guard let view else { link.invalidate(); return }
+        view.momentumTick(link)
     }
 }
 
