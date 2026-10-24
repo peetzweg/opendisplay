@@ -21,7 +21,7 @@ struct UsbmuxDevice: Hashable, Identifiable {
     var name: String?     // lockdown DeviceName ("Philip's iPhone"), best-effort
 
     var id: String { udid }
-    var label: String { "\(name ?? "iPhone / iPad") (USB)" }
+    var label: String { "\(name ?? String(localized: "iPhone / iPad")) (USB)" }
 }
 
 enum Usbmux {

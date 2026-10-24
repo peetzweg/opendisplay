@@ -1,0 +1,84 @@
+/* Simplified Chinese localization for the OpenDisplay macOS sender.
+   Keys match the English source strings; placeholders (%@, %d) are preserved. */
+
+// MARK: - Header
+"Your iPads, iPhones and Macs as extra displays" = "把你的 iPad、iPhone 和其他 Mac 当作额外显示器";
+"Disconnect All" = "全部断开";
+
+// MARK: - Devices
+"Devices" = "设备";
+"No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network." = "未发现设备——请用 USB 连接，或在同一 Wi-Fi 网络的设备上打开 OpenDisplay。";
+"Connect" = "连接";
+"Manual (%1$@:%2$@)" = "手动（%1$@:%2$@）";
+"iPhone / iPad" = "iPhone / iPad";
+"WiFi device" = "Wi-Fi 设备";
+"Cable" = "有线";
+
+// MARK: - Mode / Quality / Presentation
+"Mode" = "模式";
+"Extend" = "扩展";
+"Mirror" = "镜像";
+"Quality" = "画质";
+"Best" = "最佳";
+"Balanced" = "均衡";
+"Fast" = "流畅";
+"Highest safe detail for this sender and display." = "在当前发送端与屏幕下提供最高的安全清晰度。";
+"Lower capture resolution for less latency and bandwidth." = "降低采集分辨率，以减少延迟与带宽占用。";
+"Lowest latency and bandwidth, with a softer image. Good for WiFi." = "延迟和带宽最低，画面略柔和，适合 Wi-Fi。";
+"Show app in" = "应用显示方式";
+"Menu bar" = "菜单栏";
+"Dock" = "程序坞";
+"Background only" = "仅后台运行";
+"No menu bar or Dock icon — streaming keeps running. Open the OpenDisplay app again (Spotlight/Finder) to show this window." = "不显示菜单栏和程序坞图标，推流继续运行；再次打开 OpenDisplay（聚焦搜索/访达）即可显示此窗口。";
+
+// MARK: - Display layout
+"Display layout" = "显示器布局";
+"Arrange Displays…" = "排列显示器…";
+"Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device." = "打开「系统设置 → 显示器」，可相对于 Mac 屏幕摆放扩展屏（排列…）。每台设备都会作为一块独立显示器出现，并以设备命名。";
+
+// MARK: - Permissions
+"Permissions" = "权限";
+"Screen Recording" = "屏幕录制";
+"Required to capture the display." = "用于采集屏幕画面。";
+"Accessibility" = "辅助功能";
+"Required for touch input from the device." = "用于接收设备端的触控输入。";
+"Local Network" = "本地网络";
+"Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there." = "Wi-Fi 模式所需。若设备列表中没有设备，请在本机与设备的「隐私与安全性 → 本地网络」中允许 OpenDisplay，并保持设备上的 OpenDisplay 处于打开状态。";
+"Grant…" = "授权…";
+"Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under %@ in System Settings — flip the toggle there." = "向 macOS 请求该权限。若系统弹窗曾被关闭，这会把应用登记到系统设置中的 %@ 条目下——到那里打开开关即可。";
+"Open Settings" = "打开设置";
+
+// MARK: - Status bar
+"1 device connected" = "已连接 1 台设备";
+"%d devices connected" = "已连接 %d 台设备";
+"Idle" = "空闲";
+"Logs" = "日志";
+"Reveal the OpenDisplay log files in Finder" = "在访达中显示 OpenDisplay 日志文件";
+"Quit" = "退出";
+
+// MARK: - Session row
+"Retry" = "重试";
+"Start this connection over" = "重新建立此连接";
+"Shut down %@" = "关闭 %@";
+"Shut down %@ now?" = "现在关闭 %@ 吗？";
+"Shut Down" = "关机";
+"Apps on it with unsaved changes can still stop the shutdown." = "设备上有未保存更改的应用仍可中止关机。";
+"Display size of %@" = "%@ 的显示尺寸";
+"Disconnect" = "断开连接";
+
+// MARK: - Display size picker
+"Display size" = "显示尺寸";
+"Larger Text" = "更大文字";
+"Default" = "默认";
+"More Space" = "更多空间";
+"Native (1x)" = "原生（1x）";
+"Looks like %1$d × %2$d" = "外观尺寸 %1$d × %2$d";
+" (same as Default)" = "（与「默认」相同）";
+
+// MARK: - Errors
+"The display reported an invalid video size." = "显示器报告了无效的视频尺寸。";
+"The receiver does not support the selected video codec." = "接收端不支持所选视频编码。";
+"The receiver did not advertise a usable video configuration." = "接收端未提供可用的视频配置。";
+
+// MARK: - Updates
+"Check for Updates…" = "检查更新…";
