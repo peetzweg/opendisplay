@@ -1,0 +1,4 @@
+# Built by build.sh
+TouchProbe.app/
+# Machine-specific dumps from sidecar-dump.sh
+results/
