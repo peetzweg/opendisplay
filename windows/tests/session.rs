@@ -170,8 +170,9 @@ fn new_connection_replaces_old() {
     let mut b = Client::connect(port);
     assert_eq!(b.recv().unwrap()["type"], "hello");
     assert!(a.wait_closed() < Duration::from_secs(1));
+    // hello goes out before connected() records the session (§6.1), so b may see it first.
+    wait_for(|| rec.sessions.lock().unwrap().len() == 2);
     let sessions = rec.sessions.lock().unwrap();
-    assert_eq!(sessions.len(), 2);
     assert!(sessions[0].is_closed() && !sessions[1].is_closed());
 }
 
