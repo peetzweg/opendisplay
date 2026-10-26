@@ -18,7 +18,7 @@ release workflow handles these artifacts:
 | iPhone and iPad receiver | `OpenSidecariOS` | One universal build uploaded to TestFlight |
 | Linux sender (beta) | `linux/crates/od-sender` | `od-sender-{x86_64,aarch64}-unknown-linux-gnu.tar.gz` (static FFmpeg) on the same GitHub release |
 | Linux receiver (beta) | `linux/crates/od-receiver` | `od-receiver-{x86_64,aarch64}.flatpak` on the same GitHub release |
-| Android receiver | `Android/` (Gradle) | Signed `OpenDisplay-Android.apk` plus its `.sha256` on GitHub Releases |
+| Android receiver | `Android/` (Gradle) | Signed `OpenDisplay-Android.apk` plus its `.sha256` on GitHub Releases, and an App Bundle uploaded to a Google Play testing track |
 
 Both macOS apps are rebuilt and published on every release. The iPhone/iPad
 build is uploaded to TestFlight on every release, but publishing it to the App
@@ -47,7 +47,7 @@ release-please creates. There are no per-platform tags.
   use the version as `pkgver`; after the release, run
   `linux/packaging/arch/opendisplay-sender/bump.sh X.Y.Z` (and the
   receiver's) and commit the checksum and `.SRCINFO`.
-- **Android** (separate repository): see below.
+- **Android**: `versionName` is the tag, see below.
 
 The manifest's version must always be the latest released version. Never edit
 it by hand except when bringing this config to a branch: a branch that adds
@@ -57,31 +57,44 @@ version that already exists.
 
 ### Android receiver
 
-The Android app lives in its own repository and has no release-please of its
-own for the version number. To keep it in step:
+The app in `Android/` takes its version from the tag; nothing in the tree
+carries it. `versionName` is the tag without the `v`, and `versionCode` is
+major*1000000 + minor*10000 + patch*100 + rebuild (1.27.0 becomes 1270000).
+CI uses rebuild 0. A manual Play re-upload of the same version takes the next
+free rebuild number, because Play never frees a versionCode once used.
 
-- Take `versionName` from the latest `vX.Y.Z` tag of this repository
-  (`gh release view --repo peetzweg/opendisplay --json tagName --jq .tagName`,
-  minus the `v`), either by hand at release time or in its CI.
-- Derive `versionCode` monotonically from it, for example
-  `major * 10_000_000 + minor * 10_000 + patch * 100 + build` with `build`
-  0-99 for rebuilds of the same version (1.26.0 becomes 10260000), so a Play
-  upload is never rejected for a lower code.
-- An Android-only fix still goes out as `X.Y.Z` of the shared version: cut it
-  here first (a `fix(android):` commit or a `Release-As:` footer) and build the
-  Android app from that tag, so the version a user reports names the same
-  protocol and feature set on every platform.
-- Note the Android build in the release notes of the matching GitHub release.
+An Android-only fix still goes out as `X.Y.Z` of the shared version (a
+`fix(android):` commit), so the version a user reports names the same protocol
+and feature set on every platform.
 
-The Android APK is rebuilt and attached on every release, with `versionName`
-set to the tag and `versionCode` derived from it as major*1000000 +
-minor*10000 + patch*100 + rebuild (1.26.0 becomes 1260000). CI uses rebuild
-0; a manual Play re-upload of the same version takes the next free rebuild
-number, because Play never frees a versionCode. It is
-signed in CI with the `ANDROID_*` keystore secrets; without them the job builds
-but attaches nothing. Nothing updates Android installs: users replace the APK
-by hand, so a release does not reach them the way Sparkle or the App Store
-does.
+Every release builds two Android artifacts from the tag:
+
+- **GitHub APK** (`build-android`): minSdk 21, so Android 5 and 6 devices
+  work. Signed with our own app signing key from the `ANDROID_KEYSTORE_BASE64`,
+  `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`
+  secrets; without them the job builds but attaches nothing. APK installs do
+  not update themselves.
+- **Google Play bundle** (`upload-play`): minSdk 24 (Play rejects lower), signed
+  with the upload key and uploaded to a testing track, like the iOS build goes
+  to TestFlight. Releasing it to production is a manual promotion in Play
+  Console. Without its secrets the job uploads nothing and logs a warning.
+
+Play App Signing re-signs Play installs with a key Google generated, so a Play
+install and a GitHub APK cannot update each other: switching channel means
+uninstalling first.
+
+One-time setup for the Play upload:
+
+1. In Google Cloud Console, create a project, enable the **Google Play Android
+   Developer API**, create a service account and download a JSON key for it.
+2. In Play Console, **Users and permissions**: invite the service account's
+   email with release rights for the OpenDisplay app only.
+3. Add the secrets `PLAY_SERVICE_ACCOUNT_JSON` (the JSON file's contents),
+   `ANDROID_UPLOAD_KEYSTORE_BASE64` (`base64 -i upload.jks`),
+   `ANDROID_UPLOAD_KEYSTORE_PASSWORD` and `ANDROID_UPLOAD_KEY_ALIAS` (`upload`).
+4. If the closed testing track is not Play Console's default one, set the
+   repository variable `PLAY_TRACK` to its track name. The default closed
+   track is `alpha`.
 
 ## Release impact record
 

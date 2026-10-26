@@ -360,6 +360,7 @@ pub fn run(
         cursor.set_can_shrink(true);
         cursor.set_content_fit(gtk::ContentFit::Fill);
         cursor.set_can_target(false);
+        cursor.add_css_class("od-cursor");
         cursor.set_visible(false);
         fixed.put(&cursor, 0.0, 0.0);
 
@@ -375,7 +376,9 @@ pub fn run(
             .default_height(800)
             .build();
         let css = gtk::CssProvider::new();
-        css.load_from_string("window, picture { background: black; }");
+        css.load_from_string(
+            "window, picture { background: black; } picture.od-cursor { background: none; }",
+        );
         gtk::style_context_add_provider_for_display(
             &gtk::prelude::WidgetExt::display(&window),
             &css,

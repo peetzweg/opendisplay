@@ -90,3 +90,14 @@ jobs:
 
       - name: Google Play bundle (minSdk 24)
         run: ./gradlew --no-daemon bundleRelease -PappMinSdk=24
+
+      # The release workflow uploads that bundle with fastlane on Linux; a
+      # lane that no longer loads would otherwise first fail on release day.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: fastlane loads the Play upload lane
+        working-directory: .
+        run: bundle exec fastlane lanes | grep -q "android play_beta"

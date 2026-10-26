@@ -335,3 +335,81 @@ jobs:
       - name: Report skipped upload
         if: ${{ env.ANDROID_KEYSTORE_BASE64 == '' }}
         run: echo "::warning::ANDROID_KEYSTORE_BASE64 is not set, so no APK was attached to this release."
+
+  # Google Play: the same release as an Android App Bundle on a testing track,
+  # like build-ios does for TestFlight. Production stays a manual promotion in
+  # Play Console. Play only accepts minSdk 24, so this build raises it; the
+  # GitHub APK above keeps 21. The bundle is signed with the UPLOAD key
+  # (upload.jks), not the app signing key: Play checks the upload signature
+  # and re-signs with its own key. Inactive until the PLAY_* and
+  # ANDROID_UPLOAD_* secrets exist; see RELEASING.md.
+  upload-play:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    env:
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+      ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+    steps:
+      - name: Report skipped upload
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON == '' || env.ANDROID_UPLOAD_KEYSTORE_BASE64 == '' }}
+        run: echo "::warning::PLAY_SERVICE_ACCOUNT_JSON or ANDROID_UPLOAD_KEYSTORE_BASE64 is not set, so nothing was uploaded to Google Play."
+
+      - uses: actions/checkout@v6
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions/setup-java@v5
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Same versionCode formula as build-android, so the Play build and the
+      # APK of one release share it.
+      - name: Build Play bundle (minSdk 24)
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        working-directory: Android
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          CODE=$(( MAJOR * 1000000 + MINOR * 10000 + PATCH * 100 ))
+          ./gradlew --no-daemon bundleRelease -PappMinSdk=24 \
+            -PappVersionName="$VERSION" -PappVersionCode="$CODE"
+
+      - name: Sign bundle with the upload key
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_UPLOAD_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          mkdir -p dist
+          jarsigner -keystore "$RUNNER_TEMP/upload.jks" \
+            -storepass:env ANDROID_UPLOAD_KEYSTORE_PASSWORD \
+            -sigalg SHA256withRSA -digestalg SHA-256 \
+            -signedjar dist/OpenDisplay-play.aab \
+            Android/app/build/outputs/bundle/release/app-release.aab \
+            "$ANDROID_UPLOAD_KEY_ALIAS"
+          rm -f "$RUNNER_TEMP/upload.jks"
+          jarsigner -verify dist/OpenDisplay-play.aab
+
+      - uses: ruby/setup-ruby@v1
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      # PLAY_TRACK (repository variable) names the testing track; "alpha" is
+      # the API name of Play Console's default closed testing track.
+      - name: Upload to Google Play
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        env:
+          PLAY_AAB_PATH: ${{ github.workspace }}/dist/OpenDisplay-play.aab
+          PLAY_TRACK: ${{ vars.PLAY_TRACK || 'alpha' }}
+        run: bundle exec fastlane android play_beta

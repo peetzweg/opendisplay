@@ -3,19 +3,33 @@ title: Third-party Android receivers for OpenDisplay
 nav: Android receivers
 description: Community Android receivers for OpenDisplay, including one built for GrapheneOS and de-Googled Pixel devices, as alternatives to the official Android beta on Google Play.
 order: 3
-updated: 2026-10-23
+updated: 2026-10-24
 ---
 
 ## Official receiver first
 
 OpenDisplay has its own Android receiver, in public beta on Google Play
-(Android 7.0+, over Wi-Fi); the link is on the [home page](/). Use it if your
-device has Google Play.
+(Android 7.0+, over Wi-Fi or a USB cable); the link is on the
+[home page](/). Use it if your device has Google Play.
+
+### Over a USB cable
+
+No developer options, USB debugging or tethering needed:
+
+1. Plug the device into the Mac with OpenDisplay running.
+2. The first time, click the device in OpenDisplay on the Mac to connect.
+3. Android asks to open OpenDisplay for the USB accessory. Tick **Always**
+   and confirm.
+
+From then on, plugging in is enough: the Mac connects and Android opens the
+app by itself. While connected, the device's USB file transfer is off; it
+comes back when the session ends. A locked device connects once it is
+unlocked.
 
 The community receivers below are for devices without Google Play, such as
 **GrapheneOS** phones and tablets, or for connection setups the official
-beta does not cover yet, such as a USB cable or networks that block
-connections between devices.
+beta does not cover yet, such as networks that block connections between
+devices.
 
 > These are community projects, not official builds. See
 > [Third-party apps](/docs/third-party/) for what that means.
@@ -59,6 +73,6 @@ is an Android receiver that works with the **unmodified** OpenDisplay Mac app.
 |---|---|---|---|
 | Android | 7.0+ | 8.0+ (GrapheneOS focus) | 8.0+ |
 | Needs Google Play | Yes | No | No |
-| Connection | Wi-Fi | Wi-Fi, reverse connect, USB (adb, tethering) | Wi-Fi, USB (`adb forward`) |
+| Connection | Wi-Fi, USB | Wi-Fi, reverse connect, USB (adb, tethering) | Wi-Fi, USB (`adb forward`) |
 | Mac app | Official | Official; its own build for reverse connect | Official |
 | Install | Google Play | Build from source | APK from GitHub releases |

@@ -11,6 +11,7 @@
 "Connect" = "连接";
 "Manual (%1$@:%2$@)" = "手动（%1$@:%2$@）";
 "iPhone / iPad" = "iPhone / iPad";
+"Android device" = "Android 设备";
 "WiFi device" = "Wi-Fi 设备";
 "Cable" = "有线";
 
@@ -79,6 +80,8 @@
 "The display reported an invalid video size." = "显示器报告了无效的视频尺寸。";
 "The receiver does not support the selected video codec." = "接收端不支持所选视频编码。";
 "The receiver did not advertise a usable video configuration." = "接收端未提供可用的视频配置。";
+"Android device not attached" = "未连接 Android 设备";
+"OpenDisplay did not open on the device" = "设备上的 OpenDisplay 未打开";
 
 // MARK: - Updates
 "Check for Updates…" = "检查更新…";

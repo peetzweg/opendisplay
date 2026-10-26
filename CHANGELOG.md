@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.28.0](https://github.com/peetzweg/opendisplay/compare/v1.27.0...v1.28.0) (2026-10-24)
+
+
+### Features
+
+* connect Android over USB without adb ([#225](https://github.com/peetzweg/opendisplay/issues/225)) ([e8a7f0f](https://github.com/peetzweg/opendisplay/commit/e8a7f0fee2b260f3ac18462f1e788ab9dc7b7072))
+
+
+### Bug Fixes
+
+* **linux:** give the receiver's cursor sprite a transparent background ([#386](https://github.com/peetzweg/opendisplay/issues/386)) ([b9c5aca](https://github.com/peetzweg/opendisplay/commit/b9c5aca08eb8782e564fd02e9bc1e18bfef2a710))
+
+## [1.27.0](https://github.com/peetzweg/opendisplay/compare/v1.26.0...v1.27.0) (2026-10-24)
+
+
+### Features
+
+* **android:** Android receiver app ([#405](https://github.com/peetzweg/opendisplay/issues/405)) ([b664802](https://github.com/peetzweg/opendisplay/commit/b664802f519463f6dd113e689ace1af8a152b609))
+* **mac:** connect cabled Android devices through adb ([#404](https://github.com/peetzweg/opendisplay/issues/404)) ([df1872a](https://github.com/peetzweg/opendisplay/commit/df1872ae1ed0a4980be42ecb5e74c7d27afe4e63))
+* **site:** "On this page" outline on docs pages ([113aacd](https://github.com/peetzweg/opendisplay/commit/113aacdf3e80e7f029875337e4ee84eb132347a1))
+* **site:** Linux beta and a prerendered /docs section ([#396](https://github.com/peetzweg/opendisplay/issues/396)) ([f12f6fa](https://github.com/peetzweg/opendisplay/commit/f12f6fa2d515eeaa149ad54f922156193b08ef5b))
+* **site:** Third-party link in the docs header ([7ca036c](https://github.com/peetzweg/opendisplay/commit/7ca036c13753c9149068ad252c030abbc9308bfe))
+
+
+### Bug Fixes
+
+* **mac:** re-attach a capture that delivers another display ([#393](https://github.com/peetzweg/opendisplay/issues/393)) ([cde4fc8](https://github.com/peetzweg/opendisplay/commit/cde4fc81bbb184baccaef5687ec249be662311b1)), closes [#391](https://github.com/peetzweg/opendisplay/issues/391)
+* **mac:** renumber virtual displays in creation order on a unit clash ([#399](https://github.com/peetzweg/opendisplay/issues/399)) ([5de4252](https://github.com/peetzweg/opendisplay/commit/5de42527b8abc08b93ea688798d4efa34dc5db23)), closes [#391](https://github.com/peetzweg/opendisplay/issues/391)
+* **mac:** start the arrangement restore window on the first tick ([#392](https://github.com/peetzweg/opendisplay/issues/392)) ([1522cd2](https://github.com/peetzweg/opendisplay/commit/1522cd22699b21932d69c718b4afc18bee45d546)), closes [#390](https://github.com/peetzweg/opendisplay/issues/390)
+* **site:** short Linux cards; receivers two per row ([#400](https://github.com/peetzweg/opendisplay/issues/400)) ([6f4b474](https://github.com/peetzweg/opendisplay/commit/6f4b474bee767ca377a76a03a59c57153b310b2f))
+
 ## [1.26.0](https://github.com/peetzweg/opendisplay/compare/v1.25.0...v1.26.0) (2026-10-22)
 
 

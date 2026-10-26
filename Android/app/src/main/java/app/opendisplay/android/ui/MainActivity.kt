@@ -1,9 +1,16 @@
 package app.opendisplay.android.ui
 
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.BitmapFactory
+import android.hardware.usb.UsbAccessory
+import android.hardware.usb.UsbManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
@@ -25,6 +32,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import app.opendisplay.android.R
+import app.opendisplay.android.net.AccessoryLink
 import app.opendisplay.android.net.Advertiser
 import app.opendisplay.android.net.ReceiverServer
 import app.opendisplay.android.protocol.AnnexB
@@ -67,6 +75,25 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     private val stats = StreamStats()
 
     private lateinit var installId: String
+    // The accessory attachment a session already ran over. One attachment is
+    // one session: the sender resets the device to start another, which
+    // detaches it, so a used one is never reopened mid-stream.
+    private var usedAccessory: UsbAccessory? = null
+    // Asked once per attachment: the user declined the system dialog that
+    // launched us, or opened the app by hand while the sender waits.
+    private var permissionAsked: UsbAccessory? = null
+    private val accessoryDetached = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.i(TAG, "USB accessory detached")
+            usedAccessory = null
+            permissionAsked = null
+        }
+    }
+    private val accessoryPermission = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) takeAccessory()
+        }
+    }
     private lateinit var wifiLock: android.net.wifi.WifiManager.WifiLock
 
     // Read by network threads to build `hello`.
@@ -121,6 +148,10 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
             scheduler = gestureScheduler,
             senderPv = { server.senderPv },
         )
+        ContextCompat.registerReceiver(this, accessoryDetached,
+            IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED), ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, accessoryPermission,
+            IntentFilter(ACTION_USB_PERMISSION), ContextCompat.RECEIVER_NOT_EXPORTED)
         updatePanel()
         main.post(statsTick)
         // First run: OpenDisplay is two apps; say so until the first connection.
@@ -214,19 +245,33 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         server.start()
         advertiser.register(DeviceIdentity.serviceName(this), installId)
         refreshIdle()
+        // Launched by the attach intent, or attached while we were away.
+        takeAccessory()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // A stopped activity gets this before onStart, which takes it then.
+        if (intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED &&
+            lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+            takeAccessory()
+        }
     }
 
     override fun onStop() {
         super.onStop()
         main.removeCallbacks(resendHello)
         advertiser.unregister()
-        // Locked or backgrounded: the sender keeps waiting for us to come
-        // back (`sleeping`). Finishing ends the session for good (`closing`).
-        server.stop(if (isFinishing) "closing" else "sleeping")
+        val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
+        server.stop(stopAnnouncement(isFinishing, server.isOnAccessory,
+            power.isInteractive, keyguard.isKeyguardLocked))
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterReceiver(accessoryDetached)
+        unregisterReceiver(accessoryPermission)
         if (wifiLock.isHeld) wifiLock.release()
         main.removeCallbacksAndMessages(null)
         decoder.release()
@@ -236,6 +281,45 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) enterImmersive()
     }
+
+    // region USB accessory
+
+    /**
+     * The sender switched this device into accessory mode (see
+     * AccessoryLink): take the attachment as the session, unless one already
+     * ran over it. The attached list, not the intent's extra: an old launch
+     * intent outlives its attachment.
+     *
+     * Not while locked: the sender's redial launches this activity behind
+     * the lock screen, where a session would end at once with `sleeping`
+     * and the sender would redial again. The attachment waits; unlocking
+     * starts the activity and takes it here.
+     */
+    private fun takeAccessory() {
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
+        if (keyguard.isKeyguardLocked) return
+        val usb = getSystemService(USB_SERVICE) as UsbManager
+        val accessory = usb.accessoryList?.firstOrNull(AccessoryLink::isOurs) ?: return
+        if (accessory == usedAccessory) return
+        if (!usb.hasPermission(accessory)) {
+            if (accessory != permissionAsked) {
+                permissionAsked = accessory
+                // UsbManager fills in the grant extras, so the intent must be mutable.
+                val flags = if (Build.VERSION.SDK_INT >= 31) android.app.PendingIntent.FLAG_MUTABLE else 0
+                val intent = Intent(ACTION_USB_PERMISSION).setPackage(packageName)
+                usb.requestPermission(accessory, android.app.PendingIntent.getBroadcast(this, 0, intent, flags))
+            }
+            return
+        }
+        val link = AccessoryLink.open(usb, accessory)
+        if (link == null) {
+            Log.w(TAG, "could not open the USB accessory (permission ${usb.hasPermission(accessory)})")
+            return
+        }
+        if (server.adoptAccessory(link)) usedAccessory = accessory
+    }
+
+    // endregion
 
     // region Views
 
@@ -631,8 +715,27 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
 
-    private companion object {
-        const val TAG = "OpenDisplay"
+    companion object {
+        private const val TAG = "OpenDisplay"
+        private const val ACTION_USB_PERMISSION = "app.opendisplay.android.USB_PERMISSION"
+
+        /**
+         * Locked or backgrounded: the sender keeps waiting for us to come
+         * back (`sleeping`). Finishing ends the session for good (`closing`).
+         * Over the USB accessory the sender's redial re-attaches, and Android
+         * relaunches us for that: right after an unlock, hostile after the
+         * user left for another app with the screen on, so that is `closing`.
+         */
+        internal fun stopAnnouncement(
+            finishing: Boolean,
+            onAccessory: Boolean,
+            interactive: Boolean,
+            keyguardLocked: Boolean,
+        ): String = when {
+            finishing -> "closing"
+            onAccessory && interactive && !keyguardLocked -> "closing"
+            else -> "sleeping"
+        }
         const val SETTINGS = "settings"
         const val MATCH = FrameLayout.LayoutParams.MATCH_PARENT
         const val WRAP = FrameLayout.LayoutParams.WRAP_CONTENT
