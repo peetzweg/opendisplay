@@ -290,10 +290,12 @@ Coordinates use the conventions of section 7.
 |---|---|---|---|
 | `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `device`?, `id`?, `pv`?, `displayMaxFrameRate`?, `videoCaps`?, `panel`? | Identify the panel and receiver video capabilities; (re)sent on connect and on rotation |
 | `ping` | pv 1 | `t` | Liveness + clock sync probe |
-| `touch` | pv 1 | `phase`, `x`, `y`, `t`? | Finger input |
-| `scroll` | pv 1 | `dx`, `dy` | Two-finger scroll |
+| `touch` | pv 1 | `phase`, `x`, `y`, `t`?, `button`? | Finger input |
+| `scroll` | pv 1 | `dx`, `dy`, `phase`? | Two-finger scroll |
 | `pencil` | pv 3 | `phase`, `x`, `y`, `pressure`, `azimuth`, `altitude`, `rotation`, `t`? | Stylus input |
 | `proximity` | pv 3 | `entering`, `x`, `y` | Stylus hover enter/leave |
+| `magnify` | pv 3 (additive) | `phase`, `m` | Two-finger pinch |
+| `gesture` | pv 3 (additive) | `action` | Ask for a system action |
 | `kf` | pv 1 | none | Request an IDR (section 5.3) |
 | `stats` | pv 1 | free-form | Receiver-side telemetry for the sender's log |
 | `sleeping` | pv 2 | none | Device locked; session ends, reconnect on wake expected |
@@ -358,12 +360,32 @@ cadence is load-bearing.
 sender's clock** (the receiver adds its measured clock offset before
 stamping, so the sender can compute input latency without its own sync).
 Senders MUST tolerate an absent `t` (it is omitted until the offset is
-known).
+known). `button` (string, optional, additive at `pv` 3): `"left"` (the
+default when absent) or `"right"`. It is read on `"began"`; the rest of that
+press follows the button it began with. A receiver MUST NOT send `button`
+unless `welcome.input` contains `"button"` (an older sender ignores the field
+and would turn a secondary click into a primary one). The official receiver
+sends `"right"` for a press held still for 0.5 s and released without moving,
+and for a two-finger tap. With a sender that lists both `"button"` and
+`"scrollPhase"` it also treats one finger like a touchscreen: dragging right
+away sends phased `scroll` (the pointer is first moved to where the finger
+landed), and only a drag that starts after a 0.5 s hold sends a
+`"began"`/`"moved"`/`"ended"` press, for selecting and dragging.
 
 **`scroll`** carries `dx`, `dy` (numbers): scroll deltas in **video
 pixels** (section 7) with **natural-scrolling sign** (content follows the
 fingers: fingers moving down produce positive `dy` and the scrolled content
-moves down).
+moves down). `phase` (string, optional, additive at `pv` 3) makes the
+scroll behave like a trackpad's: `"began"`, `"changed"`, `"ended"` while
+fingers are down, then `"momentumBegan"`, `"momentumChanged"`,
+`"momentumEnded"` while the content coasts after a flick. Each carries
+`dx`/`dy` (0 on the ending phases). The receiver generates momentum, since
+it has the real finger velocity; the official one decays it by 0.96 per
+1/60 s and stops below 0.3 points per frame, and a new touch ends it with
+`"momentumEnded"`. Senders map phases to the platform's trackpad scroll
+phases and SHOULD close an open phase themselves if the receiver goes away
+mid-gesture. A receiver MUST NOT send `phase` unless `welcome.input`
+contains `"scrollPhase"`; without it, `scroll` is a plain delta.
 
 **`pencil`** (pv 3) carries `phase` (string): `"down"`, `"move"`, `"up"`,
 or `"hover"`; `x`, `y`: normalized position; `pressure` (number): 0 to 1;
@@ -374,6 +396,24 @@ is up is a hover move.
 
 **`proximity`** (pv 3) carries `entering` (bool) and the normalized `x`,
 `y` where the stylus entered or left hover range.
+
+**`magnify`** (additive at `pv` 3) carries `phase` (string): `"began"`,
+`"changed"`, `"ended"` or `"cancelled"`, and `m` (number): the relative
+scale change since the previous message (a pinch from scale 1.0 to 1.1 is
+`m` = 0.1; the product of all `1 + m` equals the pinch scale), the
+semantics of `NSEvent.magnification`. The sender applies it to whatever
+sits under the pointer, so receivers move the pointer to the pinch first
+(a `touch` `"moved"`). A receiver MUST NOT send `magnify` unless
+`welcome.input` contains `"magnify"`; an older sender would drop it.
+
+**`gesture`** (additive at `pv` 3) carries `action` (string): one of the
+names the sender listed in `welcome.actions`. The name says what, never
+which keys: each sender decides how. Defined names: `"missionControl"`,
+`"appExpose"` (the front app's windows), `"showDesktop"`, `"apps"` (the app
+launcher), `"spotlight"`, `"spaceLeft"`, `"spaceRight"` (previous / next
+Space on the receiver's display). Senders MUST ignore names they don't know.
+A receiver MUST NOT send `gesture` unless `welcome.input` contains
+`"gesture"`, and SHOULD offer only the listed actions.
 
 **Pencil fallback (normative):** a receiver MUST NOT send `pencil` or
 `proximity` to a sender whose `pv` is below 3; it MUST degrade the stylus
@@ -404,7 +444,7 @@ section 4.
 | `ping` | pv 1 | `drops`?, `encDrops`?, `netDrops`?, `pending`?, `inp50`?, `inp95`?, `capFps`? | Liveness + sender health |
 | `cursor` | pv 1 | `x`?, `y`?, `v` | Cursor position/visibility |
 | `cursorImg` | pv 1 | `nw`, `nh`, `ax`, `ay`, `png` | Cursor sprite |
-| `welcome` | pv 2 | `pv`, `min` | Sender's side of the version handshake |
+| `welcome` | pv 2 | `pv`, `min`, `input`?, `actions`? | Sender's side of the version handshake |
 | `updateRequired` | pv 2 | `target`, `store`, `message` | Peer must update to continue |
 | `streamConfig` | pv 3 (additive) | `codec`, `width`, `height`, `framesPerSecond` | Selected video operating point |
 | `power` | pv 3 (additive) | `action` | Ask the receiver to power off (6.6) |
@@ -527,6 +567,16 @@ still supports). Sent in response to every `hello`. A receiver whose own
 only party that can detect an outdated sender and SHOULD tell its user to
 update the sender. A receiver that never gets a `welcome` at all is talking
 to a pre-pv-2 sender and MUST assume sender `pv` 1.
+
+`input` (array of strings, optional, additive at `pv` 3): input features the
+sender handles beyond the `pv` baseline. Absent means none. Receivers MUST
+ignore names they don't know and MUST NOT use a feature the sender didn't
+list. Defined names: `"button"` (`touch.button`, section 6.1),
+`"scrollPhase"` (`scroll.phase`, section 6.1), `"magnify"` (`magnify`,
+section 6.1), `"gesture"` (`gesture`, section 6.1).
+
+`actions` (array of strings, optional, additive at `pv` 3): the `gesture`
+actions this sender can perform, in the order it suggests showing them.
 
 **`updateRequired`**: the sender declares the pairing unsupported until the
 receiver updates. `target` names the end that must act (`"ios"` today),

@@ -217,6 +217,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Escape hatch: `defaults write com.peetzweg.opensidecar.mac localCursor -bool false`.
     private let localCursor = UserDefaults.standard.object(forKey: "localCursor") == nil
         || UserDefaults.standard.bool(forKey: "localCursor")
+    /// Touch mode's pointer handoff hides the pointer on the receiver and gives
+    /// it back from the cursor-echo poll, so it needs the echo.
+    private var pointerHandoff: PointerHandoff? { localCursor ? .shared : nil }
     // Cursor sampling must not share ScreenCaptureKit's serial callback queue:
     // a 4K encode submission can otherwise delay the next poll long before the
     // dedicated UDP channel gets a chance to help. Sampling lives here; only
@@ -855,7 +858,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
 
         try ensureActiveDisplay(vd)
-        inputInjector = InputInjector(displayID: vd.displayID)
+        inputInjector = InputInjector(displayID: vd.displayID, pointerHandoff: pointerHandoff)
         try await startCapture(display: captureDisplay,
                                sourcePixelsWide: vd.pixelsWide,
                                sourcePixelsHigh: vd.pixelsHigh,
@@ -1034,7 +1037,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                receiver: info)
         try ensureActiveDisplay(vd)
         if dimensionsChanged {
-            inputInjector = InputInjector(displayID: vd.displayID)
+            inputInjector = InputInjector(displayID: vd.displayID, pointerHandoff: pointerHandoff)
         }
 
         if dimensionsChanged, UserDefaults.standard.bool(forKey: "testPattern") {
@@ -1066,7 +1069,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                    sourcePixelsHigh: canvas.pixelsHigh,
                                    receiver: info)
             try ensureActiveDisplay(vd)
-            inputInjector = InputInjector(displayID: vd.displayID)
+            inputInjector = InputInjector(displayID: vd.displayID, pointerHandoff: pointerHandoff)
             return true
         } catch {
             try ensureActiveDisplay(vd)
@@ -1345,6 +1348,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         stopped = true
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
+        inputInjector?.endScrollGestures()
+        pointerHandoff?.returnPointer()
         cursorImageTimer?.cancel()
         cursorImageTimer = nil
         stream?.stopCapture { _ in }
@@ -2219,7 +2224,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
               let loc = CGEvent(source: nil)?.location else { return }
         let bounds = CGDisplayBounds(displayID)
         guard bounds.width > 0, bounds.height > 0 else { return }
-        if bounds.contains(loc) {
+        // A real mouse moving the pointer takes it back from touch; until
+        // then the receiver draws none, like any touchscreen.
+        PointerHandoff.shared.pointerSampled(at: loc)
+        if bounds.contains(loc), !PointerHandoff.shared.touchOwnsPointer {
             let x = (loc.x - bounds.minX) / bounds.width
             let y = (loc.y - bounds.minY) / bounds.height
             if !lastCursorSent.visible
@@ -2524,7 +2532,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if let phase = obj["phase"] as? String,
                let x = obj["x"] as? Double,
                let y = obj["y"] as? Double {
-                inputInjector?.handleTouch(phase: phase, x: x, y: y)
+                inputInjector?.handleTouch(phase: phase, x: x, y: y,
+                                           button: obj["button"] as? String)
                 if let t = obj["t"] as? Double {
                     let delta = Date().timeIntervalSince1970 * 1000 - t
                     if delta > -50, delta < 1000 {
@@ -2535,7 +2544,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         case "scroll":
             if let dx = obj["dx"] as? Double, let dy = obj["dy"] as? Double {
-                inputInjector?.handleScroll(dx: dx, dy: dy)
+                inputInjector?.handleScroll(dx: dx, dy: dy, phase: obj["phase"] as? String)
+            }
+        case "magnify":
+            if let phase = obj["phase"] as? String {
+                inputInjector?.handleMagnify(phase: phase, magnification: obj["m"] as? Double ?? 0)
+            }
+        case "gesture":
+            if let action = obj["action"] as? String {
+                inputInjector?.handleSystemAction(action)
             }
         case "pencil":
             if let phase = obj["phase"] as? String,
@@ -3143,10 +3160,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - Version handshake (issue #132)
 
-    /// Identify ourselves to the receiver: our protocol version and the oldest
-    /// receiver version we still support.
+    /// Identify ourselves to the receiver: our protocol version, the oldest
+    /// receiver version we still support, and the input features we handle.
     private func sendWelcome() {
-        sendJSONFrame("{\"type\":\"\(WireMessage.welcome)\",\"pv\":\(WireProtocol.version),\"min\":\(WireProtocol.minSupportedPeer)}")
+        let input = InputFeature.sender.map { "\"\($0)\"" }.joined(separator: ",")
+        let actions = SystemAction.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ",")
+        sendJSONFrame("{\"type\":\"\(WireMessage.welcome)\",\"pv\":\(WireProtocol.version),\"min\":\(WireProtocol.minSupportedPeer),\"input\":[\(input)],\"actions\":[\(actions)]}")
     }
 
     /// Announce the operating point before video. Legacy receivers ignore the

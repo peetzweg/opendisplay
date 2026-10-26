@@ -226,6 +226,12 @@ final class SenderController: ObservableObject {
     @Published var quality = StreamQuality(rawValue: UserDefaults.standard.string(forKey: "quality") ?? "") ?? .best {
         didSet { UserDefaults.standard.set(quality.rawValue, forKey: "quality") }
     }
+    @Published var returnPointerAfterTouch = PointerHandoff.shared.enabled {
+        didSet {
+            UserDefaults.standard.set(returnPointerAfterTouch, forKey: PointerHandoff.defaultsKey)
+            PointerHandoff.shared.enabled = returnPointerAfterTouch
+        }
+    }
 
     var running: Bool { !sessions.isEmpty }
 
@@ -1038,6 +1044,13 @@ struct ContentView: View {
                     }
                     .onChange(of: controller.quality) { controller.restartAll() }
                     Text(controller.quality.explanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Touch leaves the pointer where it was", isOn: $controller.returnPointerAfterTouch)
+                    Text("Touching a device hides the pointer there; your mouse or trackpad picks up where you left it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

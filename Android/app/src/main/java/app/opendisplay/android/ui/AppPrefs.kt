@@ -14,6 +14,19 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean("hasConnectedBefore", false)
         set(v) = prefs.edit().putBoolean("hasConnectedBefore", v).apply()
 
+    var actionsButton: Boolean
+        get() = prefs.getBoolean(KEY_ACTIONS_BUTTON, true)
+        set(v) = prefs.edit().putBoolean(KEY_ACTIONS_BUTTON, v).apply()
+
+    var actionsButtonRight: Boolean
+        get() = prefs.getBoolean("actionsButtonRight", true)
+        set(v) = prefs.edit().putBoolean("actionsButtonRight", v).apply()
+
+    /** Height on its edge, 0 (top) to 1 (bottom). */
+    var actionsButtonY: Float
+        get() = prefs.getFloat("actionsButtonY", 0.75f)
+        set(v) = prefs.edit().putFloat("actionsButtonY", v).apply()
+
     var onboardingDismissed: Boolean
         get() = prefs.getBoolean("onboardingDismissed", false)
         set(v) = prefs.edit().putBoolean("onboardingDismissed", v).apply()
@@ -21,5 +34,6 @@ class AppPrefs(context: Context) {
     companion object {
         const val FILE = "settings"
         const val KEY_SHOW_ANALYTICS = "showAnalytics"
+        const val KEY_ACTIONS_BUTTON = "actionsButton"
     }
 }
