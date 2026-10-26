@@ -83,7 +83,8 @@ class ActionsButton(
                 }
             }
             MotionEvent.ACTION_UP -> {
-                if (dragging) snap() else showMenu()
+                // Through performClick so accessibility services see the tap.
+                if (dragging) snap() else performClick()
                 alpha = IDLE_ALPHA
             }
             MotionEvent.ACTION_CANCEL -> {
