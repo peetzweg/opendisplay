@@ -31,7 +31,7 @@ enum AndroidUSBFunction: String {
     ]
 
     init?(interfaceClass: Int, subclass: Int, protocol: Int, name: String?) {
-        let mtpName = name?.uppercased().hasPrefix("MTP") ?? false
+        let mtpName = name?.uppercased().contains("MTP") ?? false   // libmtp's test
         switch (interfaceClass, subclass, `protocol`) {
         case (0xFF, 0x42, 0x01):
             self = .adb
