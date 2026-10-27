@@ -25,6 +25,11 @@ final class VirtualDisplay {
 
     private var originRestore: OriginRestore
     private let onOriginChange: ((CGPoint, CGSize) -> Void)?
+    /// Where every other display sat before ours appeared or changed size.
+    /// macOS makes room for the new display by pushing its neighbours aside,
+    /// and restoring only our own origin `.permanently` saves that push as
+    /// the user's arrangement, so each restore puts them back too.
+    private var neighbourOrigins: [CGDirectDisplayID: CGPoint] = [:]
     /// Called once on the main thread when macOS keeps refusing a 2x target
     /// (or keeps dropping it from the mode list), with the refused size. The
     /// display is then running some other mode, so the owner should resize
@@ -74,6 +79,7 @@ final class VirtualDisplay {
             Log.info("virtual display terminated by the system")
         }
 
+        neighbourOrigins = VirtualDisplay.activeOrigins()
         display = CGVirtualDisplay(descriptor: descriptor)
 
         settings = CGVirtualDisplaySettings()
@@ -132,6 +138,7 @@ final class VirtualDisplay {
         newSettings.modes = [
             CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
         ]
+        if origin != nil { neighbourOrigins = Self.activeOrigins(excluding: display.displayID) }
         guard display.apply(newSettings) else {
             Log.info("virtual display \(display.displayID) applySettings FAILED during resize")
             return false
@@ -148,6 +155,7 @@ final class VirtualDisplay {
             var config: CGDisplayConfigRef?
             if CGBeginDisplayConfiguration(&config) == .success {
                 CGConfigureDisplayOrigin(config, display.displayID, Int32(origin.x), Int32(origin.y))
+                configureNeighbours(config)
                 let err = CGCompleteDisplayConfiguration(config, .permanently)
                 // A mode change is a display reconfiguration, so macOS may
                 // restore ITS arrangement for this identity a moment later,
@@ -267,6 +275,7 @@ final class VirtualDisplay {
             var config: CGDisplayConfigRef?
             guard CGBeginDisplayConfiguration(&config) == .success else { return }
             CGConfigureDisplayOrigin(config, id, Int32(target.x), Int32(target.y))
+            configureNeighbours(config)
             let err = CGCompleteDisplayConfiguration(config, .permanently)
             let settled = CGDisplayBounds(id).origin
             originRestore.settled(at: settled)
@@ -276,6 +285,27 @@ final class VirtualDisplay {
         case .report(let moved):
             onOriginChange?(moved, CGSize(width: pointsWide, height: pointsHigh))
         }
+    }
+
+    private func configureNeighbours(_ config: CGDisplayConfigRef?) {
+        for (id, origin) in neighbourOrigins where CGDisplayIsActive(id) != 0 {
+            CGConfigureDisplayOrigin(config, id, Int32(origin.x), Int32(origin.y))
+        }
+    }
+
+    /// Origins of the active displays, mirror members left out: they follow
+    /// the display they mirror.
+    private static func activeOrigins(excluding excluded: CGDirectDisplayID? = nil) -> [CGDirectDisplayID: CGPoint] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [:] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [:] }
+        var origins: [CGDirectDisplayID: CGPoint] = [:]
+        for id in ids.prefix(Int(count))
+        where id != excluded && CGDisplayMirrorsDisplay(id) == kCGNullDirectDisplay {
+            origins[id] = CGDisplayBounds(id).origin
+        }
+        return origins
     }
 
     /// An extend-mode virtual display must never sit in a system mirror set.
