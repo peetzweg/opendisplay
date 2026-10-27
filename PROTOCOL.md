@@ -314,7 +314,8 @@ nothing before it arrives.
 * `pixelsWide`, `pixelsHigh` (int): **deprecated**, superseded by `panel`
   (section 6.7) and removed at the next `pv` bump. The desktop the receiver
   wants, as pixels of a 2x desktop, in the **current orientation**
-  (portrait swaps them). On iOS these are the physical pixels; the Mac
+  (portrait swaps them). On iOS these are the physical pixels of the
+  app's window (the whole panel when it fills the screen); the Mac
   receiver sends its point size x 2, which is its physical pixels only on
   a Retina panel. A sender that receives a valid `panel` ignores them.
 * `scale` (number): **deprecated** with them. The device's UI scale
@@ -350,10 +351,11 @@ nothing before it arrives.
   no bump.
 
 A receiver MUST re-send `hello` on the live connection whenever its
-announced dimensions change (rotation). The sender rebuilds the display in
-response; the official sender debounces this by 300 ms so an orientation
-flurry settles into one rebuild, and replies to *every* `hello` with a
-fresh `welcome` (receivers treat repeats idempotently).
+announced dimensions change (rotation, a fold, a window resize). The
+sender rebuilds the display in response; the official sender debounces
+this by 300 ms so an orientation flurry settles into one rebuild, and
+replies to *every* `hello` with a fresh `welcome` (receivers treat
+repeats idempotently).
 
 **`ping`** carries `t` (number): milliseconds since the Unix epoch on the
 receiver's clock. The sender MUST reply with `pong` echoing `t` (section
