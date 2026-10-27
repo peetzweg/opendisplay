@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.28.1"
+version = "1.28.2"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/peetzweg/opendisplay"
