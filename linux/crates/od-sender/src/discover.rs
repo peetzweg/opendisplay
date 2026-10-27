@@ -1,4 +1,5 @@
-//! Find receivers via Bonjour (§2.1).
+//! Find receivers via Bonjour (§2.1), and over Tailscale when Bonjour finds
+//! nothing (see [`crate::tailscale`]).
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -34,8 +35,10 @@ impl Found {
 pub const NO_RECEIVER_HINT: &str = "\
 Is the OpenDisplay app open and in the foreground on the device, on the same
 Wi-Fi as this computer (not a guest network)? On iPhone and iPad, Settings >
-Privacy & Security > Local Network must allow OpenDisplay. Try
-`od-sender list --timeout 10`, or connect directly with
+Privacy & Security > Local Network must allow OpenDisplay. Bonjour does not
+cross VPNs: over Tailscale or another VPN, connect with
+`od-sender run --to <vpn-ip>:9000` (`tailscale ip -4 <device>` prints it).
+Try `od-sender list --timeout 10`, or connect directly with
 `od-sender run --to <device-ip>:9000`.";
 
 /// Discovery found nothing.
@@ -45,6 +48,8 @@ pub struct NoReceiver {
     pub timeout: Duration,
     /// Receivers that answered but did not match `to`.
     pub others: Vec<Found>,
+    /// How many Tailscale peers were probed, if any were.
+    pub tailscale_peers: Option<usize>,
 }
 
 impl std::fmt::Display for NoReceiver {
@@ -63,6 +68,13 @@ impl std::fmt::Display for NoReceiver {
                 self.timeout
             )?,
             None => write!(f, "no receiver found within {:?}", self.timeout)?,
+        }
+        if let Some(n) = self.tailscale_peers {
+            write!(
+                f,
+                ", and none of {n} online Tailscale peer{} answered on port 9000",
+                if n == 1 { "" } else { "s" }
+            )?;
         }
         write!(f, ".\n{NO_RECEIVER_HINT}")
     }
@@ -185,8 +197,9 @@ pub fn choose(found: Vec<Found>, to: Option<&str>) -> Choice {
 
 /// Find the receiver to dial: the first matching `to`, or, without `to`,
 /// the only one on the network (several is an error). `timeout: None`
-/// browses until one appears (`run --wait`).
-pub fn find(to: Option<&str>, timeout: Option<Duration>) -> Result<Found> {
+/// browses until one appears (`run --wait`). When Bonjour finds nothing
+/// within `timeout` and `tailscale` is set, the Tailscale peers are tried.
+pub fn find(to: Option<&str>, timeout: Option<Duration>, tailscale: bool) -> Result<Found> {
     let mut seen: Vec<Found> = Vec::new();
     let mut others: Vec<Found> = Vec::new();
     browse(timeout.map(|t| Instant::now() + t), |f, deadline| {
@@ -209,6 +222,15 @@ pub fn find(to: Option<&str>, timeout: Option<Duration>) -> Result<Found> {
         seen.push(f);
         false
     })?;
+    let mut tailscale_peers = None;
+    if seen.is_empty() && timeout.is_some() && tailscale {
+        if let Some((found, probed)) = crate::tailscale::discover() {
+            tailscale_peers = Some(probed);
+            let (matching, rest) = split_tailscale(found, &others, to);
+            seen = matching;
+            others.extend(rest);
+        }
+    }
     match choose(seen, to) {
         Choice::One(f) => Ok(f),
         Choice::Several(all) => match pick_interactively(&all) {
@@ -219,9 +241,30 @@ pub fn find(to: Option<&str>, timeout: Option<Duration>) -> Result<Found> {
             to: to.map(Into::into),
             timeout: timeout.unwrap_or_default(),
             others,
+            tailscale_peers,
         }
         .into()),
     }
+}
+
+/// Tailscale finds split into those matching `to` (all of them without
+/// `to`) and the rest, leaving out receivers Bonjour already reported
+/// (same id: the same device on another address).
+fn split_tailscale(
+    found: Vec<Found>,
+    known: &[Found],
+    to: Option<&str>,
+) -> (Vec<Found>, Vec<Found>) {
+    found
+        .into_iter()
+        .filter(|f| {
+            f.id.is_none()
+                || !known.iter().any(|k| {
+                    k.id.as_deref()
+                        .is_some_and(|id| f.id.as_deref() == Some(id))
+                })
+        })
+        .partition(|f| to.is_none_or(|t| f.matches(t)))
 }
 
 /// With a person at the terminal (stdin and stderr are terminals), ask which
@@ -259,8 +302,10 @@ fn pick(all: &[Found], answer: &str) -> Option<Found> {
     }
 }
 
-/// Every receiver that resolves within `timeout`, one entry per instance.
-pub fn list(timeout: Duration) -> Result<Vec<Found>> {
+/// Every receiver that resolves within `timeout`, one entry per instance;
+/// when none does and `tailscale` is set, the receivers among the Tailscale
+/// peers.
+pub fn list(timeout: Duration, tailscale: bool) -> Result<Vec<Found>> {
     let mut all: Vec<Found> = Vec::new();
     browse(Some(Instant::now() + timeout), |f, _| {
         if !all.iter().any(|a| a.instance == f.instance) {
@@ -268,6 +313,11 @@ pub fn list(timeout: Duration) -> Result<Vec<Found>> {
         }
         false
     })?;
+    if all.is_empty() && tailscale {
+        if let Some((found, _)) = crate::tailscale::discover() {
+            all = found;
+        }
+    }
     all.sort_by(|a, b| a.instance.cmp(&b.instance));
     Ok(all)
 }
@@ -327,11 +377,38 @@ mod tests {
     }
 
     #[test]
+    fn tailscale_finds_go_through_to_and_skip_known_devices() {
+        let at = |name: &str, id: &str, addr: &str| Found {
+            addr: addr.parse().unwrap(),
+            ..r(name, id)
+        };
+        let found = vec![
+            at("galaxy-z-fold7", "FOLD", "100.64.0.2:9000"),
+            at("ipad", "IPAD", "100.64.0.4:9000"),
+            at("imac-ts", "B2", "100.64.0.5:9000"),
+        ];
+        // Bonjour saw the iMac (id B2) but it did not match `to`.
+        let known = vec![r("iMac", "B2")];
+        let (matching, rest) = split_tailscale(found.clone(), &known, Some("fold"));
+        assert_eq!(matching, vec![found[0].clone()]);
+        assert_eq!(rest, vec![found[1].clone()]);
+        let (matching, rest) = split_tailscale(found.clone(), &[], None);
+        assert_eq!(matching.len(), 3);
+        assert!(rest.is_empty());
+        assert_eq!(
+            choose(matching, None),
+            Choice::Several(found.clone()),
+            "several on the tailnet are refused like several on the LAN"
+        );
+    }
+
+    #[test]
     fn an_unknown_name_lists_what_answered() {
         let e = NoReceiver {
             to: Some("imc".into()),
             timeout: Duration::from_secs(10),
             others: vec![r("iMac", "B2")],
+            tailscale_peers: None,
         }
         .to_string();
         assert!(e.contains("on the network") && e.contains("iMac"), "{e}");
@@ -343,10 +420,28 @@ mod tests {
             to: None,
             timeout: Duration::from_secs(10),
             others: Vec::new(),
+            tailscale_peers: None,
         }
         .to_string();
         assert!(
-            e.contains("Local Network") && e.contains("--to <device-ip>:9000"),
+            e.contains("Local Network")
+                && e.contains("--to <device-ip>:9000")
+                && e.contains("Tailscale")
+                && e.contains("--to <vpn-ip>:9000"),
+            "{e}"
+        );
+        assert!(!e.contains("peers"), "{e}");
+        let e = NoReceiver {
+            to: None,
+            timeout: Duration::from_secs(10),
+            others: Vec::new(),
+            tailscale_peers: Some(3),
+        }
+        .to_string();
+        assert!(
+            e.starts_with(
+                "no receiver found within 10s, and none of 3 online Tailscale peers answered"
+            ),
             "{e}"
         );
         let e = SeveralReceivers(vec![r("iPhone", "A"), r("iMac", "B")]).to_string();
