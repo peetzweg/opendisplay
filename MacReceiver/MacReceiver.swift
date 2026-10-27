@@ -203,11 +203,10 @@ final class ReceiverController: ObservableObject {
         let height = screen.frame.height - inset
         let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
             as? CGDirectDisplayID
-        if let displayID, let mode = CGDisplayCopyDisplayMode(displayID), mode.refreshRate > 0 {
-            receiver.setDisplayMaxFrameRate(Int(mode.refreshRate.rounded()))
-        } else {
-            receiver.setDisplayMaxFrameRate(60)
-        }
+        // Sent with the panel in one hello: a mode change that also changes
+        // the refresh rate must not make the sender rebuild twice.
+        let refreshRate = displayID.flatMap(CGDisplayCopyDisplayMode)
+            .map { $0.refreshRate > 0 ? Int($0.refreshRate.rounded()) : 60 } ?? 60
 
         let portrait = screen.frame.height > screen.frame.width
         let native = displayID.flatMap(Self.nativePixels(of:))
@@ -238,7 +237,8 @@ final class ReceiverController: ObservableObject {
         receiver.setPanel(pixelsWide: Int(screen.frame.width * legacyScale),
                           pixelsHigh: Int(height * legacyScale),
                           scale: Double(legacyScale),
-                          panel: panel, limitsChanged: limitsChanged)
+                          panel: panel, displayMaxFrameRate: refreshRate,
+                          limitsChanged: limitsChanged)
     }
 
     /// Landscape decode limits; see `start`.

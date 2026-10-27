@@ -343,14 +343,6 @@ final class StreamReceiver: ObservableObject {
         if let connection { sendHello(on: connection) }
     }
 
-    /// Physical presentation ceiling, separate from decoder capability.
-    func setDisplayMaxFrameRate(_ framesPerSecond: Int) {
-        let value = max(1, framesPerSecond)
-        guard value != displayMaxFrameRate else { return }
-        displayMaxFrameRate = value
-        if let connection { sendHello(on: connection) }
-    }
-
     init(displayLayer: AVSampleBufferDisplayLayer, deviceKind: String,
          fallbackServiceName: String,
          maxEncodeWide: Int? = nil, maxEncodeHigh: Int? = nil,

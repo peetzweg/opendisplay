@@ -69,6 +69,8 @@ struct ReceiverScreen: View {
     }
 
     var body: some View {
+        // Kept for its layout (fill the window, top-leading); the panel size
+        // comes from WindowObserver below, not from the proxy.
         GeometryReader { _ in
             ZStack {
                 if isStreaming {
