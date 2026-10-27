@@ -196,15 +196,14 @@ impl Receiver {
                 }
                 Some(power::PowerEvent::Sleeping { done }) = recv_power(&mut self.power) => {
                     report.sleeps += 1;
-                    if let Some(s) = current.as_mut() {
+                    if let Some(mut s) = current.take() {
                         info!("going to sleep: telling the sender");
                         // §6.1: best effort, right before closing; the sender
                         // keeps listening for the wake and redials.
                         if let ReceiverAction::Send(bytes) = sess.control(&ControlMessage::Sleeping) {
                             let _ = s.write_all(&bytes).await;
-                            let _ = s.flush().await;
                         }
-                        current = None;
+                        tokio::spawn(hang_up(s, HANG_UP_WITHIN));
                         peer = None;
                         sess.handle(now(start), ReceiverEvent::Disconnected);
                     }
@@ -358,15 +357,32 @@ impl Receiver {
                 }
             }
         }
-        if let Some(s) = current.as_mut() {
+        if let Some(mut s) = current.take() {
             if let ReceiverAction::Send(bytes) = sess.control(&ControlMessage::Closing) {
                 let _ = s.write_all(&bytes).await;
             }
+            hang_up(s, HANG_UP_WITHIN).await;
         }
         report.rendered_frames = self.video.rendered();
         info!("{report:?}");
         Ok(report)
     }
+}
+
+/// How long [`hang_up`] waits for the sender to close its side.
+const HANG_UP_WITHIN: Duration = Duration::from_millis(500);
+
+/// Close after a courtesy message (`sleeping`, `closing`) without losing it.
+/// Dropping a socket with unread video in it sends RST, and a sender that
+/// writes a frame before reading the message then fails on that write and
+/// never sees it. Send FIN instead and drain until the sender hangs up.
+async fn hang_up(mut s: TcpStream, within: Duration) {
+    let _ = s.shutdown().await;
+    let mut buf = vec![0u8; 64 * 1024];
+    let _ = tokio::time::timeout(within, async {
+        while matches!(s.read(&mut buf).await, Ok(n) if n > 0) {}
+    })
+    .await;
 }
 
 async fn read_current(current: &mut Option<TcpStream>, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -398,5 +414,41 @@ async fn recv_udp(udp: &Option<UdpSocket>, buf: &mut [u8]) -> std::io::Result<(u
     match udp {
         Some(s) => s.recv_from(buf).await,
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A sender that keeps streaming after `sleeping` and reads it only
+    /// later: its writes still go through and the message arrives before
+    /// EOF. A plain drop answers the unread video with RST and fails both.
+    #[tokio::test]
+    async fn hang_up_keeps_the_message_for_a_streaming_sender() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut sender = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut rx, _) = listener.accept().await.unwrap();
+        sender.write_all(&[0; 4096]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        rx.write_all(b"sleeping").await.unwrap();
+        let hung = tokio::spawn(hang_up(rx, Duration::from_secs(2)));
+        for _ in 0..3 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            sender
+                .write_all(&[0; 4096])
+                .await
+                .expect("frame after sleeping");
+        }
+        let mut got = Vec::new();
+        sender.read_to_end(&mut got).await.unwrap();
+        assert_eq!(got, b"sleeping");
+        drop(sender);
+        tokio::time::timeout(Duration::from_secs(1), hung)
+            .await
+            .expect("hang_up ends when the sender closes")
+            .unwrap();
     }
 }
