@@ -883,14 +883,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// it settles. `reconfigure` itself picks up hellos that land while it
     /// runs, under the same rule.
     private func scheduleReconfigure() {
-        let now = ContinuousClock.now
         // Part of the change already waiting out its grace: that rebuild
         // reads the latest hello when it starts.
-        if let last = lastSelectionChange, now - last < .milliseconds(25) { return }
-        let isLoneChange = lastSelectionChange.map { now - $0 > .milliseconds(500) } ?? true
-        let wait: Duration = isLoneChange ? .milliseconds(25) : .milliseconds(150)
-        lastSelectionChange = now
-        selectionSettlesAt = now + wait
+        guard let wait = noteSelectionChange() else { return }
         pendingReconfigure?.cancel()
         pendingReconfigure = Task {
             try? await Task.sleep(for: wait)
@@ -900,6 +895,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // that already tore the old stream down.
             Task { await self.reconfigure(current) }
         }
+    }
+
+    /// Starts the settle clock for a selection change and returns its wait,
+    /// or nil when the change is part of one still inside its grace. Hellos
+    /// that land mid-rebuild, while no stream exists, only start the clock:
+    /// `reconfigure` builds them after its pass, once they settle.
+    private func noteSelectionChange() -> Duration? {
+        let now = ContinuousClock.now
+        if let last = lastSelectionChange, now - last < .milliseconds(25) { return nil }
+        let isLoneChange = lastSelectionChange.map { now - $0 > .milliseconds(500) } ?? true
+        let wait: Duration = isLoneChange ? .milliseconds(25) : .milliseconds(150)
+        lastSelectionChange = now
+        selectionSettlesAt = now + wait
+        return wait
     }
 
     private func reconfigure(_ info: PhoneInfo) async {
@@ -2556,9 +2565,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 if let continuation = helloContinuation {
                     helloContinuation = nil
                     continuation.resume(returning: info)
-                } else if stream != nil, let previous,
-                          streamSelectionInputsChanged(from: previous, to: info) {
-                    scheduleReconfigure()
+                } else if let previous, streamSelectionInputsChanged(from: previous, to: info) {
+                    if stream != nil { scheduleReconfigure() } else { _ = noteSelectionChange() }
                 }
             }
         case "touch":
