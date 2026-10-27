@@ -214,23 +214,37 @@ enum AOA {
         IOUSBDeviceRequest(bmRequestType: type, bRequest: code, wValue: 0, wIndex: index, wLength: length)
     }
 
-    /// GET_PROTOCOL: the AOA version (1 or 2), or nil when the device does
-    /// not answer — the only way to tell an Android device from any other.
-    static func protocolVersion(of service: io_service_t) -> Int? {
+    enum ProtocolAnswer: Equatable {
+        case version(Int)   // AOA 1 or 2
+        case refused        // stalled, or answered 0: not an Android device
+        case silent         // could not be opened, or no reply in time
+    }
+
+    /// kUSBHostReturnPipeStalled: the device rejected the request.
+    private static let pipeStalled: UInt32 = 0xE000_5000
+
+    /// GET_PROTOCOL, the only way to tell an Android device from any other.
+    /// It is a vendor request, which some devices act on (#419): only send it
+    /// to a device that shows an AndroidUSBFunction.
+    static func askProtocol(_ service: io_service_t) -> ProtocolAnswer {
         guard let device = try? IOUSBHostDevice(__ioService: service, options: [],
-                                                queue: nil, interestHandler: nil) else { return nil }
+                                                queue: nil, interestHandler: nil) else { return .silent }
         defer { device.destroy() }
         let data = NSMutableData(length: 2)!
         var transferred = 0
-        guard (try? device.__send(request(0xC0, getProtocol, length: 2), data: data,
-                                  bytesTransferred: &transferred, completionTimeout: 1)) != nil,
-              transferred == 2 else { return nil }
+        do {
+            try device.__send(request(0xC0, getProtocol, length: 2), data: data,
+                              bytesTransferred: &transferred, completionTimeout: 1)
+        } catch {
+            return UInt32(truncatingIfNeeded: (error as NSError).code) == pipeStalled ? .refused : .silent
+        }
+        guard transferred == 2 else { return .refused }
         let version = Int(UInt16(littleEndian: data.bytes.loadUnaligned(as: UInt16.self)))
-        return version >= 1 ? version : nil
+        return version >= 1 ? .version(version) : .refused
     }
 
     private static func handshake(_ service: io_service_t) throws {
-        guard protocolVersion(of: service) != nil else { throw Failure.notSupported }
+        guard case .version = askProtocol(service) else { throw Failure.notSupported }
         let device = try IOUSBHostDevice(__ioService: service, options: [],
                                          queue: nil, interestHandler: nil)
         defer { device.destroy() }
