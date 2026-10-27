@@ -272,9 +272,19 @@ final class StreamReceiver: ObservableObject {
     }()
 
     private var advertisedService: NWListener.Service {
-        var txt = NWTXTRecord()
-        txt["id"] = Self.installID
-        txt["pv"] = String(WireProtocol.version)   // issue #132
+        if #available(iOS 13, macOS 10.15, *) {
+            var txt = NWTXTRecord()
+            txt["id"] = Self.installID
+            txt["pv"] = String(WireProtocol.version)   // issue #132
+            return NWListener.Service(name: serviceName, type: "_opensidecar._tcp",
+                                      domain: nil, txtRecord: txt)
+        }
+        // iOS 12: NWTXTRecord is iOS 13+, but the raw-data initializer
+        // takes the same DNS-SD TXT encoding.
+        let txt = NetService.data(fromTXTRecord: [
+            "id": Data(Self.installID.utf8),
+            "pv": Data(String(WireProtocol.version).utf8),
+        ])
         return NWListener.Service(name: serviceName, type: "_opensidecar._tcp",
                                   domain: nil, txtRecord: txt)
     }
