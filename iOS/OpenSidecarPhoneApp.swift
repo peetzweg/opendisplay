@@ -862,6 +862,7 @@ struct VideoLayerView: UIViewRepresentable {
         private var settledBounds = CGRect.zero   // the bounds the current video was sized for
         private var holdingStaleFrame = false
         private var holdRelease: DispatchWorkItem?
+        private var holdArmedFor = CGRect.zero   // the bounds the fallback reveal was armed for
         private let blurView: UIVisualEffectView = {
             let view = UIVisualEffectView(effect: nil)
             view.isUserInteractionEnabled = false
@@ -881,18 +882,24 @@ struct VideoLayerView: UIViewRepresentable {
             }
             let began = !holdingStaleFrame
             holdingStaleFrame = true
-            // A Mac that never sends a new desktop (an older sender, or the
-            // size settled back on one it already streams) must not leave the
-            // picture blurred: reveal what there is.
-            holdRelease?.cancel()
-            let release = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.settledBounds = self.bounds
-                self.releaseHold()
-                self.setNeedsLayout()
+            // A Mac that never sends a new desktop (an older sender, mirror
+            // mode, a fixed Display size, or the size settled back on one it
+            // already streams) must not leave the picture blurred: reveal
+            // what there is. Armed per window shape, not per layout pass:
+            // every receiver publish relayouts, and re-arming there would
+            // push the reveal out forever.
+            if began || bounds != holdArmedFor {
+                holdArmedFor = bounds
+                holdRelease?.cancel()
+                let release = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.settledBounds = self.bounds
+                    self.releaseHold()
+                    self.setNeedsLayout()
+                }
+                holdRelease = release
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: release)
             }
-            holdRelease = release
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: release)
             if began {
                 UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState]) {
                     self.blurView.effect = UIBlurEffect(style: .dark)

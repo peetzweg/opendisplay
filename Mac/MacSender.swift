@@ -877,11 +877,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `reconfigure` itself picks up hellos that land while it runs.
     private func scheduleReconfigure() {
         let now = ContinuousClock.now
-        let isolated = lastSelectionChange.map { now - $0 > .milliseconds(500) } ?? true
+        let isLoneChange = lastSelectionChange.map { now - $0 > .milliseconds(500) } ?? true
         lastSelectionChange = now
         pendingReconfigure?.cancel()
         pendingReconfigure = Task {
-            if !isolated {
+            if !isLoneChange {
                 try? await Task.sleep(for: .milliseconds(150))
                 guard !Task.isCancelled else { return }
             }
@@ -1097,7 +1097,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let origin = DisplayArrangement.origin(for: CGSize(width: pointsWide, height: pointsHigh),
                                                device: arrangementKey, resizing: vd.displayID)
         return await vd.resize(pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale,
-                               movingTo: origin)
+                               movingTo: origin,
+                               stillCurrent: { !self.stopped && self.virtualDisplay === vd })
     }
 
     private func ensureActiveDisplay(_ display: VirtualDisplay) throws {
@@ -1364,8 +1365,6 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stop() {
         stopped = true
-        pendingReconfigure?.cancel()
-        pendingReconfigure = nil
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
         cursorImageTimer?.cancel()
@@ -1382,6 +1381,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self?.stopUpgradeProbing()
             self?.captureRecoveryWork?.cancel()
             self?.captureRecoveryWork = nil
+            // Scheduled from hello handling, which runs on `queue` too.
+            self?.pendingReconfigure?.cancel()
+            self?.pendingReconfigure = nil
         }
         if let encoder { VTCompressionSessionInvalidate(encoder) }
         encoder = nil

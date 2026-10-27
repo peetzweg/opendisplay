@@ -102,7 +102,7 @@ final class VirtualDisplay {
                 // removing the display — never hold it across the sleep.
                 do {
                     guard let self else { return }
-                    if !self.resizing {
+                    if self.resizesInFlight == 0 {
                         self.ensureNotMirrored()
                         if self.selectTargetMode(recover: settled) { settled = true }
                         self.manageOrigin()
@@ -118,10 +118,15 @@ final class VirtualDisplay {
     /// window on it before the replacement appears; with multiple devices,
     /// it may choose a sibling virtual display. Applying a new mode avoids
     /// that reassignment entirely.
+    ///
+    /// `stillCurrent` is asked again after waiting for WindowServer: an
+    /// owner that stopped or moved on to another display meanwhile must not
+    /// have this one moved or its arrangement re-armed.
     @MainActor
     @discardableResult
     func resize(pointsWide: Int, pointsHigh: Int, scale: Int? = nil,
-                movingTo origin: CGPoint?) async -> Bool {
+                movingTo origin: CGPoint?,
+                stillCurrent: @MainActor () -> Bool = { true }) async -> Bool {
         let scale = scale.map { $0 < 2 ? 1 : 2 } ?? self.scale
         guard pointsWide * scale <= maxPixelsPerAxis, pointsHigh * scale <= maxPixelsPerAxis else {
             Log.info("virtual display \(display.displayID) cannot resize beyond its descriptor")
@@ -135,10 +140,10 @@ final class VirtualDisplay {
         ]
         // The enforcement tick must not run between the new mode and its
         // placement: it would re-apply the old origin target, or report
-        // WindowServer's own placement as a user drag.
-        resizing = true
-        defer { resizing = false }
-        let previousSize = CGDisplayBounds(display.displayID).size
+        // WindowServer's own placement as a user drag. A count, so a resize
+        // overlapping another cannot reopen the tick for both.
+        resizesInFlight += 1
+        defer { resizesInFlight -= 1 }
         guard display.apply(newSettings) else {
             Log.info("virtual display \(display.displayID) applySettings FAILED during resize")
             return false
@@ -164,12 +169,14 @@ final class VirtualDisplay {
         // fail with kCGErrorNotImplemented); one that would change nothing
         // is not needed at all. So let that placement show first (the main
         // thread must be free to receive it) and move only when it missed.
+        // The new size marks it; a mode macOS swapped for its 1x variant
+        // never shows that size, and pays the full wait plus the move.
         let size = CGSize(width: pointsWide, height: pointsHigh)
-        if size != previousSize {
-            for _ in 0..<50 where CGDisplayBounds(display.displayID).size != size {
-                try? await Task.sleep(for: .milliseconds(10))
-            }
+        let deadline = ContinuousClock.now + .milliseconds(500)
+        while CGDisplayBounds(display.displayID).size != size, ContinuousClock.now < deadline {
+            do { try await Task.sleep(for: .milliseconds(10)) } catch { break }
         }
+        guard !Task.isCancelled, stillCurrent() else { return true }
         var settled = CGDisplayBounds(display.displayID).origin
         var outcome = "already there"
         if settled != origin {
@@ -192,8 +199,8 @@ final class VirtualDisplay {
         return true
     }
 
-    /// Set while `resize` waits for WindowServer's placement.
-    private var resizing = false
+    /// Non-zero while `resize` waits for WindowServer's placement.
+    private var resizesInFlight = 0
 
     /// Returns true when the display is (now) in its mode at `scale` (HiDPI
     /// for a 2x display, the 1x mode otherwise), or when there
