@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.30.0](https://github.com/peetzweg/opendisplay/compare/v1.29.0...v1.30.0) (2026-10-27)
+
+
+### Features
+
+* follow iPhone Duo folds and Split View, and switch the Mac desktop in half a second ([#357](https://github.com/peetzweg/opendisplay/issues/357)) ([97a0d30](https://github.com/peetzweg/opendisplay/commit/97a0d3072463f9909ea2015611f72ce69597b0b2))
+
 ## [1.29.0](https://github.com/peetzweg/opendisplay/compare/v1.28.2...v1.29.0) (2026-10-27)
 
 
