@@ -1,0 +1,21 @@
+# Extends the graphical session onto one receiver, chosen by name, id or
+# address (the instance name), and keeps it there across reconnects:
+#   systemctl --user enable --now 'od-sender@iPhone.service'
+# Names with spaces or slashes need escaping: `systemd-escape 'Pixel 8'`.
+# Override arguments with `systemctl --user edit od-sender@.service`.
+[Unit]
+Description=OpenDisplay Linux sender to %I
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# --wait: keep looking until the receiver is on the network (phone asleep,
+# app closed) instead of failing every 10 s and filling the journal.
+ExecStart=/usr/bin/od-sender run --to %I --wait
+Restart=on-failure
+RestartSec=15
+# 2: unsupported desktop or broken config; restarting will not fix either.
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=graphical-session.target

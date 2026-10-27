@@ -3,6 +3,14 @@ name: Release
 on:
   push:
     branches: [main]
+  # Recovery: build and upload every platform for a release that already
+  # exists (release-please created the tag, but a later step failed before
+  # the build jobs ran).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build, e.g. v1.26.0
+        required: true
 
 permissions:
   contents: write
@@ -21,13 +29,41 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.rp.outputs.release_created }}
-      tag_name: ${{ steps.rp.outputs.tag_name }}
+      release_created: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.rp.outputs.release_created || steps.rp2.outputs.release_created || steps.rp3.outputs.release_created }}
+      tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || steps.rp.outputs.tag_name || steps.rp2.outputs.tag_name || steps.rp3.outputs.tag_name }}
     steps:
+      # Manifest mode (release-please-config.json, .release-please-manifest.json)
+      # only to bump linux/Cargo.toml and linux/Cargo.lock with the app
+      # version: one `simple` package at the root, tags stay `vX.Y.Z`.
+      #
+      # GitHub's GraphQL API intermittently answers release-please's commit
+      # query with "Something went wrong while executing your query" (seen
+      # after the large #298 merge). Retry twice; a release that was created
+      # before a failure is picked up as already tagged, so its builds would
+      # be skipped: rebuild it with the workflow_dispatch entry below.
       - uses: googleapis/release-please-action@v5
+        if: github.event_name == 'push'
         id: rp
-        with:
-          release-type: simple
+        continue-on-error: true
+      - if: github.event_name == 'push' && steps.rp.outcome == 'failure'
+        run: sleep 30
+      - uses: googleapis/release-please-action@v5
+        if: github.event_name == 'push' && steps.rp.outcome == 'failure'
+        id: rp2
+        continue-on-error: true
+      - if: github.event_name == 'push' && steps.rp2.outcome == 'failure'
+        run: sleep 60
+      - uses: googleapis/release-please-action@v5
+        if: github.event_name == 'push' && steps.rp2.outcome == 'failure'
+        id: rp3
+      - name: Check the release to rebuild exists
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a vX.Y.Z tag: $TAG"; exit 1; }
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
   build-ios:
     needs: release-please
@@ -35,6 +71,8 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -68,6 +106,19 @@ jobs:
           export APP_MARKETING_VERSION="${TAG_NAME#v}"
           bundle exec fastlane ios beta
 
+  # Linux sender tarballs and receiver Flatpak bundles, attached to the same
+  # GitHub release; the job also appends the Linux install notes to it. One
+  # version for every platform: the tag above is the Linux version too.
+  build-linux:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    # The called workflow's upload job needs to write the release.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/linux-release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+
   build-mac:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
@@ -79,6 +130,8 @@ jobs:
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -198,3 +251,165 @@ jobs:
           else
             echo "appcast.xml unchanged — nothing to publish"
           fi
+
+  # Android receiver: a signed APK attached to the same GitHub release as the
+  # DMGs, so releases/latest/download/OpenDisplay-Android.apk (the website's
+  # download link) always resolves. Gradle builds it unsigned; apksigner signs
+  # it here, so the keystore never touches the Gradle config or the repo.
+  build-android:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    # Same rule as build-mac: `secrets` can't appear in a step `if:`, so map
+    # the keystore to a job env var and guard on that. Until the maintainer
+    # adds the ANDROID_* secrets, this job builds but uploads nothing.
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    defaults:
+      run:
+        working-directory: Android
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # versionName is the release tag; versionCode is derived from it as
+      # major*1000000 + minor*10000 + patch*100 + rebuild (1.26.0 -> 1260000)
+      # so it only ever grows. CI always uses rebuild 0; the last two digits
+      # leave room for manual Play re-uploads of the same version, since Play
+      # never frees a versionCode once used.
+      # Needs the -PappVersionName/-PappVersionCode hook in app/build.gradle.kts.
+      - name: Build release APK (unsigned)
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          CODE=$(( MAJOR * 1000000 + MINOR * 10000 + PATCH * 100 ))
+          ./gradlew --no-daemon assembleRelease \
+            -PappVersionName="$VERSION" -PappVersionCode="$CODE"
+
+      # minSdk 21 needs the v1 (JAR) signature for Android 5 and 6; apksigner
+      # adds it on its own because it reads minSdk from the APK.
+      - name: Sign APK
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          echo "Using $BUILD_TOOLS"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          mkdir -p dist
+          "$BUILD_TOOLS/zipalign" -p -f 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            "$RUNNER_TEMP/aligned.apk"
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.jks" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --out dist/OpenDisplay-Android.apk \
+            "$RUNNER_TEMP/aligned.apk"
+          rm -f "$RUNNER_TEMP/release.jks"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs dist/OpenDisplay-Android.apk
+          (cd dist && sha256sum OpenDisplay-Android.apk > OpenDisplay-Android.apk.sha256)
+
+      - name: Upload APK to release
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
+            dist/OpenDisplay-Android.apk \
+            dist/OpenDisplay-Android.apk.sha256
+
+      - name: Report skipped upload
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 == '' }}
+        run: echo "::warning::ANDROID_KEYSTORE_BASE64 is not set, so no APK was attached to this release."
+
+  # Google Play: the same release as an Android App Bundle on a testing track,
+  # like build-ios does for TestFlight. Production stays a manual promotion in
+  # Play Console. Play only accepts minSdk 24, so this build raises it; the
+  # GitHub APK above keeps 21. The bundle is signed with the UPLOAD key
+  # (upload.jks), not the app signing key: Play checks the upload signature
+  # and re-signs with its own key. Inactive until the PLAY_* and
+  # ANDROID_UPLOAD_* secrets exist; see RELEASING.md.
+  upload-play:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    env:
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+      ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+    steps:
+      - name: Report skipped upload
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON == '' || env.ANDROID_UPLOAD_KEYSTORE_BASE64 == '' }}
+        run: echo "::warning::PLAY_SERVICE_ACCOUNT_JSON or ANDROID_UPLOAD_KEYSTORE_BASE64 is not set, so nothing was uploaded to Google Play."
+
+      - uses: actions/checkout@v6
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions/setup-java@v5
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Same versionCode formula as build-android, so the Play build and the
+      # APK of one release share it.
+      - name: Build Play bundle (minSdk 24)
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        working-directory: Android
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          CODE=$(( MAJOR * 1000000 + MINOR * 10000 + PATCH * 100 ))
+          ./gradlew --no-daemon bundleRelease -PappMinSdk=24 \
+            -PappVersionName="$VERSION" -PappVersionCode="$CODE"
+
+      - name: Sign bundle with the upload key
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_UPLOAD_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          mkdir -p dist
+          jarsigner -keystore "$RUNNER_TEMP/upload.jks" \
+            -storepass:env ANDROID_UPLOAD_KEYSTORE_PASSWORD \
+            -sigalg SHA256withRSA -digestalg SHA-256 \
+            -signedjar dist/OpenDisplay-play.aab \
+            Android/app/build/outputs/bundle/release/app-release.aab \
+            "$ANDROID_UPLOAD_KEY_ALIAS"
+          rm -f "$RUNNER_TEMP/upload.jks"
+          jarsigner -verify dist/OpenDisplay-play.aab
+
+      - uses: ruby/setup-ruby@v1
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      # PLAY_TRACK (repository variable) names the testing track; "alpha" is
+      # the API name of Play Console's default closed testing track.
+      - name: Upload to Google Play
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+        env:
+          PLAY_AAB_PATH: ${{ github.workspace }}/dist/OpenDisplay-play.aab
+          PLAY_TRACK: ${{ vars.PLAY_TRACK || 'alpha' }}
+        run: bundle exec fastlane android play_beta

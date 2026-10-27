@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>app.opendisplay.Receiver</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>OpenDisplay Receiver</name>
+  <summary>Use this screen as an extra display for another computer</summary>
+  <developer id="app.opendisplay">
+    <name>OpenDisplay</name>
+  </developer>
+  <description>
+    <p>
+      OpenDisplay Receiver turns this screen into an extra display for a Mac
+      or a Linux desktop running the OpenDisplay sender. The sender's desktop
+      extends onto this screen over the local network; this machine's mouse
+      and touchpad work on it too.
+    </p>
+    <p>
+      The receiver advertises itself on the network, fills the screen when a
+      sender connects, draws the sender's pointer and decodes H.264 in
+      hardware where the system offers it.
+    </p>
+  </description>
+  <launchable type="desktop-id">app.opendisplay.Receiver.desktop</launchable>
+  <url type="homepage">https://opendisplay.app</url>
+  <url type="vcs-browser">https://github.com/peetzweg/opendisplay</url>
+  <url type="bugtracker">https://github.com/peetzweg/opendisplay/issues</url>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+  </supports>
+  <releases>
+    <release version="0.1.0~beta.1" date="2026-10-20">
+      <description>
+        <p>First beta of the Linux receiver.</p>
+      </description>
+    </release>
+  </releases>
+</component>

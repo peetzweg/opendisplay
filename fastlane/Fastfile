@@ -144,3 +144,25 @@ platform :ios do
     )
   end
 end
+
+platform :android do
+  # The release workflow builds the Play bundle (minSdk 24) and signs it with
+  # the upload key; this lane only hands it to Google Play. Play re-signs it
+  # with its own app signing key, so Play installs and the GitHub APK carry
+  # different signatures (RELEASING.md).
+  desc "Upload the signed Play bundle to a Google Play testing track"
+  lane :play_beta do
+    upload_to_play_store(
+      package_name:            "com.peetzweg.opendisplay",
+      json_key_data:           ENV.fetch("PLAY_SERVICE_ACCOUNT_JSON"),
+      aab:                     ENV.fetch("PLAY_AAB_PATH"),
+      track:                   ENV.fetch("PLAY_TRACK", "alpha"),
+      release_status:          "completed",
+      skip_upload_apk:         true,
+      skip_upload_metadata:    true,
+      skip_upload_changelogs:  true,
+      skip_upload_images:      true,
+      skip_upload_screenshots: true
+    )
+  end
+end

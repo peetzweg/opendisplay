@@ -1,0 +1,26 @@
+pkgbase = opendisplay-receiver
+	pkgdesc = OpenDisplay receiver for Linux: use this screen as an extra display for a Mac or Linux desktop
+	pkgver = 1.25.0
+	pkgrel = 1
+	url = https://opendisplay.app
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-only
+	makedepends = cargo
+	makedepends = pkgconf
+	depends = gtk4
+	depends = gstreamer
+	depends = gst-plugins-base-libs
+	depends = gst-plugins-base
+	depends = gst-plugins-bad
+	depends = gst-libav
+	depends = gcc-libs
+	depends = glibc
+	optdepends = gst-plugin-va: hardware H.264 decode via VA-API (Intel/AMD)
+	optdepends = gst-plugins-good: V4L2 stateful hardware decoders (v4l2h264dec)
+	provides = od-receiver
+	options = !lto
+	source = opendisplay-receiver-1.25.0.tar.gz::https://github.com/peetzweg/opendisplay/archive/refs/tags/v1.25.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = opendisplay-receiver

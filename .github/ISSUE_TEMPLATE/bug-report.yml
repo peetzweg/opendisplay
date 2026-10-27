@@ -1,0 +1,78 @@
+name: Bug report
+description: Something doesn't work, looks wrong, or feels laggy.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Only the first box is required. Everything else helps us reproduce the problem faster, so fill in what you can and skip what you don't know.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead. Screenshots or a short screen recording are very welcome.
+      placeholder: |
+        I connected my iPad over USB, the display showed up for a second and then the iPad went back to "Waiting for connection".
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Can you make it happen again?
+      description: Steps that trigger it, and whether it happens every time, sometimes, or only once.
+      placeholder: |
+        1. Start OpenDisplay on the Mac
+        2. Plug in the iPad
+        3. ...
+        Happens: every time / sometimes / once
+
+  - type: input
+    id: sender
+    attributes:
+      label: Computer sending the screen
+      description: Mac model, macOS version, and OpenDisplay version (in Finder, select the app in Applications and choose File → Get Info).
+      placeholder: MacBook Pro M3 (14"), macOS 26.1, OpenDisplay 1.25.0
+
+  - type: input
+    id: receiver
+    attributes:
+      label: Device showing the screen
+      description: Which device, its OS version, and which app you use on it (OpenDisplay for iPhone/iPad, or OpenDisplay Receiver on a Mac).
+      placeholder: iPad Pro 11" (2021), iPadOS 26.0, OpenDisplay 1.25.0
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      multiple: true
+      options:
+        - USB cable
+        - Wi-Fi
+        - Thunderbolt / Ethernet cable between two Macs
+        - Not sure
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Display setup
+      description: Anything about how the display is used. For example extend or mirror, the Display size you picked, other monitors attached, and for lag or picture issues the codec and FPS from the performance overlay.
+      placeholder: Extending, Display size "More space", one external 4K monitor, HEVC around 60 fps
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Logs are the most useful thing you can attach. Drag the files into this box.
+        - **Mac (sender or Receiver):** click **Logs** in the OpenDisplay menu bar window. It opens the log files in Finder.
+        - **iPhone / iPad:** Settings in the app → Diagnostics → Connection log → Share.
+
+        Logs contain no screen content, but they do include your device names and local network addresses. Feel free to replace those before uploading.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Did it work in an earlier version? Is anything unusual about your setup (VPN, firewall, managed Mac, Stage Manager, ...)?

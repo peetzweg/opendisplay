@@ -1,0 +1,15 @@
+[package]
+name = "opendisplay-session"
+description = "Sans-I/O OpenDisplay sender and receiver session state machines: liveness, clock offset, keyframe recovery, cursor sequencing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+opendisplay-proto = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

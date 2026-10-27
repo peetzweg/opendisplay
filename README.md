@@ -4,9 +4,9 @@
 
 # OpenDisplay
 
-**Turn your spare Apple devices into second monitors for your Mac — free, open source, no subscription.**
+**Turn your spare devices into second monitors for your Mac — free, open source, no subscription.**
 
-iPhone, iPad, and spare Macs. A self-hosted
+iPhone, iPad, spare Macs, and Android (beta); a Linux sender and receiver are in beta too. A self-hosted
 alternative to Apple Sidecar, Duet Display, and Luna Display: true extended
 display (not just mirroring), Retina-sharp, over USB or WiFi, with touch and
 scroll input.
@@ -274,25 +274,61 @@ The capture/streaming pipeline itself uses only public APIs.
 
 **Audio?** Out of scope for now.
 
-## Compatible apps
+## Linux sender (beta)
 
-The official apps cover a Mac sender and an iPhone/iPad receiver on iOS 15+.
-Other people have built their own clients that speak the same protocol, so
-you can also use an Android device or an older iPad as a display, or drive
-one from Linux. The wire protocol is specified in
-[PROTOCOL.md](PROTOCOL.md), so a new client can be written against the spec
-instead of reverse-engineered from the Swift sources. If your hardware is
-not covered yet, start here:
+The OpenDisplay Linux sender (`od-sender`) extends a Linux desktop onto any
+OpenDisplay receiver (iPhone, iPad, Android, or a spare Mac) by creating a
+virtual display sized for it. The beta is tested on **Omarchy / Hyprland 0.56
+on Apple silicon (Asahi)**; x86_64 is expected to work. **Sway 1.10+, KDE
+Plasma 6.8+ and GNOME 50+** are experimental. Video is CPU-encoded for now
+(VA-API planned), and the stream is not encrypted, so use a network you trust.
 
-**Android receivers**
+Install it from the
+[latest release](https://github.com/peetzweg/opendisplay/releases/latest) (Linux ships in every OpenDisplay release, same version as the Mac and iOS apps):
+the x86_64/aarch64 tarball with its `install.sh` works on any distribution,
+and on Arch / Omarchy you can instead build the package from this repository
+with `makepkg -si`
+([linux/README.md#install](linux/README.md#install)). Then, with the
+OpenDisplay app open on the receiver:
+
+```sh
+od-sender doctor              # what it will use on this desktop
+od-sender run --to iPhone     # or just `od-sender run` with one receiver on the network
+```
+
+Setup, the supported matrix, desktop notes, troubleshooting and how to report
+a problem are in [linux/README.md](linux/README.md).
+
+### Linux receiver (beta)
+
+`od-receiver` turns a Linux machine's screen into the display, for a Mac or
+a Linux desktop. It is tested windowed on Asahi Linux / Hyprland (aarch64),
+at 24 ms end to end; other desktops are expected to work. Install it from
+the same release as a Flatpak bundle (any distribution) or, on Arch /
+Omarchy, build its package from this repository with `makepkg -si`; see
+[linux/README.md#linux-receiver-beta](linux/README.md#linux-receiver-beta).
+Reports go to [#284](https://github.com/peetzweg/opendisplay/issues/284).
+
+## Third-party projects
+
+OpenDisplay's own apps cover the Mac and Linux senders and receivers for
+iPhone, iPad, Mac, Android and Linux. Fans have also built their own clients
+against the same protocol ([PROTOCOL.md](PROTOCOL.md)), for example for
+de-Googled Android phones, iPads too old for the official app, or Linux X11
+desktops. Requirements, install steps and comparisons are in the docs:
+[opendisplay.app/docs/third-party](https://opendisplay.app/docs/third-party/).
+
+**Older iOS receivers** ([docs](https://opendisplay.app/docs/third-party/older-ios/))
+* [Francesco149/opendisplay (iOSLegacy)](https://github.com/Francesco149/opendisplay/tree/ios12-legacy-receiver/iOSLegacy) - the official receiver's code in a UIKit shell for iOS 12.2+ (iPad Air, iPad mini 2/3, iPhone 5s/6), built and installed yourself
+* [cuongpham1/ipad-iphone-second-monitor-ios12-free](https://github.com/cuongpham1/ipad-iphone-second-monitor-ios12-free) - iOS 12 client for iPads and iPhones that cannot run the official app, prebuilt `.ipa`
+
+**Linux senders** ([docs](https://opendisplay.app/docs/third-party/linux/))
+* [cray2015/opendisplay-x11](https://github.com/cray2015/opendisplay-x11) - extend an X11 desktop onto an iPad over a USB cable; needs a free HDMI or DP++ port
+* [tixwho/opendisplay-linux](https://github.com/tixwho/opendisplay-linux) - drive an iPhone or iPad from a Wayland desktop (KDE Plasma, Hyprland)
+
+**Android receivers** ([docs](https://opendisplay.app/docs/third-party/android/))
 * [gprot42/android-opendisplay](https://github.com/gprot42/android-opendisplay) - GrapheneOS receiver for de-Googled Pixel phones and tablets, Android 8.0+
 * [josepacelli/opendisplay-android](https://github.com/josepacelli/opendisplay-android) - Android receiver, Android 8.0+, works with an unmodified Mac app
-
-**Older iOS receivers**
-* [cuongpham1/ipad-iphone-second-monitor-ios12-free](https://github.com/cuongpham1/ipad-iphone-second-monitor-ios12-free) - iOS 12 client for iPads and iPhones that cannot run the official app
-
-**Linux senders**
-* [tixwho/opendisplay-linux](https://github.com/tixwho/opendisplay-linux) - drive an iPhone or iPad from a Wayland desktop (KDE Plasma, Hyprland)
 
 These are fan-made projects, not official builds. They are not affiliated
 with OpenDisplay and are not maintained, reviewed, or supported by us, so
@@ -334,6 +370,15 @@ on the App Store and lives on GitHub instead.
 You need **two apps**: a Mac app (captures and sends) and an iOS app
 (receives and displays). To use a **second Mac** as the display, install
 `OpenDisplay Receiver` on it instead of the iOS app.
+
+### Homebrew (Mac)
+
+```sh
+brew install --cask opendisplay           # the sender
+brew install --cask opendisplay-receiver  # a Mac that should be the display
+```
+
+Both apps keep updating themselves via Sparkle after a Homebrew install.
 
 ### Prebuilt downloads (Mac)
 

@@ -29,6 +29,7 @@ enum CaptureMode: String {
 enum SenderTransport {
     case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
+    case accessory(serial: String)         // Android over USB in accessory mode (AOA)
 }
 
 @available(macOS 14.0, *)
@@ -158,7 +159,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // stays gone past the grace ends the session via onDisconnected.
     private var everConnected = false
     private var disconnectedSince: Date?
-    private let disconnectGraceSeconds: TimeInterval = 10
+    // A redial over accessory mode resets the device, waits for it twice and
+    // relaunches the app: 5-7 s on a Pixel, so it gets more room.
+    private var disconnectGraceSeconds: TimeInterval {
+        if case .accessory = transport { 20 } else { 10 }
+    }
 
     private var lastHello: PhoneInfo?
     private var helloContinuation: CheckedContinuation<PhoneInfo, Error>?
@@ -279,6 +284,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Only touched on `cursorQueue`.
     private var cursorSessionGeneration: UInt64 = 0
     private var captureDisplayID: CGDirectDisplayID = 0
+    /// Only touched on `queue` (the SCK sample queue).
+    private var captureSourceCheck = CaptureSourceCheck()
+    /// #391 re-attaches this session. If a fresh stream is misbound too,
+    /// restarting forever is worse than a wrong picture: stop checking.
+    private var wrongDisplayReattaches = 0
+    private let maxWrongDisplayReattaches = 3
     // ScreenCaptureKit and VideoToolbox finish work asynchronously. During a
     // rotation, an old capture callback or a late encoder completion must not
     // put a frame from the retired display onto this device's new socket.
@@ -727,7 +738,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 // resurrect the very zombie this retry exists to avoid. (Mirrors the
                 // `if stopped` checks in the permission-poll loops above.)
                 if stopped { return }
-                created = await MainActor.run {
+                let make: @MainActor () -> VirtualDisplay? = {
                     guard !self.stopped else { return nil }
                     let restoreOrigin = DisplayArrangement.origin(for: sizeInPoints, device: arrangementKey)
                     // The productID moves with the serial: field data in #206
@@ -747,6 +758,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                                                                       device: arrangementKey)
                                           })
                 }
+                created = await makeAvoidingUnitClash(make)
                 if stopped { throw CancellationError() }
                 if let created {
                     await MainActor.run {
@@ -1098,6 +1110,105 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard !stopped, virtualDisplay === display else { throw CancellationError() }
     }
 
+    /// Every live sender, so a unit clash can renumber its neighbours (#391).
+    /// Main actor only.
+    @MainActor private static let live = NSHashTable<MacSender>.weakObjects()
+
+    /// Set while this sender's display is released so a sibling can take a
+    /// clash-free unit number; capture recovery stays off until it is rebuilt.
+    private var releasedForRenumbering = false
+
+    /// Create a display with `make`, keeping unit numbers unique (#391).
+    ///
+    /// macOS numbers displays by count, so a display rebuilt while a later
+    /// one survives lands on the survivor's number, and the two get crossed.
+    /// Renumber in creation order instead: release the new display and every
+    /// sibling display at or above the clashing number, recreate this one
+    /// first, then let the siblings rebuild after it. A sibling's rebuild
+    /// also replaces the display the clash damaged. This must hold the only
+    /// reference to the display: a rebuild reuses the serial, which fails
+    /// while the old object lives.
+    @MainActor
+    private func makeAvoidingUnitClash(_ make: @MainActor () -> VirtualDisplay?) async -> VirtualDisplay? {
+        Self.live.add(self)
+        var current: VirtualDisplay? = make()
+        guard let id = current?.displayID, let clash = await DisplayUnits.clash(for: id) else { return current }
+        let held = Self.live.allObjects
+            .filter { $0 !== self && !$0.stopped && $0.mode == .extend }
+            .compactMap { sender -> (sender: MacSender, unit: UInt32, display: CGDirectDisplayID)? in
+                guard let displayID = sender.virtualDisplay?.displayID else { return nil }
+                let unit = CGDisplayUnitNumber(displayID)
+                return unit != UInt32.max && unit >= clash.unit ? (sender, unit, displayID) : nil
+            }
+            .sorted { $0.unit < $1.unit }
+        // Only our own displays can be renumbered. A clash with anything
+        // else (a real monitor, a display a stopped session left behind
+        // while asleep) would re-clash on every rebuild and ping-pong.
+        guard held.contains(where: { $0.display == clash.other }) else {
+            Log.info("virtual display \(id) came up on unit \(clash.unit), already held by display "
+                + "\(clash.other), which no live session owns — leaving it (#391)")
+            return current
+        }
+        let siblings = held.map(\.sender)
+        Log.info("virtual display \(id) came up on unit \(clash.unit), already held by display \(clash.other) — "
+            + "renumbering \(siblings.count + 1) display(s) in creation order (#391)")
+        current = nil
+        var released = [id]
+        for sibling in siblings {
+            if let displayID = await sibling.releaseDisplayForRenumbering() { released.append(displayID) }
+        }
+        await DisplayUnits.waitUntilOffline(released)
+        // The siblings are rebuilt whatever happens to this session from
+        // here: one stopped mid-renumber must not strand them displayless.
+        // One at a time, in their old order, each after this display is up.
+        defer {
+            Task { @MainActor in
+                for sibling in siblings { await sibling.rebuildDisplayAfterRenumbering() }
+            }
+        }
+        guard !stopped else { return nil }
+        current = make()
+        if let id = current?.displayID, let clash = await DisplayUnits.clash(for: id) {
+            Log.info("virtual display \(id) still shares unit \(clash.unit) with display \(clash.other) after renumbering")
+        }
+        return current
+    }
+
+    /// Release this session's display so a sibling can renumber (#391).
+    /// Returns the released display's id.
+    @MainActor
+    private func releaseDisplayForRenumbering() async -> CGDirectDisplayID? {
+        // A recovery round or reconfigure in flight holds the display and
+        // would race the rebuild with its own setupExtend: let it finish.
+        for _ in 0..<50 where captureRecoveryInFlight || reconfiguring {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard !stopped, !releasedForRenumbering, let displayID = virtualDisplay?.displayID else { return nil }
+        releasedForRenumbering = true
+        invalidateCapturePipeline(discardingLastFrame: true)
+        let retired = stream
+        stream = nil
+        try? await retired?.stopCapture()
+        virtualDisplay = nil
+        return displayID
+    }
+
+    @MainActor
+    private func rebuildDisplayAfterRenumbering() async {
+        guard releasedForRenumbering else { return }
+        // Cleared on entry: a second renumbering caller must not start a
+        // second setupExtend on the same session.
+        releasedForRenumbering = false
+        guard !stopped, let info = lastHello else { return }
+        Log.info("rebuilding display after renumbering (#391)")
+        do {
+            try await setupExtend(info)
+        } catch {
+            Log.info("rebuild after renumbering failed (\(error)) — falling back to capture recovery")
+            scheduleCaptureRecovery()
+        }
+    }
+
     /// The virtual display takes a moment to show up in shareable content.
     private func findSCDisplay(id: CGDirectDisplayID, expectedSize: CGSize? = nil) async throws -> SCDisplay {
         var lastDisplayCount = 0
@@ -1285,6 +1396,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         queue.async { [weak self] in self?.cancelSettleRefinement() }
         #endif
         queue.async { [weak self] in
+            self?.dialTask?.cancel()
             // Unblock a start() that is still waiting for the hello.
             self?.helloContinuation?.resume(throwing: CancellationError())
             self?.helloContinuation = nil
@@ -1301,7 +1413,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     func switchTransport(to newTransport: SenderTransport) {
         queue.async { [weak self] in
             guard let self, !self.stopped else { return }
-            let label = if case .usb = newTransport { "USB" } else { "WiFi" }
+            let label = if case .tcp = newTransport { "WiFi" } else { "USB" }
             Log.info("switching \(self.endpointName) to \(label)")
             self.transport = newTransport
             // Fresh grace window: if the new link can't come up either, the
@@ -1440,7 +1552,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// On `queue`: one recovery tick armed by `scheduleCaptureRecovery`.
     private func runCaptureRecoveryRound() {
         captureRecoveryWork = nil
-        guard !stopped, !captureRecoveryInFlight, stream == nil,
+        guard !stopped, !captureRecoveryInFlight, stream == nil, !releasedForRenumbering,
               let hello = lastHello else { return }
         guard consoleCanCapture else {
             if !waitingForConsole {
@@ -1533,8 +1645,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: - Connection (with retry)
 
     // Guards against a stale async USB dial adopting after a newer one (or a
-    // migration) superseded it. Only touched on `queue`.
-    private var dialGeneration = 0
+    // migration) superseded it. Only touched on `queue`. Superseding also
+    // cancels the dial itself: an accessory dial opens the app on the
+    // device and holds the device for up to a minute.
+    private var dialGeneration = 0 {
+        didSet { dialTask?.cancel() }
+    }
+    private var dialTask: Task<Void, Never>?
     // Encoded output is asynchronous. Tag it with the connection that was
     // active at submission so an old WiFi frame cannot become the first video
     // payload after a live migration to cable. Only touched on `queue`.
@@ -1544,7 +1661,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard !stopped else { return }
         switch transport {
         case .tcp(let endpoint): connectTCP(endpoint)
-        case .usb(let udid, let port): connectUSB(udid: udid, port: port)
+        case .usb(let udid, let port):
+            connectWired { (try await Usbmux.dial(udid: udid, port: port, queue: self.queue), nil) }
+        case .accessory(let serial):
+            connectWired { try await AOA.dial(serial: serial, queue: self.queue) }
         }
     }
 
@@ -1876,18 +1996,29 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         conn.start(queue: queue)
     }
 
-    /// Dial through macOS's built-in usbmuxd — no external tunnel needed.
+    /// Dial over the cable: macOS's built-in usbmuxd for iPhones and iPads,
+    /// accessory mode for Android — no external tunnel needed. The dial may
+    /// already have read the receiver's first message (accessory mode, where
+    /// only hello proves the app opened); it is handled right after adoption.
     /// The handshake is async, so adoption is gated on `dialGeneration`.
-    private func connectUSB(udid: String?, port: UInt16) {
+    private func connectWired(_ dial: @escaping () async throws -> (NWConnection, Data?)) {
         dialGeneration += 1
         let generation = dialGeneration
-        Task { [weak self] in
+        dialTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let conn = try await Usbmux.dial(udid: udid, port: port, queue: queue)
+                let (conn, firstMessage) = try await dial()
                 queue.async {
                     guard generation == self.dialGeneration, !self.stopped else {
                         conn.cancel()
+                        return
+                    }
+                    // A dial deadline can fire between the dial returning
+                    // and this block; adopting the cancelled socket would
+                    // look connected until the watchdog noticed.
+                    guard conn.state == .ready else {
+                        conn.cancel()
+                        self.scheduleReconnect()
                         return
                     }
                     self.connection = conn
@@ -1905,6 +2036,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         }
                     }
                     self.becomeReady(conn)
+                    if let firstMessage { self.handleControl(firstMessage) }
                 }
             } catch {
                 queue.async {
@@ -1912,10 +2044,39 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     // Distinct guidance per failure: cable missing vs app
                     // closed. Composed on `queue`: awaitingWake lives there.
                     let hint: String
-                    switch error as? Usbmux.Failure {
-                    case .noDevice:
+                    switch error {
+                    case Usbmux.Failure.noDevice:
                         hint = "Waiting for a USB device — plug in the iPhone or iPad…"
-                    case .refused:
+                    case AOA.Failure.noDevice:
+                        hint = "Waiting for the Android device — plug it in…"
+                    case AOA.Failure.notAccessory:
+                        // A locked device refuses accessory mode until unlocked.
+                        hint = self.awaitingWake
+                            ? "\(self.endpointName) is asleep — reconnects when it wakes…"
+                            : "Unlock the Android device to connect over USB…"
+                    case AOA.Failure.noApp:
+                        // Every accessory dial opens the app on the device,
+                        // so retrying a device that never answered would
+                        // keep popping a dialog: give up unless the session
+                        // already streamed (a dropped link) or waits for
+                        // the device to wake (it answers once unlocked).
+                        if self.awaitingWake {
+                            hint = "\(self.endpointName) is asleep — reconnects when it wakes…"
+                        } else if self.everConnected {
+                            self.dialRefused()
+                            hint = "Device found — open the OpenDisplay app on it…"
+                        } else {
+                            // Never answered: end like a receiver that quit, so
+                            // auto-connect leaves the device alone until it is
+                            // replugged or connected by hand.
+                            hint = "Install OpenDisplay on the Android device and allow it to use the USB accessory"
+                            if !self.goneReported, !self.stopped {
+                                self.goneReported = true
+                                Log.info("OpenDisplay did not open on the Android device — ending session")
+                                Task { @MainActor in self.onPeerClosed?() }
+                            }
+                        }
+                    case Usbmux.Failure.refused:
                         self.dialRefused()
                         hint = self.awaitingWake
                             ? "\(self.endpointName) is asleep — reconnects when it wakes…"
@@ -2587,6 +2748,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let generation = captureGenerationNow
 
+        if capturingAnotherDisplay(sampleBuffer) {
+            reattachCaptureToOwnDisplay()
+            return
+        }
+
         lastPixelBuffer = pixelBuffer
         lastCaptureAt = Date()
         capFrames += 1
@@ -2600,6 +2766,41 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if shouldDropFrame(reason: "pending_sends") { return }   // TCP send queue full
 
         encode(pixelBuffer, pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), generation: generation)
+    }
+
+    /// On `queue`: whether this stream has been delivering some other
+    /// display's picture for a sustained stretch (#391).
+    private func capturingAnotherDisplay(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        let displayID = captureDisplayID
+        guard mode == .extend, displayID != 0,
+              wrongDisplayReattaches < maxWrongDisplayReattaches,
+              let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+                as? [[SCStreamFrameInfo: Any]],
+              let info = attachments.first,
+              let rectDictionary = info[.screenRect] as? NSDictionary,
+              let screenRect = CGRect(dictionaryRepresentation: rectDictionary)
+        else { return false }
+        let expected = CGDisplayBounds(displayID)
+        guard captureSourceCheck.frame(screenRect: screenRect, expected: expected) else { return false }
+        wrongDisplayReattaches += 1
+        Log.info("capture of display \(displayID) is delivering \(screenRect), not its own \(expected)"
+            + " — re-attaching capture (#391, \(wrongDisplayReattaches)/\(maxWrongDisplayReattaches))")
+        if wrongDisplayReattaches == maxWrongDisplayReattaches {
+            Log.info("capture keeps landing on another display — no further checks this session (#391)")
+        }
+        return true
+    }
+
+    /// On `queue`: drop the misbound stream and let the recovery loop attach
+    /// a fresh one to our display. A new SCShareableContent lookup resolves
+    /// the display correctly; the running stream is what went wrong.
+    private func reattachCaptureToOwnDisplay() {
+        guard !stopped, mode == .extend, let stream else { return }
+        // The last frame is the other display's picture: never replay it.
+        invalidateCapturePipeline(discardingLastFrame: true)
+        self.stream = nil
+        stream.stopCapture { _ in }
+        scheduleCaptureRecovery()
     }
 
     private func isPipelineBackedUp() -> Bool {
@@ -3112,6 +3313,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         frameRateLimiter = FrameRateLimiter(framesPerSecond: 60)
         pipelineLock.unlock()
         captureDisplayID = 0
+        queue.async { self.captureSourceCheck = CaptureSourceCheck() }
         if discardingLastFrame {
             lastPixelBuffer = nil
             lastCaptureAt = .distantPast

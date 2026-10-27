@@ -1,0 +1,1 @@
+{"type":"hello","pixelsWide":2732,"pixelsHigh":2048,"scale":2,"device":"iPad","id":"C0FFEE00-1111-4222-8333-444455556666","pv":3,"displayMaxFrameRate":120,"panel":{"pixelsWide":2732,"pixelsHigh":2048,"scale":2},"videoCaps":[{"codec":"h264","maxFrameRate":60},{"codec":"hevc","maxWidth":2732,"maxHeight":2732,"maxFrameRate":60}],"cursorPort":9001}

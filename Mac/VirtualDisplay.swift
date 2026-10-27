@@ -23,9 +23,7 @@ final class VirtualDisplay {
     var pixelsWide: Int { pointsWide * scale }
     var pixelsHigh: Int { pointsHigh * scale }
 
-    private var restoreTarget: CGPoint?
-    private var restoreUntil: Date
-    private var lastReportedOrigin: CGPoint?
+    private var originRestore: OriginRestore
     private let onOriginChange: ((CGPoint, CGSize) -> Void)?
     /// Called once on the main thread when macOS keeps refusing a 2x target
     /// (or keeps dropping it from the mode list), with the refused size. The
@@ -58,8 +56,7 @@ final class VirtualDisplay {
                                        descriptorMaxPixelsPerAxis,
                                        Self.reservedPixelsPerAxis)
         maxPixelsPerAxis = (maximumPixelsPerAxis + 1) & ~1
-        self.restoreTarget = restoreOrigin
-        self.restoreUntil = restoreOrigin == nil ? .distantPast : Date().addingTimeInterval(6)
+        self.originRestore = OriginRestore(target: restoreOrigin)
         self.onOriginChange = onOriginChange
 
         let descriptor = CGVirtualDisplayDescriptor()
@@ -164,9 +161,7 @@ final class VirtualDisplay {
                 // on: a snap is system state, and persisting it as if it were a
                 // user drag is the ratchet #203 is about.
                 let settled = CGDisplayBounds(display.displayID).origin
-                restoreTarget = settled
-                restoreUntil = Date().addingTimeInterval(6)
-                lastReportedOrigin = settled
+                originRestore.rearm(at: settled)
                 Log.info("virtual display \(display.displayID) resized to \(pointsWide)x\(pointsHigh)pt @\(scale)x "
                     + "at (\(Int(origin.x)),\(Int(origin.y))), settled "
                     + "(\(Int(settled.x)),\(Int(settled.y))) (result \(err.rawValue))")
@@ -264,43 +259,27 @@ final class VirtualDisplay {
     private static let hidpiRefusalsBeforeBackoff = 5
     private static let hidpiRetryInterval: TimeInterval = 30
 
-    /// Arrangement restore + observation (#116). For the first few seconds,
-    /// assert `restoreTarget`: macOS restores ITS saved arrangement for this
-    /// display identity asynchronously, seconds after creation, and that
-    /// record is stale or default whenever the identity is fresh (rotation
-    /// swaps the serial, transport switches change it) — the caller's
-    /// device-keyed record must win. Afterwards, origin changes are the user
-    /// rearranging: report them so the caller can persist the new spot.
+    /// Arrangement restore + observation (#116): enforce the caller's
+    /// device-keyed origin while macOS may still restore its own stale record
+    /// for this identity, then report user drags. Policy in `OriginRestore`.
     private func manageOrigin() {
         let id = display.displayID
         let origin = CGDisplayBounds(id).origin
-        if let target = restoreTarget, Date() < restoreUntil {
-            // Initial arrangement is system state, not a user drag. Mark it
-            // observed so it cannot overwrite the saved device placement
-            // when the restore window expires (#203).
-            guard origin != target else {
-                lastReportedOrigin = origin
-                return
-            }
+        switch originRestore.tick(origin: origin) {
+        case .none:
+            break
+        case .apply(let target):
             var config: CGDisplayConfigRef?
             guard CGBeginDisplayConfiguration(&config) == .success else { return }
             CGConfigureDisplayOrigin(config, id, Int32(target.x), Int32(target.y))
             let err = CGCompleteDisplayConfiguration(config, .permanently)
-            // WindowServer snaps the requested origin to the nearest valid
-            // arrangement — adopt what it settled on, or every remaining
-            // tick of the window would re-apply against the snap.
-            restoreTarget = CGDisplayBounds(id).origin
-            // A snap is also system state. Keep observing from the settled
-            // point, but only a later origin change may be a user drag.
-            lastReportedOrigin = restoreTarget
+            let settled = CGDisplayBounds(id).origin
+            originRestore.settled(at: settled)
             Log.info("display \(id) origin (\(Int(origin.x)),\(Int(origin.y))) → restored "
                 + "(\(Int(target.x)),\(Int(target.y))), settled "
-                + "(\(Int(restoreTarget!.x)),\(Int(restoreTarget!.y))) (result \(err.rawValue))")
-            return
-        }
-        if origin != lastReportedOrigin {
-            lastReportedOrigin = origin
-            onOriginChange?(origin, CGSize(width: pointsWide, height: pointsHigh))
+                + "(\(Int(settled.x)),\(Int(settled.y))) (result \(err.rawValue))")
+        case .report(let moved):
+            onOriginChange?(moved, CGSize(width: pointsWide, height: pointsHigh))
         }
     }
 
@@ -342,5 +321,48 @@ final class VirtualDisplay {
         // macOS restores — continuous enforcement, like the HiDPI mode above.
         let err = CGCompleteDisplayConfiguration(config, .forSession)
         Log.info("virtual display \(id) was in a mirror set — detached to extend (result \(err.rawValue))")
+    }
+}
+
+/// Unit number collisions between displays (#391).
+///
+/// macOS numbers a new display from the count of online displays instead of
+/// reusing the freed slot. So when the first of two virtual displays is
+/// rebuilt while the second survives, the rebuilt one gets the survivor's
+/// unit number. Two displays sharing a unit get crossed: a stream on the new
+/// display delivers the survivor's picture (aspect-fit into its own size)
+/// and the survivor's mode list stops matching its mode. Unit numbers are
+/// never renumbered once assigned, so the only way back to unique numbers is
+/// to recreate the displays in order.
+enum DisplayUnits {
+    /// The other display already holding `id`'s unit number, once `id` is
+    /// online (its unit reads as `UInt32.max` for a moment after creation).
+    static func clash(for id: CGDirectDisplayID) async -> (unit: UInt32, other: CGDirectDisplayID)? {
+        var unit = CGDisplayUnitNumber(id)
+        for _ in 0..<40 where unit == UInt32.max {
+            try? await Task.sleep(for: .milliseconds(50))
+            unit = CGDisplayUnitNumber(id)
+        }
+        guard unit != UInt32.max else { return nil }
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var list = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &list, &count)
+        guard let other = list.prefix(Int(count)).first(where: { $0 != id && CGDisplayUnitNumber($0) == unit })
+        else { return nil }
+        return (unit, other)
+    }
+
+    /// Wait (up to 3 s) until released displays have left the online list,
+    /// so a recreated display is numbered without them.
+    static func waitUntilOffline(_ ids: [CGDirectDisplayID]) async {
+        for _ in 0..<60 {
+            var count: UInt32 = 0
+            CGGetOnlineDisplayList(0, nil, &count)
+            var list = [CGDirectDisplayID](repeating: 0, count: Int(count))
+            CGGetOnlineDisplayList(count, &list, &count)
+            if !ids.contains(where: list.prefix(Int(count)).contains) { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
     }
 }

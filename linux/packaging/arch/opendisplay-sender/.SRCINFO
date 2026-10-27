@@ -1,0 +1,21 @@
+pkgbase = opendisplay-sender
+	pkgdesc = OpenDisplay sender for Wayland: extend a Linux desktop onto an iPhone, iPad, Android device or Mac
+	pkgver = 1.25.0
+	pkgrel = 1
+	url = https://opendisplay.app
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-only
+	makedepends = cargo
+	makedepends = pkgconf
+	makedepends = clang
+	depends = ffmpeg
+	depends = libpipewire
+	depends = gcc-libs
+	depends = glibc
+	options = !lto
+	source = opendisplay-sender-1.25.0.tar.gz::https://github.com/peetzweg/opendisplay/archive/refs/tags/v1.25.0.tar.gz
+	sha256sums = SKIP
+	makedepends_x86_64 = nasm
+
+pkgname = opendisplay-sender

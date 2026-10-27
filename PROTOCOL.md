@@ -72,10 +72,9 @@ over USB (dial a tunneled port), and one code path serves both transports.
 ## 2. Transport bindings
 
 The core protocol is transport-agnostic beyond "a TCP byte stream to port
-9000 on the receiver". How the sender finds that port is a *binding*. Two
-bindings exist today; ports to other platforms MAY define their own (for
-example an Android receiver reachable over `adb reverse`) without touching
-anything else in this document.
+9000 on the receiver". How the sender finds that port is a *binding*. Three
+bindings exist today; ports to other platforms MAY define their own without
+touching anything else in this document.
 
 ### 2.1 WiFi / LAN (Bonjour)
 
@@ -107,6 +106,53 @@ and the protocol proceeds exactly as over WiFi.
 Bonjour plays no role on this path. The official receiver classifies a
 connection arriving from loopback as "USB" purely for its stats display;
 this has no protocol significance.
+
+### 2.3 USB (Android devices)
+
+Android has no usbmuxd. The official sender reaches an Android receiver on
+the cable through Android Open Accessory (AOA), which works on any Android
+device with no developer settings. The byte stream is exactly the one
+described in this document, and the receiver opens it with `hello`.
+
+These control requests are vendor requests, and devices other than Android
+may act on them: a USB Ethernet chip common in docks drops its network link
+on `GET_PROTOCOL`. So a sender MUST NOT ask a device that has not answered
+before unless it exposes an Android USB function: an adb interface
+(`FF/42/01`) or an interface whose name contains `MTP` (`06/01/01`, or
+`FF/FF/00` on older kernels). A stall during discovery is final for that
+attachment.
+
+The sender sends the Android Open Accessory control requests
+(`GET_PROTOCOL` 51, `SEND_STRING` 52, `START` 53) with this identity:
+
+| Index | String | Note |
+|---|---|---|
+| 0 manufacturer | `OpenDisplay` | MUST match the receiver's `accessory_filter.xml` |
+| 1 model | `OpenDisplay Receiver` | MUST match the receiver's `accessory_filter.xml` |
+| 2 description | `Second display over USB` | |
+| 3 version | `1` | |
+| 4 URI | `https://opendisplay.app` | Offered by Android when no app matches |
+| 5 serial | `1` | |
+
+The device re-enumerates as an accessory (vendor `0x18D1`, product
+`0x2D00`, or `0x2D01` with USB debugging on) and Android launches the
+matching app, asking the user once. The accessory interface's bulk OUT/IN
+pair carries the stream, sender to receiver and back. Rules:
+
+* One attachment is one session. The receiver MUST NOT reuse an attachment
+  after its session ended: half a frame may still sit in the device's
+  buffer. The sender ends a session by resetting the device, which returns
+  it to its normal USB mode; the next session starts with a fresh
+  handshake.
+* The receiver MUST read with 16 KB buffers (the device keeps one 16 KB
+  request in flight; shorter reads can lose data) and MUST treat a
+  zero-length read as a zero-length packet, not as end of stream.
+* The sender MUST follow every write whose length is a multiple of the
+  endpoint's max packet size with a zero-length packet, or the end of that
+  write waits in the device's request until more data arrives.
+* Because every dial opens the app on the device, a receiver leaving the
+  foreground while the screen is on announces `closing` rather than
+  `sleeping` on this transport, so the sender does not redial it.
 
 ## 3. Framing
 
@@ -844,7 +890,9 @@ recorded as hints for porters:
   `MediaCodec` + `SurfaceView`.
 * **USB from non-Mac senders:** libimobiledevice's usbmuxd implementation;
   `iproxy` demonstrates the tunnel. For non-Apple *receivers*, defining an
-  analogous binding (e.g. `adb reverse tcp:9000 tcp:9000`) is enough.
+  analogous binding (e.g. `adb forward tcp:9100 tcp:9000`, the sender dialing
+  `127.0.0.1:9100`) is enough. It must be `forward`, not `reverse`: the
+  sender dials the receiver.
 * The sender logs receiver `stats` lines prefixed `PHONE-STATS`, so one
   log file tells the whole story when debugging a session.
 

@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OpenDisplay — Turn your spare Apple devices into second monitors for your Mac (free &amp; open source)</title>
-  <meta name="description" content="OpenDisplay is a free, open-source alternative to Apple Sidecar and Duet Display. Turn your spare Apple devices — iPhone and iPad today, Macs on the roadmap — into true extended displays for your Mac over USB or WiFi. Retina-sharp, low latency, with touch and scroll input. No subscription, no dongle, no account." />
-  <meta name="keywords" content="iPhone second monitor, iPad external display, Sidecar alternative, Duet Display alternative, free second screen Mac, open source, virtual display macOS, USB second display, use iPhone as monitor" />
+  <title>OpenDisplay: turn your spare iPhone, iPad, Mac or Android device into a second monitor for your Mac (free &amp; open source)</title>
+  <meta name="description" content="OpenDisplay is a free, open-source alternative to Apple Sidecar and Duet Display. Turn your spare iPhone, iPad, Mac or Android device into a true extended display for your Mac over USB or WiFi. Retina-sharp, low latency, with touch and scroll input. No subscription, no dongle, no account. A Linux sender and a Linux receiver are in beta (sender tested on Hyprland; Sway, KDE Plasma and GNOME experimental)." />
+  <meta name="keywords" content="iPhone second monitor, iPad external display, Sidecar alternative, Duet Display alternative, free second screen Mac, open source, virtual display macOS, USB second display, use iPhone as monitor, Android tablet as Mac monitor, Android second screen for Mac" />
   <link rel="icon" type="image/png" href="./icon-256.png" />
   <link rel="canonical" href="https://opendisplay.app/" />
   <!-- Smart App Banner: offers the iOS receiver to visitors on iPhone/iPad Safari. -->
@@ -15,17 +15,24 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="OpenDisplay" />
   <meta property="og:locale" content="en_US" />
-  <meta property="og:title" content="OpenDisplay — free, open-source Sidecar/Duet alternative" />
-  <meta property="og:description" content="Use your iPhone or iPad as a second monitor for your Mac. A true extended display over USB or WiFi — Retina-sharp, low latency, with touch and scroll. No subscription, no dongle, no account." />
+  <meta property="og:title" content="OpenDisplay: free, open-source Sidecar/Duet alternative" />
+  <meta property="og:description" content="Use your iPhone, iPad, Mac or Android device as a second monitor for your Mac. A true extended display over USB or WiFi: Retina-sharp, low latency, with touch and scroll. No subscription, no dongle, no account." />
   <meta property="og:url" content="https://opendisplay.app/" />
   <meta property="og:image" content="https://opendisplay.app/og.png" />
   <meta property="og:image:type" content="image/png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta property="og:image:alt" content="OpenDisplay — use your partner's iPad as your Mac's second monitor. Free, open source, macOS &amp; iOS." />
+  <!-- Looping splash animation (tools/og-video). Previews that support video
+       (Discord, Facebook) play it; everyone else falls back to og:image. -->
+  <meta property="og:video" content="https://opendisplay.app/og.mp4" />
+  <meta property="og:video:secure_url" content="https://opendisplay.app/og.mp4" />
+  <meta property="og:video:type" content="video/mp4" />
+  <meta property="og:video:width" content="1200" />
+  <meta property="og:video:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="OpenDisplay — free, open-source Sidecar/Duet alternative" />
-  <meta name="twitter:description" content="Use your iPhone or iPad as a second monitor for your Mac. True extended display over USB or WiFi — Retina-sharp, low latency, with touch. No subscription, no dongle, no account." />
+  <meta name="twitter:title" content="OpenDisplay: free, open-source Sidecar/Duet alternative" />
+  <meta name="twitter:description" content="Use your iPhone, iPad, Mac or Android device as a second monitor for your Mac. True extended display over USB or WiFi: Retina-sharp, low latency, with touch. No subscription, no dongle, no account." />
   <meta name="twitter:image" content="https://opendisplay.app/og.png" />
   <meta name="twitter:image:alt" content="OpenDisplay — use your partner's iPad as your Mac's second monitor. Free, open source, macOS &amp; iOS." />
 
@@ -35,16 +42,18 @@
     "@type": "SoftwareApplication",
     "name": "OpenDisplay",
     "alternateName": "Open Display",
-    "operatingSystem": "macOS 14+, iPadOS 15+, iOS 15+",
+    "operatingSystem": "macOS 14+, iPadOS 15+, iOS 15+, Android 7.0+ (beta), Linux (sender beta: Hyprland 0.55+; Sway 1.10+, KDE Plasma 6.8+, GNOME 50+ experimental; receiver beta)",
     "applicationCategory": "UtilitiesApplication",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-    "description": "Free, open-source alternative to Apple Sidecar, Duet Display and Luna Display: use your iPhone or iPad as a true second monitor (extended display, not a mirror) for your Mac over USB or WiFi — Retina-sharp, low latency, with touch and scroll input. No subscription, no dongle, no account.",
+    "description": "Free, open-source alternative to Apple Sidecar, Duet Display and Luna Display: use your iPhone, iPad, Mac or Android device as a true second monitor (extended display, not a mirror) for your Mac over USB or WiFi. Retina-sharp, low latency, with touch and scroll input. No subscription, no dongle, no account.",
     "featureList": [
       "True extended display via a virtual monitor (not just mirroring)",
       "Wired USB streaming over the charging cable for lowest latency",
       "Zero-config WiFi discovery via Bonjour",
       "Retina / HiDPI (@2x) display matching the device panel",
       "Touch input: tap to click, drag, two-finger scroll",
+      "Android receiver for phones and tablets, public beta on Google Play for Android 7.0 and later, over WiFi",
+      "OpenDisplay Linux sender in beta: tested on Omarchy / Hyprland 0.56 on Apple silicon (Asahi), x86_64 expected to work; Sway 1.10+, KDE Plasma 6.8+ and GNOME 50+ experimental; CPU encoding (VA-API planned); prebuilt tarballs and an Arch PKGBUILD in the latest release; Linux receiver in beta (Flatpak)",
       "Portrait or landscape virtual display",
       "Hardware H.264 (VideoToolbox) low-latency pipeline",
       "Self-hosted and private — no servers, accounts or telemetry"
@@ -108,6 +117,22 @@
         "acceptedAnswer": {
           "@type": "Answer",
           "text": "The receiver is a universal iOS app — it runs on iPad today. Run the Mac, an iPhone and an iPad at once for a second and a third screen. iPad-specific features (Apple Pencil, pressure) are on the roadmap."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How do I get the Android app?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "It's in public beta on Google Play, for Android 7.0 and later. 1. Join the OpenDisplay Google Group (https://groups.google.com/g/opendisplay) with the Google account you use on the phone. 2. Open the tester link (https://play.google.com/apps/testing/com.peetzweg.opendisplay) on the phone or a computer, accept, then install OpenDisplay from Google Play. It connects over WiFi: open the app, and pick the device in the Mac app (or let od-sender find it on Linux). A USB cable connection isn't supported yet. Android 5 and 6 support via a direct download is coming."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it work on Linux?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, as a sender in beta: the OpenDisplay Linux sender (od-sender) adds a virtual display to a Linux desktop and shows it on any OpenDisplay receiver, with touch coming back as pointer input. It is tested on Omarchy / Hyprland 0.56 on Apple silicon (Asahi), and x86_64 is expected to work; Sway 1.10+, KDE Plasma 6.8+ and GNOME 50+ are experimental. It encodes on the CPU for now (VA-API is planned). Install it from the latest release: a tarball with an installer for any distribution, or on Arch / Omarchy the package built from the repository with makepkg. The stream is not encrypted, so use a network you trust. Setup and known issues: https://opendisplay.app/docs/linux/ A Linux receiver, which turns a Linux machine into the display, is in beta too: a Flatpak bundle for any distribution, or the Arch package built with makepkg."
         }
       },
       {
