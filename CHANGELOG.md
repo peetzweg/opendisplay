@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.28.2](https://github.com/peetzweg/opendisplay/compare/v1.28.1...v1.28.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **linux:** hang up gracefully after sleeping and closing ([#426](https://github.com/peetzweg/opendisplay/issues/426)) ([dd5fb8f](https://github.com/peetzweg/opendisplay/commit/dd5fb8fbcac799bc6db6ae8d6c2f41d2aeaaac2c))
+* **linux:** keep presenting after a decoder reset on GL/GTK sinks ([#427](https://github.com/peetzweg/opendisplay/issues/427)) ([3252837](https://github.com/peetzweg/opendisplay/commit/325283711f63a6ae3ec458542f9e8143c23eba8c))
+* **linux:** send GNOME touch in layout units, not physical pixels ([#428](https://github.com/peetzweg/opendisplay/issues/428)) ([682559e](https://github.com/peetzweg/opendisplay/commit/682559ef9047f9c2964c652736773e3cd6067fd8))
+
 ## [1.28.1](https://github.com/peetzweg/opendisplay/compare/v1.28.0...v1.28.1) (2026-10-27)
 
 
