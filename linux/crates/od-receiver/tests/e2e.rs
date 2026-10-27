@@ -81,7 +81,10 @@ async fn null_sink_receives_stream_and_adopts_new_sender() {
         report.adopted_over_live, 1,
         "third sender replaced the live second one: {report:?}"
     );
-    assert_eq!(report.welcomes, 3);
+    // The third sender proves itself by answering the provisional hello it
+    // got while parked, then hears the full one once adopted: two welcomes.
+    assert_eq!(report.welcomes, 4);
+    assert_eq!(s3.hellos, 2, "{s3:?}");
     assert!(
         report.video_frames >= s1.frames_sent + s3.frames_sent,
         "{report:?} vs {s1:?} {s3:?}"
@@ -219,6 +222,61 @@ fn frames_after_a_reset_stay_on_one_timeline() {
         after.iter().all(|&ms| ms < 500.0),
         "push -> sink times after the reset: {after:?}"
     );
+}
+
+/// A connection that reads `hello` and leaves (#435's Tailscale probe, a
+/// §6.4 cable-upgrade probe that goes nowhere), or one that just sits
+/// there, does not end the live session: newcomers prove themselves with
+/// bytes first (§1).
+#[tokio::test]
+async fn silent_newcomers_leave_a_streaming_sender_alone() {
+    use tokio::io::AsyncReadExt;
+
+    let cfg = Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        hello: hello(),
+        cursor_udp: true,
+        stats_every: Duration::from_millis(500),
+    };
+    let rx = Receiver::bind(cfg, Box::new(NullOutput::default()))
+        .await
+        .unwrap();
+    let addr = rx.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(rx.run(stop_rx));
+
+    let sender = tokio::spawn(od_fake_sender::run(sender_opts(addr, 2.0)));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The probe: connect, read hello, close without a byte.
+    let mut probe = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut len = [0u8; 4];
+    probe.read_exact(&mut len).await.unwrap();
+    let mut payload = vec![0u8; u32::from_be_bytes(len) as usize];
+    probe.read_exact(&mut payload).await.unwrap();
+    let hello: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(hello["type"], "hello", "{hello}");
+    assert!(
+        hello.get("cursorPort").is_none(),
+        "no UDP flow before it owns the session: {hello}"
+    );
+    drop(probe);
+
+    // A newcomer that never says anything while the sender streams on.
+    let lurker = tokio::net::TcpStream::connect(addr).await.unwrap();
+
+    let s = sender.await.unwrap().unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    stop.send(true).unwrap();
+    let report = task.await.unwrap().unwrap();
+    drop(lurker);
+
+    assert_eq!(s.hellos, 1, "{s:?}");
+    assert!(s.frames_sent >= 110, "streamed to the end: {s:?}");
+    assert_eq!(report.connections, 3, "{report:?}");
+    assert_eq!(report.adopted_over_live, 0, "{report:?}");
+    assert_eq!(report.welcomes, 1, "{report:?}");
+    assert_eq!(report.video_frames, s.frames_sent, "{report:?} vs {s:?}");
 }
 
 /// `sleeping` before a suspend (logind in the binary, a fake here) and

@@ -1,5 +1,6 @@
 //! The Linux OpenDisplay receiver: a `ReceiverSession` wired to a TCP listener
-//! (one sender at a time, adopt-and-drop, §1), an optional UDP cursor port
+//! (one sender at a time; a newcomer proves itself with bytes before it
+//! replaces a live one, §1), an optional UDP cursor port
 //! (§6.3), a Bonjour advertisement (§2.1), and a decode/present pipeline.
 
 pub mod discovery;
@@ -15,6 +16,8 @@ pub mod video;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::Poll;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -23,7 +26,7 @@ use opendisplay_session::Now;
 use opendisplay_session::receiver::{
     ReceiverAction, ReceiverConfig, ReceiverEvent, ReceiverSession,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
@@ -146,7 +149,9 @@ impl Receiver {
         let mut sess = ReceiverSession::new(ReceiverConfig::new(self.cfg.hello.clone()));
         let mut current: Option<TcpStream> = None;
         let mut peer: Option<SocketAddr> = None;
+        let mut newcomers: Vec<Newcomer> = Vec::new();
         let mut buf = vec![0u8; 1 << 20];
+        let mut newcomer_buf = vec![0u8; 64 * 1024];
         let mut udp_buf = vec![0u8; 2048];
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         let mut stats_tick = tokio::time::interval(self.cfg.stats_every);
@@ -170,19 +175,56 @@ impl Receiver {
                     if *shutdown.borrow() { break; } else { continue; }
                 }
                 accepted = self.listener.accept() => {
-                    let (stream, addr) = accepted.context("accept")?;
+                    let (mut stream, addr) = accepted.context("accept")?;
                     let _ = stream.set_nodelay(true);
                     report.connections += 1;
                     if current.is_some() {
-                        // §1: a new inbound connection replaces the current one.
-                        report.adopted_over_live += 1;
-                        info!("sender {addr} replaces {}", peer.map(|p| p.to_string()).unwrap_or_default());
-                    } else {
-                        info!("sender connected from {addr}");
+                        // §1, §6.4: a newcomer proves itself with bytes before
+                        // it replaces a live session. The loser of a sender's
+                        // dial race, a reachability probe or a cable-upgrade
+                        // probe that goes nowhere must not end it. Its hello
+                        // leaves out cursorPort: a UDP flow started now could
+                        // not be told apart from the live sender's.
+                        let hello = Hello { cursor_port: None, ..sess.hello().clone() };
+                        if let ReceiverAction::Send(bytes) = sess.control(&ControlMessage::Hello(hello)) {
+                            if stream.write_all(&bytes).await.is_ok() {
+                                debug!("newcomer {addr} waits for its first bytes");
+                                newcomers.push(Newcomer { stream, addr, since: Instant::now() });
+                            }
+                        }
+                        continue;
                     }
+                    info!("sender connected from {addr}");
+                    newcomers.clear();
                     current = Some(stream);
                     peer = Some(addr);
                     sess.handle(now(start), ReceiverEvent::Connected)
+                }
+                (i, read) = read_newcomers(&mut newcomers, &mut newcomer_buf) => {
+                    let n = newcomers.swap_remove(i);
+                    let len = match read {
+                        Ok(0) | Err(_) => {
+                            debug!("newcomer {} left without a word", n.addr);
+                            continue;
+                        }
+                        Ok(len) => len,
+                    };
+                    // The race is decided: rival newcomers go.
+                    newcomers.clear();
+                    if let Some(old) = current.take() {
+                        report.adopted_over_live += 1;
+                        info!("sender {} replaces {}", n.addr, peer.map(|p| p.to_string()).unwrap_or_default());
+                        tokio::spawn(hang_up(old, HANG_UP_WITHIN));
+                    } else {
+                        info!("sender connected from {}", n.addr);
+                    }
+                    current = Some(n.stream);
+                    peer = Some(n.addr);
+                    // The full hello (with cursorPort) follows, then the
+                    // bytes that proved it, so none of them are lost.
+                    let mut a = sess.handle(now(start), ReceiverEvent::Connected);
+                    a.extend(sess.handle(now(start), ReceiverEvent::Bytes(&newcomer_buf[..len])));
+                    a
                 }
                 read = read_current(&mut current, &mut buf) => {
                     match read {
@@ -238,6 +280,13 @@ impl Receiver {
                     sess.handle(now(start), ReceiverEvent::CursorDatagram { flow: h.finish(), payload: &udp_buf[..n] })
                 }
                 _ = tick.tick() => {
+                    newcomers.retain(|n| {
+                        let keep = n.since.elapsed() < NEWCOMER_PROVES_WITHIN;
+                        if !keep {
+                            debug!("newcomer {} stayed silent; dropped", n.addr);
+                        }
+                        keep
+                    });
                     let mut a = sess.handle(now(start), ReceiverEvent::Tick);
                     if let Some(err) = self.video.poll_error() {
                         warn!("decoder error: {err}");
@@ -367,6 +416,38 @@ impl Receiver {
         info!("{report:?}");
         Ok(report)
     }
+}
+
+/// How long a newcomer may stay silent before it is dropped (as on
+/// Android; silence this long is death anyway, §8.2).
+const NEWCOMER_PROVES_WITHIN: Duration = Duration::from_secs(5);
+
+/// A connection that arrived while a session was live and has not sent
+/// anything yet.
+struct Newcomer {
+    stream: TcpStream,
+    addr: SocketAddr,
+    since: Instant,
+}
+
+/// The first newcomer to send bytes or close, with what its read returned.
+async fn read_newcomers(
+    newcomers: &mut [Newcomer],
+    buf: &mut [u8],
+) -> (usize, std::io::Result<usize>) {
+    if newcomers.is_empty() {
+        return std::future::pending().await;
+    }
+    std::future::poll_fn(|cx| {
+        for (i, n) in newcomers.iter_mut().enumerate() {
+            let mut rb = ReadBuf::new(buf);
+            if let Poll::Ready(r) = Pin::new(&mut n.stream).poll_read(cx, &mut rb) {
+                return Poll::Ready((i, r.map(|()| rb.filled().len())));
+            }
+        }
+        Poll::Pending
+    })
+    .await
 }
 
 /// How long [`hang_up`] waits for the sender to close its side.

@@ -66,8 +66,14 @@ over USB (dial a tunneled port), and one code path serves both transports.
   coalescing them reads as input lag.
 * A receiver serves **one sender at a time**. When a new inbound connection
   arrives while one is active, the receiver MUST adopt the new connection
-  and drop the old one (the official receiver cancels the old connection
-  and resets its decoder state).
+  and drop the old one once the newcomer proves itself with bytes: it
+  greets the newcomer with a provisional `hello` (without `cursorPort`),
+  keeps serving the live sender, and switches when the newcomer's first
+  bytes arrive, handing those bytes to the new session. A newcomer that
+  closes or stays silent is dropped and the live session is untouched; it
+  may be the loser of a sender's dial race or a probe (6.4). Adopting
+  cancels the old connection, resets decoder state and sends the full
+  `hello`.
 
 ## 2. Transport bindings
 
@@ -810,7 +816,8 @@ Rules already stated elsewhere, gathered:
 * `hello` first, on every connection (6.1). Video starts only after it.
 * First frame after (re)connect is an IDR (5.3).
 * Rotation is a re-`hello` on the live connection, not a reconnect (6.1).
-* A new inbound connection replaces the current one (section 1).
+* A new inbound connection replaces the current one once it sends bytes
+  (section 1).
 * Silence over ~5 s is death (8.2); `sleeping`/`closing` are best-effort
   courtesies, absence of them means nothing (6.1).
 
