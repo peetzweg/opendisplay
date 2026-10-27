@@ -68,14 +68,8 @@ struct ReceiverScreen: View {
         return nil
     }
 
-    /// The whole window, safe areas included: the video ignores them.
-    private static func windowSize(_ geo: GeometryProxy) -> CGSize {
-        CGSize(width: geo.size.width + geo.safeAreaInsets.leading + geo.safeAreaInsets.trailing,
-               height: geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom)
-    }
-
     var body: some View {
-        GeometryReader { geo in
+        GeometryReader { _ in
             ZStack {
                 if isStreaming {
                     Color.black.ignoresSafeArea()
@@ -97,10 +91,9 @@ struct ReceiverScreen: View {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
             }
-            .onAppear { model.updatePanel(windowPoints: Self.windowSize(geo)) }
-            .onChange(of: Self.windowSize(geo)) { size in
-                model.updatePanel(windowPoints: size)
-            }
+            // The window, not this view: a sheet, the keyboard or the
+            // hidden status bar change the view's frame but not the panel.
+            .background(WindowObserver { model.updatePanel(window: $0) })
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView { onboardingDismissed = true }
             }
@@ -569,7 +562,8 @@ final class ReceiverModel: ObservableObject {
         let native = UIScreen.main.nativeBounds.size   // portrait pixels
         applyPanel(pixelsWide: Int(max(native.width, native.height)),
                    pixelsHigh: Int(min(native.width, native.height)),
-                   scale: Double(UIScreen.main.nativeScale))
+                   scale: Double(UIScreen.main.nativeScale),
+                   displayMaxFrameRate: UIScreen.main.maximumFramesPerSecond)
         if let budget = DecodeBudget.maxPixelsPerSecond(model: DecodeBudget.currentModel) {
             receiver.setDecodeBudget(maxPixelsPerSecond: budget)
         }
@@ -581,36 +575,30 @@ final class ReceiverModel: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// Announce the window this app renders into, in points. A rotation, a
-    /// fold or unfold (iPhone Duo) and a multitasking resize all land here,
-    /// so the Mac always builds its virtual display for what is on screen.
-    func updatePanel(windowPoints size: CGSize) {
-        guard size.width > 0, size.height > 0 else { return }
-        let screen = Self.currentScreen
-        receiver.setDisplayMaxFrameRate(screen.maximumFramesPerSecond)
-        // nativeScale, not scale: the Plus phones render at 3x and downsample,
-        // and the Mac should size for the pixels the panel actually has.
-        let scale = screen.nativeScale
-        let pixels: CGSize
-        if size == screen.bounds.size {
-            // A window filling the screen reports the panel exactly. Under
-            // Display Zoom points times nativeScale misses by a few pixels
-            // (iPhone 8 Plus zoomed: 667 x 2.88 = 1921 for a 1920 panel).
-            let native = screen.nativeBounds.size   // portrait pixels
-            let landscape = size.width > size.height
-            pixels = CGSize(width: landscape ? max(native.width, native.height)
-                                             : min(native.width, native.height),
-                            height: landscape ? min(native.width, native.height)
-                                              : max(native.width, native.height))
-        } else {
-            pixels = CGSize(width: (size.width * scale).rounded(),
-                            height: (size.height * scale).rounded())
-        }
-        applyPanel(pixelsWide: Int(pixels.width), pixelsHigh: Int(pixels.height),
-                   scale: Double(scale))
+    /// The window this app renders into, kept to re-read on activation.
+    private weak var panelWindow: UIWindow?
+
+    /// Announce the window this app renders into. A rotation, a fold or
+    /// unfold (iPhone Duo) and a multitasking resize all land here, so the
+    /// Mac always builds its virtual display for what is on screen.
+    func updatePanel(window: UIWindow) {
+        panelWindow = window
+        // The window's own screen: an iPhone Duo's outer and inner screens
+        // differ in size, and may in refresh rate. nativeScale, not scale:
+        // the Plus phones render at 3x and downsample, and the Mac should
+        // size for the pixels the panel actually has.
+        guard let screen = window.windowScene?.screen,
+              let panel = ReceiverPanelGeometry(window: window.bounds.size,
+                                                screen: screen.bounds.size,
+                                                nativePixels: screen.nativeBounds.size,
+                                                nativeScale: screen.nativeScale)
+        else { return }
+        applyPanel(pixelsWide: panel.pixelsWide, pixelsHigh: panel.pixelsHigh,
+                   scale: panel.scale, displayMaxFrameRate: screen.maximumFramesPerSecond)
     }
 
-    private func applyPanel(pixelsWide w: Int, pixelsHigh h: Int, scale: Double) {
+    private func applyPanel(pixelsWide w: Int, pixelsHigh h: Int, scale: Double,
+                            displayMaxFrameRate: Int) {
         // HEVC is bounded by the window in either orientation, so a large
         // mirrored Mac display is scaled to what this window can show
         // instead of sent in full.
@@ -622,14 +610,8 @@ final class ReceiverModel: ObservableObject {
                                   maxFrameRate: 60)
                 : nil)
         receiver.setPanel(pixelsWide: w, pixelsHigh: h, scale: scale,
+                          displayMaxFrameRate: displayMaxFrameRate,
                           limitsChanged: limitsChanged)
-    }
-
-    /// The screen showing this app's foreground scene.
-    private static var currentScreen: UIScreen {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        return (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.screen
-            ?? UIScreen.main
     }
 
     func start() {
@@ -671,6 +653,9 @@ final class ReceiverModel: ObservableObject {
     func sceneDidActivate() {
         endBackgroundAssertion()
         receiver.setRenderingPaused(false)
+        // A fold while the app was in the background: announce the screen it
+        // came back on before a redialing Mac rebuilds for the old one.
+        if let panelWindow { updatePanel(window: panelWindow) }
         receiver.ensureListening()
     }
 
@@ -735,6 +720,41 @@ extension UIEvent {
     func samples(for touch: UITouch) -> [UITouch] {
         let batch = coalescedTouches(for: touch) ?? []
         return batch.isEmpty ? [touch] : batch
+    }
+}
+
+// MARK: - Window size
+
+/// Reports the window it sits in when attached and on every layout. It
+/// fills the root view, so a rotation, a fold or a multitasking resize lays
+/// it out; reports of an unchanged window cost nothing (setPanel ignores
+/// them).
+private struct WindowObserver: UIViewRepresentable {
+    let onLayout: (UIWindow) -> Void
+
+    func makeUIView(context: Context) -> ObserverView {
+        let view = ObserverView()
+        view.isUserInteractionEnabled = false
+        view.onLayout = onLayout
+        return view
+    }
+
+    func updateUIView(_ view: ObserverView, context: Context) {
+        view.onLayout = onLayout
+    }
+
+    final class ObserverView: UIView {
+        var onLayout: ((UIWindow) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if let window { onLayout?(window) }
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            if let window { onLayout?(window) }
+        }
     }
 }
 
