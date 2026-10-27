@@ -870,15 +870,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// The rebuild waiting out a burst of hellos; replaced by each new one.
     private var pendingReconfigure: Task<Void, Never>?
     private var lastSelectionChange: ContinuousClock.Instant?
+    /// When the latest selection change may be built: at once for a lone
+    /// change, 150 ms after the last change of a burst. Confined to `queue`,
+    /// like the two above.
+    private var selectionSettlesAt = ContinuousClock.now
 
     /// A lone change (a fold, a single rotation) rebuilds at once: every
     /// millisecond here is a stale picture on the receiver. A burst (a quick
     /// double rotation, a live window resize) waits until it settles.
-    /// `reconfigure` itself picks up hellos that land while it runs.
+    /// `reconfigure` itself picks up hellos that land while it runs, under
+    /// the same rule.
     private func scheduleReconfigure() {
         let now = ContinuousClock.now
         let isLoneChange = lastSelectionChange.map { now - $0 > .milliseconds(500) } ?? true
         lastSelectionChange = now
+        selectionSettlesAt = isLoneChange ? now : now + .milliseconds(150)
         pendingReconfigure?.cancel()
         pendingReconfigure = Task {
             if !isLoneChange {
@@ -940,13 +946,27 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 await status("Stream reconfiguration failed: \(error.localizedDescription)")
                 return
             }
-            if let latest = lastHello,
-               streamSelectionInputsChanged(from: target, to: latest) || canvasNeedsRebuild {
-                canvasNeedsRebuild = false
-                target = latest
-                continue
+            guard let pending = lastHello,
+                  streamSelectionInputsChanged(from: target, to: pending) || canvasNeedsRebuild else { return }
+            // A burst that outlasts a pass (a Stage Manager drag) settles
+            // first, as in scheduleReconfigure: every pass rebuilds the
+            // display and can rearrange the Mac's windows, so jumping to each
+            // newest hello would rebuild at sizes the user only passes through.
+            await waitForSelectionToSettle()
+            guard let latest = lastHello,
+                  streamSelectionInputsChanged(from: target, to: latest) || canvasNeedsRebuild else { return }
+            canvasNeedsRebuild = false
+            target = latest
+        }
+    }
+
+    private func waitForSelectionToSettle() async {
+        while !stopped {
+            let settlesAt = await withCheckedContinuation { continuation in
+                queue.async { continuation.resume(returning: self.selectionSettlesAt) }
             }
-            return
+            guard settlesAt > .now else { return }
+            do { try await Task.sleep(until: settlesAt, clock: .continuous) } catch { return }
         }
     }
 
