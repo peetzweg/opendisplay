@@ -66,3 +66,38 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Android
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Lint is what catches a platform API above minSdk 21 sneaking in
+      # without an SDK_INT guard. assembleRelease (unsigned) runs the release
+      # variant's lintVital and resource checks, which otherwise first run in
+      # the release workflow after the tag already exists. The bundle is the
+      # Google Play build, which needs minSdk 24.
+      - name: Unit tests, lint, debug and release builds
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug assembleRelease
+
+      - name: Google Play bundle (minSdk 24)
+        run: ./gradlew --no-daemon bundleRelease -PappMinSdk=24
+
+      # The release workflow uploads that bundle with fastlane on Linux; a
+      # lane that no longer loads would otherwise first fail on release day.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: fastlane loads the Play upload lane
+        working-directory: .
+        run: bundle exec fastlane lanes | grep -q "android play_beta"

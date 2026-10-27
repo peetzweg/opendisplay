@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenDisplay OG video</title>
+<!--
+  The OpenDisplay splash animation, drawn as one SVG scene driven by a single
+  clock. Open it in a browser to watch it loop; render.mjs loads it with
+  ?render and steps renderAt(t) frame by frame to produce the video.
+
+  Story: it opens on the end card (icon + wordmark) so the first frame works
+  as a thumbnail. The tile pops away, a laptop draws itself and its face pops
+  in and looks around. A second screen drops in and tries on shapes (phone,
+  tablet, display), which surprises the face. The cursor drags the face
+  across, it splits over both screens, dark blue on the left and light blue on
+  the right, and a rounded-square mask closes in: the scene was the app icon
+  all along. The wordmark joins it and the loop lands back on the end card.
+-->
+<style>
+  :root {
+    --fg: #111111;
+    --accent: #0090fc;
+    --dark: #009bff;   /* icon, left face */
+    --light: #6edbff;  /* icon, right face */
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #ffffff; }
+  body {
+    display: grid; place-items: center; min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; color: var(--fg);
+  }
+  body.render { display: block; min-height: 0; }
+  #stage { position: relative; width: 1200px; height: 630px; overflow: hidden; background: #fff; }
+  body:not(.render) #stage { outline: 1px solid #eee; }
+  svg { position: absolute; inset: 0; }
+
+  #copy { position: absolute; left: 412px; top: 0; height: 630px;
+    display: flex; flex-direction: column; justify-content: center; }
+  #copy > * { will-change: transform, opacity; }
+  .eyebrow { font-family: var(--mono); font-size: 27px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: #555; }
+  .title { font-size: 116px; font-weight: 700; letter-spacing: -0.035em; line-height: 1;
+    margin-top: 10px; }
+  .tag { font-size: 46px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.16; }
+  .tag.l1 { margin-top: 18px; }
+  .pill { display: inline-block; background: var(--accent); color: #fff;
+    border-radius: 10px; padding: 0 13px 5px; transform-origin: 50% 60%; }
+  .ul { position: relative; display: inline-block; }
+  .ul::after { content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 6px;
+    border-radius: 3px; background: var(--accent);
+    transform: scaleX(var(--ul, 0)); transform-origin: 0 50%; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg viewBox="0 0 1200 630" width="1200" height="630">
+    <defs>
+      <clipPath id="clipL"><rect id="clipLRect" /></clipPath>
+      <clipPath id="clipR"><rect id="clipRRect" /></clipPath>
+      <clipPath id="clipTile"><rect id="clipTileRect" /></clipPath>
+      <filter id="tileShadow" x="-30%" y="-30%" width="160%" height="160%">
+        <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity="0.16" />
+      </filter>
+    </defs>
+    <g id="pop">
+      <rect id="tileBg" fill="#fff" filter="url(#tileShadow)" />
+      <g clip-path="url(#clipTile)">
+        <g id="comp">
+          <!-- Each screen shows the same face, clipped to its own glass. The
+               right copy is shifted like a display arrangement. -->
+          <g clip-path="url(#clipL)">
+            <g class="face" data-fill="dark"></g>
+          </g>
+          <g clip-path="url(#clipR)">
+            <g id="faceRShift"><g class="face" data-fill="light"></g></g>
+          </g>
+          <rect id="laptop" fill="none" stroke="#111" stroke-width="16" pathLength="1" />
+          <rect id="base" fill="#fff" stroke="#111" stroke-width="14" />
+          <g id="device"><rect id="deviceRect" fill="none" stroke="#111" stroke-width="16" /></g>
+          <g id="cursor">
+            <path d="M0 0 L0 34 L8.5 26 L14.5 40 L21 37 L15 23.5 L26.5 23.5 Z"
+                  fill="#111" stroke="#fff" stroke-width="3.5" stroke-linejoin="round" />
+          </g>
+        </g>
+      </g>
+    </g>
+  </svg>
+  <div id="copy">
+    <div class="eyebrow">Free · Open source</div>
+    <div class="title">OpenDisplay</div>
+    <div class="tag l1">Turn <span class="pill">any screen</span> into</div>
+    <div class="tag l2">a <span class="ul">second display</span>.</div>
+  </div>
+</div>
+
+<script>
+const INK = 16;
+const INTRO = 1.3;     // end card hold + pop-out before the story starts
+const STORY = 7.7;     // story length, ending on the end card
+const DURATION = INTRO + STORY;
+
+// ---------- timing helpers ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const easeInOut = k => k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+const easeIn = k => k * k * k;
+
+// Closed-form damped spring from 0 to 1, started at `start`. Evaluating it
+// from the clock (instead of integrating) keeps every frame deterministic.
+function spring(t, start, { f = 1.8, z = 0.55 } = {}) {
+  const x = t - start;
+  if (x <= 0) return 0;
+  const w = 2 * Math.PI * f, wd = w * Math.sqrt(1 - z * z);
+  return 1 - Math.exp(-z * w * x) * (Math.cos(wd * x) + (z * w / wd) * Math.sin(wd * x));
+}
+
+// Eased walk through [time, ...values] keyframes; holds the ends.
+function keys(t, frames) {
+  if (t <= frames[0][0]) return frames[0].slice(1);
+  for (let i = 1; i < frames.length; i++) {
+    const [t1, ...b] = frames[i];
+    if (t <= t1) {
+      const [t0, ...a] = frames[i - 1];
+      const k = easeInOut(seg(t, t0, t1));
+      return a.map((v, j) => lerp(v, b[j], k));
+    }
+  }
+  return frames[frames.length - 1].slice(1);
+}
+
+// Eyelids: 1 open, dips to ~0 for a quick blink at each listed time.
+function blink(t, times) {
+  let v = 1;
+  for (const b of times) {
+    const k = seg(t, b, b + 0.18);
+    if (k > 0 && k < 1) v = Math.min(v, 1 - Math.sin(k * Math.PI) * 0.95);
+  }
+  return v;
+}
+
+// ---------- geometry (composition space, origin near the middle) ----------
+// The end state mirrors the app icon: TILE is the part of the scene the icon
+// crops to, and the face/arrangement values put each eye where the icon has it.
+const LAPTOP = { x: -300, y: -175, w: 320, h: 240, r: 24 };
+const BASE = { x: -334, y: 80, w: 356, h: 28, r: 14 };
+const SHAPES = {
+  phone:   { x: 56, y: -112, w: 118, h: 232, r: 28 },
+  tablet:  { x: 50, y: -120, w: 196, h: 256, r: 24 },
+  display: { x: 44, y: -93, w: 270, h: 200, r: 22 },
+};
+const ARRANGE = { dx: 58, dy: 37 };
+const FACE_SOLO = { x: -140, y: -55, R: 88 };  // centred on the laptop
+const FACE_SPLIT = { x: 3, y: -33, R: 114 };   // straddling the bezel gap
+const TILE = { x: -134, y: -197, size: 324 };
+const CARD_TILE = { x: 60, y: 165, size: 300, r: 67 };
+const HERO = { x: 615, y: 347, s: 1 };
+const CARD = (() => {
+  const s = CARD_TILE.size / TILE.size;
+  return { x: CARD_TILE.x - TILE.x * s, y: CARD_TILE.y - TILE.y * s, s };
+})();
+
+const $ = id => document.getElementById(id);
+const setRect = (el, r, inset = 0) => {
+  el.setAttribute('x', r.x + inset); el.setAttribute('y', r.y + inset);
+  el.setAttribute('width', Math.max(0, r.w - 2 * inset));
+  el.setAttribute('height', Math.max(0, r.h - 2 * inset));
+  el.setAttribute('rx', Math.max(0, r.r - inset));
+};
+
+// Build both face copies once; render only moves attributes.
+const NS = 'http://www.w3.org/2000/svg';
+const faces = [...document.querySelectorAll('.face')].map(g => {
+  const mk = (tag, attrs) => {
+    const el = document.createElementNS(NS, tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    g.appendChild(el); return el;
+  };
+  const fill = g.dataset.fill === 'dark' ? 'var(--dark)' : 'var(--light)';
+  const ink = { stroke: '#111', 'stroke-width': INK, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
+  return {
+    disc: mk('circle', { fill }),
+    eyeL: mk('line', { ...ink, fill: 'none' }),
+    eyeR: mk('line', { ...ink, fill: 'none' }),
+    mouth: mk('path', { ...ink, fill: '#111' }),
+    oh: mk('ellipse', { ...ink, fill: 'none' }),
+  };
+});
+
+const copy = [...$('copy').children];
+const pill = document.querySelector('.pill');
+const ul = document.querySelector('.ul');
+
+// u is story time: 0 starts on an empty stage, STORY lands on the end card.
+function story(u) {
+  // 1. the laptop draws itself, then its base slides out from the hinge
+  const draw = easeInOut(seg(u, 0.05, 0.75));
+  const lap = $('laptop');
+  setRect(lap, LAPTOP);
+  // Dash only while drawing; a finished dash leaves a hairline seam.
+  lap.style.strokeDasharray = draw < 1 ? '1 1' : 'none';
+  lap.style.strokeDashoffset = 1 - draw;
+  lap.style.strokeLinecap = draw < 1 ? 'round' : 'butt';
+  lap.style.opacity = draw > 0 ? 1 : 0;
+  const baseK = spring(u, 0.5, { f: 2.2, z: 0.6 });
+  setRect($('base'), { ...BASE, w: BASE.w * baseK, x: BASE.x + BASE.w * (1 - baseK) / 2 });
+  $('base').style.opacity = baseK > 0.01 ? 1 : 0;
+  setRect($('clipLRect'), LAPTOP, INK / 2);
+
+  // 2. the second screen drops in as a phone, then tries on bigger shapes
+  const enter = spring(u, 1.55, { f: 1.5, z: 0.62 });
+  const toTablet = spring(u, 2.25, { f: 2.0, z: 0.55 });
+  const toDisplay = spring(u, 2.8, { f: 1.8, z: 0.58 });
+  const shape = {};
+  for (const k of ['x', 'y', 'w', 'h', 'r']) {
+    shape[k] = SHAPES.phone[k]
+      + (SHAPES.tablet[k] - SHAPES.phone[k]) * toTablet
+      + (SHAPES.display[k] - SHAPES.tablet[k]) * toDisplay;
+  }
+  setRect($('deviceRect'), shape);
+  const scx = shape.x + shape.w / 2, scy = shape.y + shape.h / 2;
+  const slide = (1 - enter) * 620, tilt = (1 - enter) * 18;
+  $('device').setAttribute('transform', `translate(${slide} ${-slide * 0.15}) rotate(${tilt} ${scx} ${scy})`);
+  $('device').style.opacity = u < 1.55 ? 0 : 1;
+  setRect($('clipRRect'), { ...shape, x: shape.x + slide }, INK / 2);
+
+  // 3. the cursor grabs the face and drags it over the bezel
+  const DRAG0 = 3.85, DRAG1 = 4.6;
+  const drag = spring(u, DRAG0, { f: 1.25, z: 0.72 });
+  const grow = easeInOut(seg(u, DRAG0 + 0.1, DRAG1 + 0.15));
+  const face = {
+    x: lerp(FACE_SOLO.x, FACE_SPLIT.x, drag),
+    y: lerp(FACE_SOLO.y, FACE_SPLIT.y, drag),
+    R: lerp(FACE_SOLO.R, FACE_SPLIT.R, grow),
+  };
+  const pop = spring(u, 0.7, { f: 2.0, z: 0.45 });
+  // a hop when the new screen lands, a happy one after the split, and a slow
+  // breath while it waits on its own
+  face.y -= Math.sin(seg(u, 1.85, 2.2) * Math.PI) * 12
+          + Math.sin(seg(u, 4.75, 5.1) * Math.PI) * 9
+          + Math.sin(u * Math.PI * 1.6) * 2.5 * (1 - seg(u, 3.6, 3.9));
+  const R = face.R * pop;
+
+  // Expression track: where the eyes look (in face radii), how wide the
+  // smile is, how open the grin is, and the surprised "oh".
+  const [lookX, lookY] = keys(u, [
+    [0.9, 0, 0], [1.15, -0.1, 0], [1.4, -0.1, 0], [1.6, 0.12, -0.03],   // look around, spot the screen
+    [2.9, 0.12, -0.03], [3.3, -0.12, 0.08], [3.75, -0.06, 0.06],        // watch the cursor arrive
+    [3.95, 0.1, 0], [4.6, 0.1, 0], [4.9, 0, 0],                          // look where it's dragged, then at you
+  ]);
+  const [smile, grin, oh] = keys(u, [
+    [0, 0.4, 0, 0], [1.75, 0.4, 0, 0], [1.9, 0.3, 0, 1], [2.75, 0.3, 0, 1],
+    [3.0, 0.45, 0, 0], [3.9, 0.45, 0, 0], [4.15, 0.6, 0.55, 0], [4.75, 0.6, 0.7, 0],
+    [5.4, 0.62, 0.7, 0], [5.8, 0.48, 0, 0],
+  ]);
+  const lids = blink(u, [1.3, 3.15, 5.0, 6.75]);
+  for (const f of faces) {
+    f.disc.setAttribute('cx', face.x); f.disc.setAttribute('cy', face.y);
+    f.disc.setAttribute('r', Math.max(0, R));
+    const gx = lookX * R, gy = lookY * R;
+    const ex = 0.33 * R, ey = face.y - 0.16 * R + gy, eh = 0.15 * R * lids;
+    for (const [el, sx] of [[f.eyeL, -1], [f.eyeR, 1]]) {
+      const x = face.x + sx * ex + gx;
+      el.setAttribute('x1', x); el.setAttribute('x2', x);
+      el.setAttribute('y1', ey - eh); el.setAttribute('y2', ey + eh);
+      el.style.opacity = R > 4 ? 1 : 0;
+    }
+    // The mouth is a closed lens: lower lip curve, upper lip curve. With no
+    // grin both curves coincide and it reads as a line smile.
+    const mx = face.x + gx * 0.5, sy = face.y + 0.28 * R + gy * 0.5;
+    const sw = 0.55 * R * (1 - oh * 0.85);
+    const low = sy + smile * R, up = sy + smile * R * (1 - grin);
+    f.mouth.setAttribute('d',
+      `M${mx - sw} ${sy} Q${mx} ${low} ${mx + sw} ${sy} Q${mx} ${up} ${mx - sw} ${sy} Z`);
+    f.mouth.style.opacity = R > 4 ? 1 - oh : 0;
+    f.oh.setAttribute('cx', mx); f.oh.setAttribute('cy', sy + 0.12 * R);
+    f.oh.setAttribute('rx', 0.09 * R * oh); f.oh.setAttribute('ry', 0.12 * R * oh);
+    f.oh.style.opacity = oh > 0.05 ? 1 : 0;
+  }
+  $('faceRShift').setAttribute('transform', `translate(${ARRANGE.dx} ${ARRANGE.dy})`);
+
+  // cursor path: fade in on the laptop, glide onto the face, press, drag, let go
+  const grabAt = { x: FACE_SOLO.x - 30, y: FACE_SOLO.y + 10 };
+  const appear = spring(u, 3.2, { f: 2.4, z: 0.6 });
+  const reach = easeInOut(seg(u, 3.3, 3.75));
+  const start = { x: -260, y: 30 };
+  const cur = { x: lerp(start.x, grabAt.x, reach), y: lerp(start.y, grabAt.y, reach) };
+  cur.x += (FACE_SPLIT.x - FACE_SOLO.x) * drag;
+  cur.y += (FACE_SPLIT.y - FACE_SOLO.y) * drag;
+  const press = Math.sin(seg(u, 3.72, 3.95) * Math.PI / 2) * (1 - seg(u, DRAG1, DRAG1 + 0.12));
+  const leave = seg(u, DRAG1 + 0.1, DRAG1 + 0.5);
+  cur.x += easeInOut(leave) * 40; cur.y += easeInOut(leave) * 70;
+  $('cursor').setAttribute('transform', `translate(${cur.x} ${cur.y}) scale(${appear * (1 - 0.18 * press)})`);
+  $('cursor').style.opacity = clamp(appear) * (1 - leave);
+
+  // 4. reveal: the camera settles on the icon's crop and a rounded-square
+  //    mask closes in, turning the scene into the app icon tile
+  const cam = spring(u, 5.25, { f: 1.0, z: 0.82 });
+  const cx = lerp(HERO.x, CARD.x, cam), cy = lerp(HERO.y, CARD.y, cam);
+  const s = lerp(HERO.s, CARD.s, cam);
+  $('comp').setAttribute('transform', `translate(${cx} ${cy}) scale(${s})`);
+  const tileOnStage = {
+    x: cx + TILE.x * s, y: cy + TILE.y * s, w: TILE.size * s, h: TILE.size * s,
+  };
+  const mask = easeInOut(seg(u, 5.25, 6.0));
+  const tile = {
+    x: lerp(-40, tileOnStage.x, mask), y: lerp(-40, tileOnStage.y, mask),
+    w: lerp(1280, tileOnStage.w, mask), h: lerp(710, tileOnStage.h, mask),
+    r: CARD_TILE.r * mask,
+  };
+  setRect($('clipTileRect'), tile);
+  setRect($('tileBg'), tile);
+  $('tileBg').style.opacity = seg(u, 5.6, 6.0);
+
+  copy.forEach((el, i) => {
+    const k = spring(u, 5.75 + i * 0.12, { f: 1.6, z: 0.75 });
+    el.style.opacity = clamp(k * 1.4);
+    el.style.transform = `translateY(${(1 - k) * 26}px)`;
+  });
+  pill.style.transform = `scale(${0.6 + 0.4 * spring(u, 6.2, { f: 2.4, z: 0.42 })})`;
+  ul.style.setProperty('--ul', easeInOut(seg(u, 6.45, 6.95)));
+}
+
+function renderAt(t) {
+  if (t >= INTRO) {
+    story(t - INTRO);
+    $('pop').removeAttribute('transform');
+    return;
+  }
+  // Intro: hold the end card, then the text lifts away and the tile pops
+  // (a small swell, then gone) to clear the stage for the story.
+  story(STORY);
+  copy.forEach((el, i) => {
+    const k = easeIn(seg(t, 0.75 + (copy.length - 1 - i) * 0.05, 1.05 + (copy.length - 1 - i) * 0.05));
+    el.style.opacity = 1 - k;
+    el.style.transform = `translateY(${-k * 18}px)`;
+  });
+  const k = seg(t, 0.85, 1.25);
+  const sc = k < 0.35 ? 1 + 0.06 * Math.sin(k / 0.35 * Math.PI / 2) : 1.06 * (1 - easeIn((k - 0.35) / 0.65));
+  const px = CARD_TILE.x + CARD_TILE.size / 2, py = CARD_TILE.y + CARD_TILE.size / 2;
+  $('pop').setAttribute('transform', `translate(${px} ${py}) scale(${Math.max(0, sc)}) translate(${-px} ${-py})`);
+}
+
+window.renderAt = renderAt;
+window.DURATION = DURATION;
+
+if (new URLSearchParams(location.search).has('render')) {
+  document.body.classList.add('render');
+  renderAt(0);
+} else {
+  const t0 = performance.now();
+  const tick = now => { renderAt(((now - t0) / 1000) % DURATION); requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors the iOS receiver's copy (iOS/OpenSidecarPhoneApp.swift). -->
+    <string name="title">OpenDisplay</string>
+    <string name="status_ready">Ready to connect</string>
+    <string name="status_waiting_picture">Connected, waiting for the picture…</string>
+    <string name="update_sender">OpenDisplay on the connecting Mac is too old for this app. Update it there to reconnect.</string>
+
+    <string name="hint_open_mac">Open OpenDisplay on your computer</string>
+    <string name="hint_pick_wifi">Pick this %1$s under WiFi in OpenDisplay on your computer</string>
+    <string name="hint_keep_open">Keep this app open. Streaming starts automatically.</string>
+    <string name="settings_and_help">Settings &amp; Help</string>
+    <string name="shake_tip">Tip: shake the %1$s to open settings anytime</string>
+
+    <string name="onboarding_title">One more app to go</string>
+    <string name="onboarding_body">OpenDisplay turns this %1$s into a second screen for your Mac. It needs the OpenDisplay Mac app running on a Mac on the same WiFi network.</string>
+    <string name="onboarding_step1">Install the OpenDisplay Mac app on your Mac</string>
+    <string name="onboarding_step2">Join the same WiFi as your Mac</string>
+    <string name="onboarding_footer">You can find this link again anytime in Settings: shake the %1$s to open it.</string>
+    <string name="get_mac_app">Get the Mac app</string>
+    <string name="welcome">Welcome</string>
+    <string name="close">Close</string>
+    <string name="done">Done</string>
+    <string name="share">Share</string>
+
+    <string name="section_status">Status</string>
+    <string name="row_listening">Listening</string>
+    <string name="row_listening_value">Port 9000</string>
+    <string name="row_connection">Connection</string>
+    <string name="row_connected">Connected</string>
+    <string name="row_waiting">Waiting for a computer</string>
+    <string name="row_stream">Stream</string>
+    <string name="section_name">Name</string>
+    <string name="name_footer">Shown in the WiFi list of OpenDisplay on your computer.</string>
+    <string name="section_analytics">Analytics</string>
+    <string name="performance_overlay">Performance overlay</string>
+    <string name="analytics_footer">The overlay shows FPS, bitrate, decode time and latency at the bottom of the screen while streaming.</string>
+    <string name="section_diagnostics">Diagnostics</string>
+    <string name="connection_log">Connection log</string>
+    <string name="log_empty">Nothing logged yet.</string>
+    <string name="diagnostics_footer">What this %1$s saw while connecting: sessions, restarts, decoder trouble. No screen content and nothing leaves the %1$s unless you share it. Attach it to a GitHub issue if a connection won\'t come up.</string>
+    <string name="section_how">How to connect</string>
+    <string name="how_wifi">WiFi: both devices on the same network, then pick this %1$s in OpenDisplay on your computer.</string>
+    <string name="how_rotate">Rotate the %1$s for a vertical second monitor.</string>
+    <string name="how_touch">Touch: tap to click, drag to drag, two-finger pan to scroll.</string>
+    <string name="how_pen">Pen: draw with pressure and tilt. Fingers are ignored while the pen touches.</string>
+    <string name="mac_app_footer">OpenDisplay needs the Mac app running on a Mac on the same WiFi network. Download it here if you haven\'t yet.</string>
+    <string name="section_about">About</string>
+    <string name="row_version">Version</string>
+    <string name="link_website">OpenDisplay.app</string>
+    <string name="link_github">GitHub: peetzweg/opendisplay</string>
+    <string name="link_kofi">Support OpenDisplay on Ko-fi</string>
+</resources>

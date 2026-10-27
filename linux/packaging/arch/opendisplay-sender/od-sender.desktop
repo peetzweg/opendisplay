@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=OpenDisplay Sender
+Comment=Extend this desktop onto a phone, tablet or Mac running an OpenDisplay receiver (with several on the network, set to = "<name>" in ~/.config/opendisplay/sender.toml)
+Exec=/usr/bin/od-sender run
+Icon=video-display
+Terminal=true
+Categories=Utility;
+Keywords=display;sidecar;screen;second;monitor;
+# KWin < 6.8 offers these globals only to the program this entry's Exec names
+# (compared with /proc/<pid>/exe, hence the absolute path); 6.8 offers them
+# to every unsandboxed client.
+X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1,org_kde_kwin_fake_input
