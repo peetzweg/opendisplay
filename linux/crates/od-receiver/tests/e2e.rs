@@ -161,6 +161,66 @@ async fn decodes_with_fakesink_when_a_decoder_is_installed() {
     );
 }
 
+/// #387: after `reset` (every reconnect, every parameter-set change) the
+/// IDR that restarts decoding and the frames after it must share one
+/// timeline. A flush that reset the running time re-based the live pipeline
+/// asynchronously, so the IDR still carried the old running time and every
+/// later frame the new one; the decoder stamped all of them with the IDR's
+/// PTS and real sinks (GL, GTK) stopped presenting. fakesink does not care,
+/// so this checks the timestamps reaching the sink instead: `take_decode_ms`
+/// only reports frames whose PTS is not in the future.
+#[cfg(feature = "gstreamer")]
+#[test]
+fn frames_after_a_reset_stay_on_one_timeline() {
+    let mut video = match od_receiver::video::open(&VideoConfig {
+        sink: SinkKind::Fake,
+        decoder: "decodebin3".into(),
+        fullscreen: false,
+        output: None,
+        videoconvert: true,
+        gl: false,
+    }) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("skipping reset timeline test: {e:#}");
+            return;
+        }
+    };
+    let clip = std::fs::read(testdata("clip-320x180-30.h264")).unwrap();
+    let units = opendisplay_proto::video::access_units(&clip);
+    assert!(units[0].is_idr);
+    let play = |video: &mut Box<dyn od_receiver::video::VideoOutput>, secs: f64| {
+        let start = std::time::Instant::now();
+        for au in units.iter().cycle() {
+            if start.elapsed().as_secs_f64() >= secs {
+                break;
+            }
+            video.push(&au.annexb, au.is_idr).unwrap();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    };
+    // Long enough that the old running time is well ahead of a new one.
+    play(&mut video, 1.5);
+    std::thread::sleep(Duration::from_millis(200));
+    if video.poll_error().is_some() || video.take_decode_ms().is_empty() {
+        eprintln!("skipping reset timeline test: no frame decoded before the reset");
+        return;
+    }
+    video.reset().unwrap();
+    play(&mut video, 0.6);
+    std::thread::sleep(Duration::from_millis(200));
+    let after = video.take_decode_ms();
+    assert!(
+        after.len() >= 15,
+        "frames after the reset must reach the sink on the current timeline: {} did",
+        after.len()
+    );
+    assert!(
+        after.iter().all(|&ms| ms < 500.0),
+        "push -> sink times after the reset: {after:?}"
+    );
+}
+
 /// `sleeping` before a suspend (logind in the binary, a fake here) and
 /// `closing` on shutdown both reach the sender, and sleeping drops it.
 #[tokio::test]

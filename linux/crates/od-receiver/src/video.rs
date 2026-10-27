@@ -168,6 +168,11 @@ pub mod gst_out {
         generation: u64,
         pushed: u64,
         warned_stall: bool,
+        /// `rendered` as last seen by `check_frozen`, the push count and the
+        /// time when it last moved.
+        last_rendered: u64,
+        pushed_at_render: u64,
+        last_render_at: std::time::Instant,
     }
 
     fn launch_description(cfg: &VideoConfig) -> String {
@@ -272,6 +277,9 @@ pub mod gst_out {
                 generation: 0,
                 pushed: 0,
                 warned_stall: false,
+                last_rendered: 0,
+                pushed_at_render: 0,
+                last_render_at: std::time::Instant::now(),
             })
         }
 
@@ -401,8 +409,9 @@ pub mod gst_out {
         /// IDR, with nothing shown, demote it and rebuild so decodebin3 plugs
         /// the next; say so once if there is none.
         fn check_stall(&mut self) -> Result<()> {
-            if self.rendered.load(Ordering::Relaxed) != 0 {
-                return Ok(());
+            let rendered = self.rendered.load(Ordering::Relaxed);
+            if rendered != 0 {
+                return self.check_frozen(rendered);
             }
             let idr_late = self
                 .first_idr_at
@@ -435,6 +444,34 @@ pub mod gst_out {
                 }
                 _ => {}
             }
+            Ok(())
+        }
+
+        /// A pipeline that showed frames and then stops while frames keep
+        /// coming does not recover by itself, and the leaky present queue
+        /// keeps it off the bus (#387: a timestamp jump after a flush). After
+        /// 15 frames and a second with nothing new shown, build a fresh
+        /// pipeline; the caller asks for an IDR.
+        fn check_frozen(&mut self, rendered: u64) -> Result<()> {
+            if rendered != self.last_rendered {
+                self.last_rendered = rendered;
+                self.pushed_at_render = self.pushed;
+                self.last_render_at = std::time::Instant::now();
+                return Ok(());
+            }
+            let pushed = self.pushed - self.pushed_at_render;
+            let idle = self.last_render_at.elapsed();
+            if pushed < 15 || idle < std::time::Duration::from_secs(1) {
+                return Ok(());
+            }
+            warn!(
+                "{pushed} frames pushed in {:.1} s and none shown after {rendered} were; rebuilding the pipeline",
+                idle.as_secs_f64()
+            );
+            self.recreate()?;
+            self.pushed_at_render = self.pushed;
+            self.last_render_at = std::time::Instant::now();
+            self.pending_error = Some("presentation stalled".into());
             Ok(())
         }
 
@@ -543,8 +580,16 @@ pub mod gst_out {
         fn reset(&mut self) -> Result<()> {
             // A flush drops everything queued in the parser, decoder and the
             // present queue; the next IDR (with SPS/PPS) restarts decoding.
+            //
+            // Without resetting the running time (#387): a reset-time flush
+            // makes the live pipeline pick a new base time asynchronously,
+            // so the IDR pushed right after it is stamped on the old
+            // timeline and every later frame on the new one. The decoder
+            // then gives all of them the IDR's PTS and GL/GTK sinks stop
+            // presenting. Timestamps here only measure latency (sinks run
+            // with sync=false), so one continuous timeline is all they need.
             self.pipeline.send_event(gst::event::FlushStart::new());
-            self.pipeline.send_event(gst::event::FlushStop::new(true));
+            self.pipeline.send_event(gst::event::FlushStop::new(false));
             Ok(())
         }
 
