@@ -589,8 +589,14 @@ final class ReceiverModel: ObservableObject {
         // differ in size, and may in refresh rate. nativeScale, not scale:
         // the Plus phones render at 3x and downsample, and the Mac should
         // size for the pixels the panel actually has.
-        guard let screen = window.windowScene?.screen,
-              let panel = ReceiverPanelGeometry(window: window.bounds.size,
+        // A background scene is laid out for the app switcher's snapshot,
+        // possibly in another orientation; nobody sees it, so the Mac keeps
+        // its desktop. sceneDidActivate re-reads the window on return.
+        guard let scene = window.windowScene,
+              scene.activationState != .background,
+              scene.activationState != .unattached else { return }
+        let screen = scene.screen
+        guard let panel = ReceiverPanelGeometry(window: window.bounds.size,
                                                 screen: screen.bounds.size,
                                                 nativePixels: screen.nativeBounds.size,
                                                 nativeScale: screen.nativeScale)
