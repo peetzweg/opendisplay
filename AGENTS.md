@@ -37,3 +37,15 @@ The Rust workspace builds natively per architecture; see `linux/README.md`.
 - The dev VM is behind QEMU user-mode NAT (`10.0.2.x`): a Mac sender on the LAN
   needs a UTM port forward to guest 9000 plus the sender's `-host`/`-port`
   manual endpoint, or the VM switched to bridged networking for Bonjour.
+
+# Release PRs
+
+Before merging a release-please PR, post the filled-in "Release impact
+record" from RELEASING.md as a comment on that PR. release-please rewrites the
+PR body whenever `main` changes, so the record lives in a comment. Build each
+row from `git diff vX.Y.Z origin/main` (the last tag), not from the changelog
+alone: a peer whose code did not change can still be affected through the
+sender or the protocol. Name the devices and version pairings that were
+tested, say plainly which were only reasoned through, and state whether the
+App Store build is required, recommended or not required. Example: the 1.30.0
+record on https://github.com/peetzweg/opendisplay/pull/439.

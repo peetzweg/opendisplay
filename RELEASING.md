@@ -98,7 +98,8 @@ One-time setup for the Play upload:
 
 ## Release impact record
 
-Copy this section into the release PR and fill it in before creating the tag.
+Fill this section in and post it as a comment on the release PR before
+merging it (release-please rewrites the PR body, so a comment keeps it).
 "Changed" means its source or assets changed. "Affected" includes behavior
 changed through shared code or a peer's protocol behavior. "Required" means
 users need that release to receive the fix or remain compatible.
