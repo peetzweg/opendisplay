@@ -1,3 +1,14 @@
+> [!NOTE]
+> **🌴 Away until November 17**
+>
+> Thank you for all the issues and pull requests. They're what make OpenDisplay
+> better. I'm offline for three weeks, so replies, reviews, and releases will be
+> slow. Since the app has access to your screen and input, I only merge changes
+> I've tested myself, so pull requests will wait too.
+>
+> Nothing is abandoned. Please keep the reports coming and go easy on the
+> project while it's quiet. I'll be back to keep making it better.
+
 <div align="center">
 
 <img src="public/logo.png" width="128" alt="OpenDisplay app icon" />
