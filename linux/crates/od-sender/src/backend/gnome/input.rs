@@ -26,9 +26,12 @@ pub enum Call {
     Axis(f64, f64, u32),
 }
 
-/// Pure mapping, for tests: normalised touch (§7) to stream pixels; scroll
+/// Pure mapping, for tests: normalised touch (§7) to stream coordinates,
+/// which Mutter reads in layout units (`Placement::layout_size`); scroll
 /// deltas in video pixels with natural-scrolling sign to logical "mouse
-/// pixels" with the opposite sign, as for wl_pointer.axis.
+/// pixels" with the opposite sign, as for wl_pointer.axis. Mutter feeds
+/// NotifyPointerAxis through the same path as a touchpad, so this holds in
+/// either layout mode.
 pub struct Mapper {
     pub width: f64,
     pub height: f64,
@@ -37,10 +40,10 @@ pub struct Mapper {
 }
 
 impl Mapper {
-    pub fn new(width: u32, height: u32, scale: f64) -> Self {
+    pub fn new(width: f64, height: f64, scale: f64) -> Self {
         Self {
-            width: width as f64,
-            height: height as f64,
+            width,
+            height,
             scale: scale.max(0.1),
             pressed: false,
         }
@@ -161,7 +164,7 @@ mod tests {
 
     #[test]
     fn taps_become_motion_and_one_click() {
-        let mut m = Mapper::new(1170, 2532, 3.0);
+        let mut m = Mapper::new(1170.0, 2532.0, 3.0);
         assert_eq!(
             m.touch(&touch(TouchPhase::Began, 0.5, 0.25)),
             [Call::Motion(585.0, 633.0), Call::Button(BTN_LEFT, true)]
@@ -181,9 +184,48 @@ mod tests {
         assert_eq!(m.release(), [Call::Button(BTN_LEFT, false)]);
     }
 
+    /// The iPad of #414: 2360x1640 at scale 2. Mutter reads absolute motion in
+    /// layout units, so a tap in the middle lands at 590,410 in logical
+    /// layout mode and 1180,820 in physical.
+    #[test]
+    fn taps_map_into_layout_units() {
+        use super::super::mutter::Placement;
+        let placement = |logical_layout| Placement {
+            connector: "Meta-0".into(),
+            width: 2360,
+            height: 1640,
+            refresh: 60.0,
+            x: 3840,
+            y: 0,
+            scale: 2.0,
+            logical_layout,
+        };
+        for (logical, middle, corner) in [
+            (true, (590.0, 410.0), (1180.0, 820.0)),
+            (false, (1180.0, 820.0), (2360.0, 1640.0)),
+        ] {
+            let p = placement(logical);
+            let (w, h) = p.layout_size();
+            let mut m = Mapper::new(w, h, p.scale);
+            assert_eq!(
+                m.touch(&touch(TouchPhase::Moved, 0.5, 0.5)),
+                [Call::Motion(middle.0, middle.1)]
+            );
+            assert_eq!(
+                m.touch(&touch(TouchPhase::Moved, 1.0, 1.0)),
+                [Call::Motion(corner.0, corner.1)]
+            );
+            // Scroll is in logical pixels either way.
+            assert_eq!(
+                m.scroll(&Scroll { dx: 0.0, dy: 20.0 }),
+                [Call::Axis(0.0, -10.0, AXIS_SOURCE_FINGER)]
+            );
+        }
+    }
+
     #[test]
     fn scroll_flips_sign_and_divides_by_scale() {
-        let m = Mapper::new(100, 100, 2.0);
+        let m = Mapper::new(100.0, 100.0, 2.0);
         assert_eq!(
             m.scroll(&Scroll { dx: 4.0, dy: -20.0 }),
             [Call::Axis(-2.0, 10.0, AXIS_SOURCE_FINGER)]
