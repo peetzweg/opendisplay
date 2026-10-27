@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.28.1](https://github.com/peetzweg/opendisplay/compare/v1.28.0...v1.28.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **mac:** only ask Android-looking USB devices for accessory mode ([#424](https://github.com/peetzweg/opendisplay/issues/424)) ([bcf8e2b](https://github.com/peetzweg/opendisplay/commit/bcf8e2b3706029783d81cd2b4367350203677329))
+
 ## [1.28.0](https://github.com/peetzweg/opendisplay/compare/v1.27.0...v1.28.0) (2026-10-24)
 
 
