@@ -3,7 +3,8 @@
 //!
 //! 1. `v4l2m2m` — any V4L2 stateful mem2mem encoder through FFmpeg
 //!    (`h264_v4l2m2m`): Raspberry Pi, Rockchip, and Asahi's AVE once a
-//!    driver ships. Never auto-selected unless a device accepts the session.
+//!    driver ships. Never auto-selected unless a device accepts the session;
+//!    skipped without asking FFmpeg when no `/dev/video*` node is one.
 //! 2. `x264` — libx264 through FFmpeg, `tune=zerolatency`. The software
 //!    default: several times faster than OpenH264 on the same cores.
 //! 3. `openh264` — compiled in, so it works even where the system FFmpeg was
@@ -15,12 +16,13 @@ mod convert;
 mod ffmpeg;
 mod openh264;
 mod stage;
+mod v4l2;
 
 pub use stage::{ConvertStage, MIN_STAGE_WIDTH, YuvFrame};
 
 use std::time::Instant;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use clap::ValueEnum;
 use ffmpeg_next as ff;
 use opendisplay_proto::video::AccessUnit;
@@ -35,6 +37,13 @@ pub enum Backend {
     V4l2m2m,
     X264,
     Openh264,
+}
+
+/// `false` when no `/dev/video*` node is a V4L2 H.264 encoder, so
+/// [`Backend::V4l2m2m`] cannot open; `true` when one is, or when a node
+/// could not be asked.
+pub fn v4l2m2m_present() -> bool {
+    v4l2::h264_encoder() != v4l2::Presence::Absent
 }
 
 impl Backend {
@@ -91,6 +100,13 @@ impl Encoder {
         let mut errors = Vec::new();
         for &b in order {
             let imp = match b {
+                Backend::V4l2m2m if !v4l2m2m_present() => {
+                    debug!("encoder {}: no V4L2 H.264 encoder device", b.label());
+                    if s.backend == Backend::Auto {
+                        continue;
+                    }
+                    Err(anyhow!("no V4L2 H.264 encoder device"))
+                }
                 Backend::V4l2m2m => {
                     ffmpeg::FfmpegEncoder::new(ffmpeg::Kind::V4l2m2m, width, height, s)
                         .map(Imp::Ffmpeg)
