@@ -233,6 +233,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var upgradeProbes: [NWConnection] = []
     private var probeRoundGeneration = 0
     private var lastLoggedCandidates: [String] = []
+    private var probeOutcomes: [String] = []
+    private var lastLoggedProbeOutcomes: [String] = []
     private var peerAddrs: [String] = []
     // The Mac-to-Mac USB link takes ~25-30s to negotiate, and either side
     // can finish last. Peer-side lateness arrives as a re-hello; this
@@ -1718,6 +1720,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// advertised addresses, or on the USB transport, it never fires a dial.
     private func startUpgradeProbing() {
         lastLoggedCandidates = []
+        lastLoggedProbeOutcomes = []
         upgradeTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 2.0, repeating: 10.0)
@@ -1797,6 +1800,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         probeRoundGeneration += 1
         let round = probeRoundGeneration
+        probeOutcomes = []
 
         for host in candidates.prefix(16) {
             let tcp = NWProtocolTCP.Options()
@@ -1812,10 +1816,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     if let path = probe.currentPath, !path.usesInterfaceType(.wifi) {
                         self.migrate(to: probe)
                     } else {
+                        self.probeOutcomes.append("\(host) ready over WiFi")
                         self.upgradeProbes.removeAll { $0 === probe }
                         probe.cancel()
                     }
                 case .failed, .waiting:
+                    let via = probe.currentPath?.availableInterfaces.first?.name ?? "-"
+                    self.probeOutcomes.append("\(host) \(state) via \(via)")
                     self.upgradeProbes.removeAll { $0 === probe }
                     probe.cancel()
                 default: break
@@ -1828,8 +1835,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // not cancel the new round's probes mid-dial.
         queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             guard let self, self.probeRoundGeneration == round else { return }
+            for probe in self.upgradeProbes {
+                self.probeOutcomes.append("\(probe.endpoint) no answer in 3s")
+            }
             self.upgradeProbes.forEach { $0.cancel() }
             self.upgradeProbes.removeAll()
+            // Same rule as the candidate line: log only a changed outcome,
+            // so a cable that never answers shows why without a line every 10s.
+            let outcomes = self.probeOutcomes.sorted()
+            if !outcomes.isEmpty, outcomes != self.lastLoggedProbeOutcomes {
+                self.lastLoggedProbeOutcomes = outcomes
+                Log.info("no cable path answered: " + outcomes.joined(separator: "; "))
+            }
         }
     }
 
