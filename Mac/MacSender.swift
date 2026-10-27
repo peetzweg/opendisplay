@@ -870,27 +870,31 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// The rebuild waiting out a burst of hellos; replaced by each new one.
     private var pendingReconfigure: Task<Void, Never>?
     private var lastSelectionChange: ContinuousClock.Instant?
-    /// When the latest selection change may be built: at once for a lone
+    /// When the latest selection change may be built: 25 ms after a lone
     /// change, 150 ms after the last change of a burst. Confined to `queue`,
     /// like the two above.
     private var selectionSettlesAt = ContinuousClock.now
 
-    /// A lone change (a fold, a single rotation) rebuilds at once: every
-    /// millisecond here is a stale picture on the receiver. A burst (a quick
-    /// double rotation, a live window resize) waits until it settles.
-    /// `reconfigure` itself picks up hellos that land while it runs, under
-    /// the same rule.
+    /// A lone change (a fold, a single rotation) rebuilds almost at once:
+    /// every millisecond here is a stale picture on the receiver. The 25 ms
+    /// grace lets a change a receiver announces in several hellos sent back
+    /// to back (a new refresh rate, then the new size) land as one rebuild.
+    /// A burst (a quick double rotation, a live window resize) waits until
+    /// it settles. `reconfigure` itself picks up hellos that land while it
+    /// runs, under the same rule.
     private func scheduleReconfigure() {
         let now = ContinuousClock.now
+        // Part of the change already waiting out its grace: that rebuild
+        // reads the latest hello when it starts.
+        if let last = lastSelectionChange, now - last < .milliseconds(25) { return }
         let isLoneChange = lastSelectionChange.map { now - $0 > .milliseconds(500) } ?? true
+        let wait: Duration = isLoneChange ? .milliseconds(25) : .milliseconds(150)
         lastSelectionChange = now
-        selectionSettlesAt = isLoneChange ? now : now + .milliseconds(150)
+        selectionSettlesAt = now + wait
         pendingReconfigure?.cancel()
         pendingReconfigure = Task {
-            if !isLoneChange {
-                try? await Task.sleep(for: .milliseconds(150))
-                guard !Task.isCancelled else { return }
-            }
+            try? await Task.sleep(for: wait)
+            guard !Task.isCancelled else { return }
             guard let current = self.lastHello else { return }
             // Its own task: cancelling the wait must never abort a rebuild
             // that already tore the old stream down.

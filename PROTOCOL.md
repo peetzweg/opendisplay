@@ -352,11 +352,12 @@ nothing before it arrives.
 
 A receiver MUST re-send `hello` on the live connection whenever its
 announced dimensions change (rotation, a fold, a window resize). The
-sender rebuilds the display in response; the official sender rebuilds at
-once for a lone change and, for a burst (a change within 500 ms of the
-previous one), waits until 150 ms after the last so it settles into one
-rebuild. It replies to *every* `hello` with a fresh `welcome` (receivers
-treat repeats idempotently).
+sender rebuilds the display in response; the official sender rebuilds
+25 ms after a lone change (hellos within those 25 ms count as the same
+change) and, for a burst (a change within 500 ms of the previous one),
+waits until 150 ms after the last so it settles into one rebuild. It
+replies to *every* `hello` with a fresh `welcome` (receivers treat
+repeats idempotently).
 
 **`ping`** carries `t` (number): milliseconds since the Unix epoch on the
 receiver's clock. The sender MUST reply with `pong` echoing `t` (section
