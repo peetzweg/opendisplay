@@ -298,18 +298,23 @@ final class StreamReceiver: ObservableObject {
     /// `panel` is announced as `hello.panel` when the legacy fields are not
     /// the panel's facts (a Mac receiver); a change of any value re-sends.
     /// `limitsChanged` re-sends even when the panel did not change (see
-    /// `setDecodeLimits`).
+    /// `setDecodeLimits`). `displayMaxFrameRate` rides in the same hello, so
+    /// moving to a screen with another refresh rate (an iPhone Duo fold)
+    /// does not make the sender rebuild twice.
     func setPanel(pixelsWide w: Int, pixelsHigh h: Int, scale: Double,
-                  panel: PanelAnnouncement? = nil, limitsChanged: Bool = false) {
+                  panel: PanelAnnouncement? = nil, displayMaxFrameRate rate: Int? = nil,
+                  limitsChanged: Bool = false) {
+        let rate = rate.map { max(1, $0) } ?? displayMaxFrameRate
         guard w > 0, h > 0,
               w != devicePixelsWide || h != devicePixelsHigh || scale != deviceScale
-                || panel != panelOverride || limitsChanged
+                || panel != panelOverride || rate != displayMaxFrameRate || limitsChanged
         else { return }
         devicePixelsWide = w
         devicePixelsHigh = h
         deviceScale = scale
         panelOverride = panel
-        Log.info("panel changed -> \(w)x\(h) @\(scale)x"
+        displayMaxFrameRate = rate
+        Log.info("panel changed -> \(w)x\(h) @\(scale)x \(rate) fps"
             + (panel.map { " (panel \($0))" } ?? ""))
         if let connection { sendHello(on: connection) }
     }

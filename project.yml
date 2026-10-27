@@ -165,6 +165,7 @@ targets:
       - Shared/DirectCable.swift
       - Shared/LogSnapshot.swift
       - MacReceiver/FullscreenPreference.swift
+      - iOS/ReceiverPanelGeometry.swift
     settings:
       base:
         # A hostless test bundle: the sources under test are compiled straight
