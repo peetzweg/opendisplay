@@ -814,13 +814,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         try ensureActiveDisplay(vd)
         var captureDisplay = display
         if requestedCanvas != bootstrapCanvas {
-            let promoted = await MainActor.run {
-                guard !self.stopped, self.virtualDisplay === vd else { return false }
-                return vd.resize(pointsWide: requestedCanvas.pointsWide,
-                                 pointsHigh: requestedCanvas.pointsHigh,
-                                 movingTo: DisplayArrangement.origin(for: requestedCanvas.cgSize,
-                                                                     device: arrangementKey))
-            }
+            let promoted = await resizeInPlace(vd, pointsWide: requestedCanvas.pointsWide,
+                                               pointsHigh: requestedCanvas.pointsHigh,
+                                               arrangementKey: arrangementKey)
             try ensureActiveDisplay(vd)
             if promoted {
                 do {
@@ -835,13 +831,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     if error is CancellationError { throw error }
                     Log.info("large virtual display mode did not come online (\(error)) — "
                         + "continuing with a \(bootstrapCanvas.pixelsWide)x\(bootstrapCanvas.pixelsHigh) desktop canvas")
-                    let rolledBack = await MainActor.run {
-                        guard !self.stopped, self.virtualDisplay === vd else { return false }
-                        return vd.resize(pointsWide: bootstrapCanvas.pointsWide,
-                                         pointsHigh: bootstrapCanvas.pointsHigh,
-                                         movingTo: DisplayArrangement.origin(for: bootstrapCanvas.cgSize,
-                                                                             device: arrangementKey))
-                    }
+                    let rolledBack = await resizeInPlace(vd, pointsWide: bootstrapCanvas.pointsWide,
+                                                         pointsHigh: bootstrapCanvas.pointsHigh,
+                                                         arrangementKey: arrangementKey)
                     try ensureActiveDisplay(vd)
                     guard rolledBack else { throw error }
                     captureDisplay = try await findSCDisplay(
@@ -913,7 +905,6 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // desktop and can otherwise be replayed onto the new one.
             invalidateCapturePipeline(discardingLastFrame: true)
             if let stream { try? await stream.stopCapture() }
-            Log.info("TIMING capture stopped")
             stream = nil
             if let encoder { VTCompressionSessionInvalidate(encoder) }
             encoder = nil
@@ -1011,12 +1002,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let dimensionsChanged = vd.pointsWide != pointsWide || vd.pointsHigh != pointsHigh
             || vd.scale != scale
         let didResize = if dimensionsChanged {
-            await MainActor.run {
-                guard !self.stopped, self.virtualDisplay === vd else { return false }
-                return vd.resize(pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale,
-                                 movingTo: DisplayArrangement.origin(for: size,
-                                                                     device: arrangementKey))
-            }
+            await resizeInPlace(vd, pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale,
+                                arrangementKey: arrangementKey)
         } else {
             true
         }
@@ -1040,14 +1027,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                   !(nsError.domain == "MacSender" && nsError.code == 4) else { throw error }
             Log.info("virtual display mode \(canvas.pixelsWide)x\(canvas.pixelsHigh) did not come online "
                 + "(\(error)) — rolling back to \(previous.pixelsWide)x\(previous.pixelsHigh)")
-            let rolledBack = await MainActor.run {
-                guard !self.stopped, self.virtualDisplay === vd else { return false }
-                return vd.resize(pointsWide: previous.pointsWide,
-                                 pointsHigh: previous.pointsHigh,
-                                 scale: previous.scale,
-                                 movingTo: DisplayArrangement.origin(for: previous.cgSize,
-                                                                     device: arrangementKey))
-            }
+            let rolledBack = await resizeInPlace(vd, pointsWide: previous.pointsWide,
+                                                 pointsHigh: previous.pointsHigh,
+                                                 scale: previous.scale,
+                                                 arrangementKey: arrangementKey)
             try ensureActiveDisplay(vd)
             guard rolledBack else { return false }
             return try await resumeExistingCanvas(vd, canvas: previous,
@@ -1103,6 +1086,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 + "\(canvas.pixelsWide)x\(canvas.pixelsHigh) (\(error))")
             return false
         }
+    }
+
+    /// Apply a new mode to this session's display, unless the session has
+    /// stopped or moved on to another display.
+    @MainActor
+    private func resizeInPlace(_ vd: VirtualDisplay, pointsWide: Int, pointsHigh: Int,
+                               scale: Int? = nil, arrangementKey: String) async -> Bool {
+        guard !stopped, virtualDisplay === vd else { return false }
+        let origin = DisplayArrangement.origin(for: CGSize(width: pointsWide, height: pointsHigh),
+                                               device: arrangementKey, resizing: vd.displayID)
+        return await vd.resize(pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale,
+                               movingTo: origin)
     }
 
     private func ensureActiveDisplay(_ display: VirtualDisplay) throws {

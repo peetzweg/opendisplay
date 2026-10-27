@@ -102,9 +102,11 @@ final class VirtualDisplay {
                 // removing the display — never hold it across the sleep.
                 do {
                     guard let self else { return }
-                    self.ensureNotMirrored()
-                    if self.selectTargetMode(recover: settled) { settled = true }
-                    self.manageOrigin()
+                    if !self.resizing {
+                        self.ensureNotMirrored()
+                        if self.selectTargetMode(recover: settled) { settled = true }
+                        self.manageOrigin()
+                    }
                 }
                 try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
             }
@@ -116,11 +118,10 @@ final class VirtualDisplay {
     /// window on it before the replacement appears; with multiple devices,
     /// it may choose a sibling virtual display. Applying a new mode avoids
     /// that reassignment entirely.
-    ///
-    /// Must be called on the main thread.
+    @MainActor
     @discardableResult
     func resize(pointsWide: Int, pointsHigh: Int, scale: Int? = nil,
-                movingTo origin: CGPoint?) -> Bool {
+                movingTo origin: CGPoint?) async -> Bool {
         let scale = scale.map { $0 < 2 ? 1 : 2 } ?? self.scale
         guard pointsWide * scale <= maxPixelsPerAxis, pointsHigh * scale <= maxPixelsPerAxis else {
             Log.info("virtual display \(display.displayID) cannot resize beyond its descriptor")
@@ -132,10 +133,13 @@ final class VirtualDisplay {
         newSettings.modes = [
             CGVirtualDisplayMode(width: UInt(pointsWide), height: UInt(pointsHigh), refreshRate: 60)
         ]
-        Log.info("TIMING apply begin")
-        let applied = display.apply(newSettings)
-        Log.info("TIMING apply end")
-        guard applied else {
+        // The enforcement tick must not run between the new mode and its
+        // placement: it would re-apply the old origin target, or report
+        // WindowServer's own placement as a user drag.
+        resizing = true
+        defer { resizing = false }
+        let previousSize = CGDisplayBounds(display.displayID).size
+        guard display.apply(newSettings) else {
             Log.info("virtual display \(display.displayID) applySettings FAILED during resize")
             return false
         }
@@ -147,30 +151,49 @@ final class VirtualDisplay {
         hidpiRefusals = 0
         hidpiRetryAfter = .distantPast
 
-        if let origin {
-            var config: CGDisplayConfigRef?
-            if CGBeginDisplayConfiguration(&config) == .success {
-                CGConfigureDisplayOrigin(config, display.displayID, Int32(origin.x), Int32(origin.y))
-                Log.info("TIMING origin begin")
-                let err = CGCompleteDisplayConfiguration(config, .permanently)
-                Log.info("TIMING origin end")
-                // A mode change is a display reconfiguration, so macOS may
-                // restore ITS arrangement for this identity a moment later,
-                // exactly as it does after creation. Re-arm the same window so
-                // that gets overridden, and adopt whatever WindowServer settled
-                // on: a snap is system state, and persisting it as if it were a
-                // user drag is the ratchet #203 is about.
-                let settled = CGDisplayBounds(display.displayID).origin
-                originRestore.rearm(at: settled)
-                Log.info("virtual display \(display.displayID) resized to \(pointsWide)x\(pointsHigh)pt @\(scale)x "
-                    + "at (\(Int(origin.x)),\(Int(origin.y))), settled "
-                    + "(\(Int(settled.x)),\(Int(settled.y))) (result \(err.rawValue))")
-            }
-        } else {
+        guard let origin else {
             Log.info("virtual display \(display.displayID) resized to \(pointsWide)x\(pointsHigh)pt @\(scale)x")
+            return true
         }
+        // WindowServer re-places the display on its own once the new mode
+        // is in: it keeps the origin when that is still a valid
+        // arrangement, else it snaps to the nearest one. A configuration
+        // that then really moves the display costs 0.4 to 0.7 s, because CG
+        // fades out before every reconfiguration (and the fade cannot be
+        // turned off: CGConfigureDisplayFadeEffect makes the transaction
+        // fail with kCGErrorNotImplemented); one that would change nothing
+        // is not needed at all. So let that placement show first (the main
+        // thread must be free to receive it) and move only when it missed.
+        let size = CGSize(width: pointsWide, height: pointsHigh)
+        if size != previousSize {
+            for _ in 0..<50 where CGDisplayBounds(display.displayID).size != size {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        var settled = CGDisplayBounds(display.displayID).origin
+        var outcome = "already there"
+        if settled != origin {
+            var config: CGDisplayConfigRef?
+            guard CGBeginDisplayConfiguration(&config) == .success else { return true }
+            CGConfigureDisplayOrigin(config, display.displayID, Int32(origin.x), Int32(origin.y))
+            let err = CGCompleteDisplayConfiguration(config, .permanently)
+            outcome = "moved from (\(Int(settled.x)),\(Int(settled.y))) (result \(err.rawValue))"
+            settled = CGDisplayBounds(display.displayID).origin
+        }
+        // A mode change is a display reconfiguration, so macOS may restore
+        // ITS arrangement for this identity a moment later, exactly as it
+        // does after creation. Re-arm the same window so that gets
+        // overridden, and adopt whatever WindowServer settled on: a snap is
+        // system state, and persisting it as if it were a user drag is the
+        // ratchet #203 is about.
+        originRestore.rearm(at: settled)
+        Log.info("virtual display \(display.displayID) resized to \(pointsWide)x\(pointsHigh)pt @\(scale)x "
+            + "at (\(Int(origin.x)),\(Int(origin.y))), settled (\(Int(settled.x)),\(Int(settled.y))), \(outcome)")
         return true
     }
+
+    /// Set while `resize` waits for WindowServer's placement.
+    private var resizing = false
 
     /// Returns true when the display is (now) in its mode at `scale` (HiDPI
     /// for a 2x display, the 1x mode otherwise), or when there
