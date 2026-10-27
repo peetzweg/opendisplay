@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.29.0](https://github.com/peetzweg/opendisplay/compare/v1.28.2...v1.29.0) (2026-10-27)
+
+
+### Features
+
+* **linux:** find receivers over Tailscale when Bonjour finds none ([#435](https://github.com/peetzweg/opendisplay/issues/435)) ([608f6e9](https://github.com/peetzweg/opendisplay/commit/608f6e9d9872e1c57175e7f0f49b8af3cce88322))
+
+
+### Bug Fixes
+
+* **linux:** back off check_frozen rebuilds while nothing is shown ([#430](https://github.com/peetzweg/opendisplay/issues/430)) ([dff403d](https://github.com/peetzweg/opendisplay/commit/dff403d3f2815ad31d6748a380b7b17c71595531))
+* **linux:** park receiver newcomers until they send bytes ([#436](https://github.com/peetzweg/opendisplay/issues/436)) ([d839c36](https://github.com/peetzweg/opendisplay/commit/d839c36696dbc25ddcf0e373b46e037946c1d3b8))
+* **linux:** report a missing V4L2 encoder as not present, not as an error ([#434](https://github.com/peetzweg/opendisplay/issues/434)) ([17da93e](https://github.com/peetzweg/opendisplay/commit/17da93e4340fc9520c88c589a151a9f3aadf63ff))
+
 ## [1.28.2](https://github.com/peetzweg/opendisplay/compare/v1.28.1...v1.28.2) (2026-10-27)
 
 
