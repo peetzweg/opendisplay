@@ -23,10 +23,10 @@ enum DisplaySize: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .largerText: return "Larger Text"
-        case .default: return "Default"
-        case .moreSpace: return "More Space"
-        case .native: return "Native (1x)"
+        case .largerText: return String(localized: "Larger Text")
+        case .default: return String(localized: "Default")
+        case .moreSpace: return String(localized: "More Space")
+        case .native: return String(localized: "Native (1x)")
         }
     }
 }
@@ -64,7 +64,8 @@ struct DisplaySizeOutcome: Equatable {
 
     /// "Looks like 2560 × 1440", the way macOS labels its display sizes.
     var caption: String {
-        "Looks like \(desktop.pointsWide) × \(desktop.pointsHigh)"
+        String(format: String(localized: "Looks like %1$d × %2$d"),
+               desktop.pointsWide, desktop.pointsHigh)
     }
 }
 

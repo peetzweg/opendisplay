@@ -10,9 +10,9 @@ enum AppPresentation: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .menuBar: return "Menu bar"
-        case .dock: return "Dock"
-        case .background: return "Background only"
+        case .menuBar: return String(localized: "Menu bar")
+        case .dock: return String(localized: "Dock")
+        case .background: return String(localized: "Background only")
         }
     }
 }
@@ -152,7 +152,7 @@ final class DeviceSession: ObservableObject, Identifiable {
     // rather than WiFi — reported by the sender once connected.
     @Published var wired = false
 
-    var transportLabel: String { onUSB ? "USB" : wired ? "Cable" : "WiFi" }
+    var transportLabel: String { onUSB ? "USB" : wired ? String(localized: "Cable") : "WiFi" }
 
     // The Display size control (extend only): the choice for this device
     // and what each choice gives on it, from the latest hello.
@@ -583,10 +583,14 @@ final class SenderController: ObservableObject {
             if let device = usbDevices.first(where: { $0.udid == udid }), let name = device.name {
                 return name
             }
-            if udid == nil { return "Manual (\(host):\(port))" }
-            return udid.flatMap(AOA.serial(fromUDID:)) == nil ? "iPhone / iPad" : "Android device"
+            if udid == nil {
+                return String(format: String(localized: "Manual (%1$@:%2$@)"), host, port)
+            }
+            return udid.flatMap(AOA.serial(fromUDID:)) == nil
+                ? String(localized: "iPhone / iPad")
+                : String(localized: "Android device")
         case .wifi(let result):
-            return serviceName(of: result) ?? "WiFi device"
+            return serviceName(of: result) ?? String(localized: "WiFi device")
         }
     }
 
@@ -1067,26 +1071,26 @@ struct ContentView: View {
 
                 Section("Permissions") {
                     permissionRow(
-                        "Screen Recording",
+                        String(localized: "Screen Recording"),
                         granted: permissions.screenRecording,
-                        help: "Required to capture the display.",
+                        help: String(localized: "Required to capture the display."),
                         anchor: "Privacy_ScreenCapture",
                         request: { permissions.requestScreenRecording() }
                     )
                     permissionRow(
-                        "Accessibility",
+                        String(localized: "Accessibility"),
                         granted: permissions.accessibility,
-                        help: "Required for touch input from the device.",
+                        help: String(localized: "Required for touch input from the device."),
                         anchor: "Privacy_Accessibility",
                         request: { permissions.requestAccessibility() }
                     )
                     // macOS offers no API to query Local Network access, so
                     // infer from discovery results and let the user check.
                     permissionRow(
-                        "Local Network",
+                        String(localized: "Local Network"),
                         granted: !controller.discovered.isEmpty,
                         uncertain: controller.discovered.isEmpty,
-                        help: "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
+                        help: String(localized: "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there."),
                         anchor: "Privacy_LocalNetwork"
                     )
                 }
@@ -1104,8 +1108,11 @@ struct ContentView: View {
                     .fill(controller.running ? .green : .secondary.opacity(0.5))
                     .frame(width: 9, height: 9)
                 Text(controller.running
-                     ? "\(controller.sessions.count) device\(controller.sessions.count == 1 ? "" : "s") connected"
-                     : "Idle")
+                     ? (controller.sessions.count == 1
+                        ? String(localized: "1 device connected")
+                        : String(format: String(localized: "%d devices connected"),
+                                 controller.sessions.count))
+                     : String(localized: "Idle"))
                     .font(.callout)
                     .lineLimit(1)
                 Spacer()
@@ -1148,7 +1155,7 @@ struct ContentView: View {
                 if let request {
                     Button("Grant…") { request() }
                         .controlSize(.small)
-                        .help("Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under \(title) in System Settings — flip the toggle there.")
+                        .help(String(localized: "Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under \(title) in System Settings — flip the toggle there."))
                 }
                 Button("Open Settings") {
                     PermissionMonitor.openPrivacyPane(anchor)
@@ -1206,8 +1213,8 @@ struct SessionRow: View {
                     Image(systemName: "power")
                 }
                 .controlSize(.small)
-                .help("Shut down \(title)")
-                .confirmationDialog("Shut down \(title) now?", isPresented: $confirmingShutdown) {
+                .help(String(localized: "Shut down \(title)"))
+                .confirmationDialog(String(localized: "Shut down \(title) now?"), isPresented: $confirmingShutdown) {
                     Button("Shut Down", role: .destructive) { session.sender.requestPower(.shutdown) }
                 } message: {
                     Text("Apps on it with unsaved changes can still stop the shutdown.")
@@ -1220,7 +1227,7 @@ struct SessionRow: View {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                 }
                 .controlSize(.small)
-                .help("Display size of \(title)")
+                .help(String(localized: "Display size of \(title)"))
                 .popover(isPresented: $choosingDisplaySize, arrowEdge: .bottom) {
                     DisplaySizePicker(session: session)
                 }
@@ -1265,7 +1272,7 @@ struct DisplaySizePicker: View {
     private func caption(for outcome: DisplaySizeOutcome) -> String {
         let sameAsDefault = outcome.choice != .default
             && outcome.desktop == session.displaySizeOutcomes.first(where: { $0.choice == .default })?.desktop
-        return outcome.caption + (sameAsDefault ? " (same as Default)" : "")
+        return outcome.caption + (sameAsDefault ? String(localized: " (same as Default)") : "")
     }
 }
 
