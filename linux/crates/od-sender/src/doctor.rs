@@ -161,6 +161,16 @@ pub fn doctor(req: &Request, config_path: Option<&Path>) -> bool {
     }
     println!("  (x264 and OpenH264 encode on the CPU; VA-API is not supported yet)");
 
+    println!("\nusb transport (usbmuxd):");
+    if std::path::Path::new(crate::usbmux::USBMUXD_SOCKET).exists() {
+        println!("  {}: present", crate::usbmux::USBMUXD_SOCKET);
+    } else {
+        println!(
+            "  {}: absent (start usbmuxd to connect over USB cable)",
+            crate::usbmux::USBMUXD_SOCKET
+        );
+    }
+
     let dir: PathBuf = lock::dir();
     println!("\nlocks: {}", dir.display());
     if let Ok(entries) = std::fs::read_dir(&dir) {
