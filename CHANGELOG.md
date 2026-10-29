@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.30.1](https://github.com/peetzweg/opendisplay/compare/v1.30.0...v1.30.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **ios:** build the App Store app with Xcode 27.1 so iPhone Duo runs full screen ([#449](https://github.com/peetzweg/opendisplay/issues/449)) ([b590431](https://github.com/peetzweg/opendisplay/commit/b5904315e81ad1baf01e93d337920f65f2c372d0))
+
 ## [1.30.0](https://github.com/peetzweg/opendisplay/compare/v1.29.0...v1.30.0) (2026-10-27)
 
 
