@@ -68,7 +68,14 @@ jobs:
   build-ios:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
-    runs-on: macos-26
+    # The iOS SDK decides how the app lays out on iPhone Duo: built with the
+    # iOS 26 SDK it runs letterboxed in a phone-sized window, only the 27.1
+    # SDK lets it use the full inner and outer displays (issues #446, #448).
+    # macos-26 tops out at Xcode 26.x, so this job runs on the Xcode 27 image
+    # and pins the Xcode instead of taking whatever that image defaults to.
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     steps:
       - uses: actions/checkout@v6
         with:
