@@ -129,7 +129,12 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // bottleneck fired. Never encode-then-discard: dropping here avoids wasting
     // VT work on frames that would only add latency.
     private var pendingSends = 0
-    private let maxPendingSends = 3
+    // Raw whole frames are 22 MB (about 19 ms on a Thunderbolt Bridge): a third
+    // queued frame is ~55 ms of pure waiting, so raw allows two. Read with
+    // `pipelineLock` held, like the counters it is compared with.
+    private var maxPendingSends: Int {
+        activeStreamConfiguration?.codec == VideoStreamConfiguration.rawCodec ? 2 : 3
+    }
     private let pipelineLock = NSLock()
     private var dropsEncThisWindow = 0
     private var dropsNetThisWindow = 0
@@ -142,10 +147,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // hello offers HEVC, an HEVC stream is neither announced nor sent to it.
     private var helloSeenOnConnection = false
     private var peerAcceptsActiveCodec: Bool {
-        guard activeStreamConfigurationSnapshot?.codec == VideoStreamConfiguration.hevcCodec
+        guard let codec = activeStreamConfigurationSnapshot?.codec,
+              codec == VideoStreamConfiguration.hevcCodec || codec == VideoStreamConfiguration.rawCodec
         else { return true }
         return helloSeenOnConnection && lastHello?.videoCaps?.contains(where: {
-            $0.codec.lowercased() == VideoStreamConfiguration.hevcCodec }) == true
+            $0.codec.lowercased() == codec }) == true
     }
     private var stopped = false
     // The liveness monitors are self-rescheduling chains guarded only by
@@ -576,7 +582,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func preferredCodec(for info: PhoneInfo, source: PixelSize) -> String {
         let codec = VideoStreamConfiguration.preferredCodec(
             receiverCapabilities: info.videoCaps,
-            senderEncodesHEVC: Self.hardwareHEVCEncoder && !hevcEncoderFailed)
+            senderEncodesHEVC: Self.hardwareHEVCEncoder && !hevcEncoderFailed,
+            // Raw is only ever offered by a receiver that opted in; this is
+            // the sender-side kill switch (`defaults write … rawVideo -bool NO`).
+            senderSendsRaw: UserDefaults.standard.object(forKey: "rawVideo") == nil
+                || UserDefaults.standard.bool(forKey: "rawVideo"))
         guard codec == VideoStreamConfiguration.hevcCodec else { return codec }
         guard let best = try? VideoStreamConfiguration.make(
             source: source, quality: .best, codec: codec,
@@ -1321,6 +1331,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // 420v matches the encoder's native input — skips a BGRA→YUV conversion
         // inside VideoToolbox. (`-pixfmt bgra` reverts for A/B testing.)
         config.pixelFormat = UserDefaults.standard.string(forKey: "pixfmt") == "bgra"
+            && selected.codec != VideoStreamConfiguration.rawCodec   // raw ships the NV12 planes
             ? kCVPixelFormatType_32BGRA
             : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         // One buffer is held permanently (keyframe replay) and one sits in
@@ -1333,7 +1344,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         invalidateCapturePipeline(discardingLastFrame: true)
         let generation = captureGenerationNow
         do {
-            try setupEncoder(selected)
+            if selected.codec == VideoStreamConfiguration.rawCodec {
+                Log.info("raw stream: \(pixelsWide)x\(pixelsHigh) NV12 @\(selected.framesPerSecond)fps, no encoder")
+            } else {
+                try setupEncoder(selected)
+            }
         } catch where selected.codec == VideoStreamConfiguration.hevcCodec {
             // Never strand a session on HEVC: fall back to H.264 now, and
             // resize the canvas for H.264 (scheduleCanvasRebuild).
@@ -2958,6 +2973,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime, generation: UInt64) {
+        if activeStreamConfigurationSnapshot?.codec == VideoStreamConfiguration.rawCodec {
+            encodeRaw(pixelBuffer, pts: pts, generation: generation)
+            return
+        }
         guard generation == captureGenerationNow, let encoder else { return }
         guard shouldSubmitFrame(at: CMTimeGetSeconds(pts)) else {
             // Preserve the latest changed frame if capture goes idle before the
@@ -3285,18 +3304,204 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 Log.info("send error: \(error)")
                 return
             }
-            self.framesSent += 1
-            self.bytesSent += frame.count
-            // Report stats roughly once a second.
-            let elapsed = Date().timeIntervalSince(self.statsWindowStart)
-            if elapsed >= 1.0 {
-                let mbps = Double(self.bytesSent) * 8 / elapsed / 1_000_000
-                let frames = self.framesSent
-                self.bytesSent = 0
-                self.statsWindowStart = Date()
-                Task { @MainActor in self.onStats?(frames, mbps) }
-            }
+            self.noteFrameSent(byteCount: frame.count)
         })
+    }
+
+    private func noteFrameSent(byteCount: Int) {
+        framesSent += 1
+        bytesSent += byteCount
+        // Report stats roughly once a second.
+        let elapsed = Date().timeIntervalSince(statsWindowStart)
+        if elapsed >= 1.0 {
+            let mbps = Double(bytesSent) * 8 / elapsed / 1_000_000
+            let frames = framesSent
+            bytesSent = 0
+            statsWindowStart = Date()
+            Task { @MainActor in self.onStats?(frames, mbps) }
+        }
+    }
+
+    // MARK: - Raw video (PROTOCOL.md 6.8)
+
+    /// Keeps a captured buffer's base address locked until every send that
+    /// points into it has been released.
+    private final class LockedPixels {
+        let buffer: CVPixelBuffer
+        init?(_ buffer: CVPixelBuffer) {
+            guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
+            self.buffer = buffer
+        }
+        deinit { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    }
+
+    /// Header (little-endian, 40 bytes): "ODRW", width, height, pixel format
+    /// (0 = NV12 video range), Y stride, CbCr stride, cap ms, snd ms. The
+    /// Y plane then the CbCr plane follow with their strides, straight out of
+    /// the capture buffer (no copy on this side). On `queue`.
+    private func encodeRaw(_ pixelBuffer: CVPixelBuffer, pts: CMTime, generation: UInt64) {
+        guard generation == captureGenerationNow, connectionReady, let connection else { return }
+        guard shouldSubmitFrame(at: CMTimeGetSeconds(pts)) else {
+            scheduleDropReplayTimer()
+            return
+        }
+        guard peerAcceptsActiveCodec else { return }
+        guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+              CVPixelBufferGetPlaneCount(pixelBuffer) == 2,
+              let hold = LockedPixels(pixelBuffer),
+              let yBase = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0),
+              let cBase = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1) else {
+            if !loggedRawFormatMismatch {
+                loggedRawFormatMismatch = true
+                Log.info("raw stream: capture buffer is not NV12 video range — frames dropped")
+            }
+            return
+        }
+        cancelDropReplayTimer()
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let yStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        let cStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1)
+        let yLength = yStride * height
+        let cLength = cStride * (height / 2)
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // Changed tiles only, unless the receiver needs a whole picture
+        // (new connection, size change) or most of the screen moved.
+        let previous = rawLastSent
+        let mustSendFull = needsKeyframe || previous == nil
+            || CVPixelBufferGetWidth(previous!) != width || CVPixelBufferGetHeight(previous!) != height
+        needsKeyframe = false
+        if !mustSendFull, let previous {
+            switch rawDelta(previous: previous, current: pixelBuffer, nowMs: nowMs) {
+            case .identical:
+                rawSendStats.skipped += 1
+                return
+            case .delta(let payload):
+                rawLastSent = pixelBuffer
+                rawSendStats.delta += 1
+                rawSendStats.deltaBytes += payload.count
+                sendRawPayload(payload, on: connection)
+                reportRawSendStatsIfDue()
+                return
+            case .full:
+                break
+            }
+        }
+        rawLastSent = pixelBuffer
+        rawSendStats.full += 1
+        reportRawSendStatsIfDue()
+        if let compressed = rawCompressed(pixelBuffer, nowMs: nowMs) {
+            rawSendStats.compressed += 1
+            rawSendStats.compressedBytes += compressed.count
+            sendRawPayload(compressed, on: connection)
+            return
+        }
+
+        var head = Data(capacity: 44)
+        func put<T: FixedWidthInteger>(_ value: T) {
+            var v = value.littleEndian
+            head.append(Data(bytes: &v, count: MemoryLayout<T>.size))
+        }
+        var length = UInt32(40 + yLength + cLength).bigEndian
+        head.append(Data(bytes: &length, count: 4))
+        head.append(contentsOf: Array("ODRW".utf8))
+        put(UInt32(width)); put(UInt32(height)); put(UInt32(0))
+        put(UInt32(yStride)); put(UInt32(cStride))
+        put(nowMs); put(nowMs)
+
+        let yData = Data(bytesNoCopy: yBase, count: yLength, deallocator: .custom { _, _ in _ = hold })
+        let cData = Data(bytesNoCopy: cBase, count: cLength, deallocator: .custom { _, _ in _ = hold })
+        pendingSends += 1
+        let total = head.count + yLength + cLength
+        connection.send(content: head, completion: .contentProcessed { _ in })
+        connection.send(content: yData, completion: .contentProcessed { _ in })
+        connection.send(content: cData, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            self.pendingSends -= 1
+            if let error {
+                Log.info("send error: \(error)")
+                return
+            }
+            self.noteFrameSent(byteCount: total)
+        })
+    }
+    private var loggedRawFormatMismatch = false
+
+    // MARK: Changed-tile frames ("ODRD")
+
+    private var rawLastSent: CVPixelBuffer?
+    private var rawSendStats = (full: 0, delta: 0, skipped: 0, deltaBytes: 0, compressed: 0, compressedBytes: 0)
+    private var rawSendStatsStart = Date()
+
+    // MARK: Compressed whole frames ("ODRZ")
+
+    private var rawCompressSkip = 0
+    /// `defaults write … rawCompress -bool NO` sends whole frames uncompressed.
+    private static let rawCompressionEnabled: Bool = {
+        UserDefaults.standard.object(forKey: "rawCompress") == nil || UserDefaults.standard.bool(forKey: "rawCompress")
+    }()
+
+    /// A whole frame as independent LZ4 strips (`RawFrameCodec.compress`), or nil
+    /// when it would not save at least 10% (then the frame goes out as a plain
+    /// "ODRW" and compression pauses for a while). `current` must already be
+    /// locked by the caller.
+    private func rawCompressed(_ current: CVPixelBuffer, nowMs: Int64) -> Data? {
+        guard Self.rawCompressionEnabled else { return nil }
+        if rawCompressSkip > 0 { rawCompressSkip -= 1; return nil }
+        let width = CVPixelBufferGetWidth(current), height = CVPixelBufferGetHeight(current)
+        guard CVPixelBufferGetBytesPerRowOfPlane(current, 0) == width,
+              CVPixelBufferGetBytesPerRowOfPlane(current, 1) == width,
+              let yBase = CVPixelBufferGetBaseAddressOfPlane(current, 0),
+              let cBase = CVPixelBufferGetBaseAddressOfPlane(current, 1) else { return nil }
+        if let compressed = RawFrameCodec.compress(y: yBase, c: cBase, width: width, height: height, nowMs: nowMs) {
+            return compressed
+        }
+        rawCompressSkip = 30
+        return nil
+    }
+
+    private typealias RawDelta = RawFrameCodec.DeltaResult
+    private func sendRawPayload(_ payload: Data, on connection: NWConnection) {
+        pendingSends += 1
+        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            self.pendingSends -= 1
+            if let error {
+                Log.info("send error: \(error)")
+                return
+            }
+            self.noteFrameSent(byteCount: payload.count)
+        })
+    }
+
+    private func reportRawSendStatsIfDue() {
+        guard Date().timeIntervalSince(rawSendStatsStart) >= 5 else { return }
+        let stats = rawSendStats
+        Log.info("raw send: \(stats.full) full, \(stats.delta) delta"
+            + (stats.delta > 0 ? " (avg \(stats.deltaBytes / stats.delta / 1024) KB)" : "")
+            + (stats.compressed > 0 ? ", \(stats.compressed) compressed (avg \(stats.compressedBytes / stats.compressed / 1024) KB)" : "")
+            + ", \(stats.skipped) unchanged")
+        rawSendStats = (0, 0, 0, 0, 0, 0)
+        rawSendStatsStart = Date()
+    }
+
+    /// Compare against the last frame sent, tile by tile (`RawFrameCodec.delta`).
+    /// `current` must already be locked by the caller.
+    private func rawDelta(previous: CVPixelBuffer, current: CVPixelBuffer, nowMs: Int64) -> RawDelta {
+        guard let previousLock = LockedPixels(previous) else { return .full }
+        _ = previousLock   // keeps `previous` locked until this returns
+        guard let pY = CVPixelBufferGetBaseAddressOfPlane(previous, 0),
+              let pC = CVPixelBufferGetBaseAddressOfPlane(previous, 1),
+              let cY = CVPixelBufferGetBaseAddressOfPlane(current, 0),
+              let cC = CVPixelBufferGetBaseAddressOfPlane(current, 1) else { return .full }
+        let yStride = CVPixelBufferGetBytesPerRowOfPlane(current, 0)
+        let cStride = CVPixelBufferGetBytesPerRowOfPlane(current, 1)
+        guard CVPixelBufferGetBytesPerRowOfPlane(previous, 0) == yStride,
+              CVPixelBufferGetBytesPerRowOfPlane(previous, 1) == cStride else { return .full }
+        return RawFrameCodec.delta(previousY: pY, previousC: pC, currentY: cY, currentC: cC,
+                                   width: CVPixelBufferGetWidth(current), height: CVPixelBufferGetHeight(current),
+                                   yStride: yStride, cStride: cStride, nowMs: nowMs)
     }
 
     // MARK: - Helpers

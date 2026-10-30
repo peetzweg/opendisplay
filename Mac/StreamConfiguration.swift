@@ -51,6 +51,9 @@ struct PixelSize: Equatable {
 struct VideoStreamConfiguration: Equatable {
     static let h264Codec = "h264"
     static let hevcCodec = "hevc"
+    /// Uncompressed NV12 frames for a fast wired link (Thunderbolt Bridge):
+    /// no encoder, no decoder. Opt-in on the receiver (PROTOCOL.md 6.8).
+    static let rawCodec = "raw"
     static let defaultFramesPerSecond = 60
     // H.264 High@L5.2 MaxFS and MaxMBPS. Keeping these as codec constraints,
     // rather than a model/display special case, is what makes 5K and future
@@ -88,7 +91,12 @@ struct VideoStreamConfiguration: Equatable {
     /// change and on slow links; above H.264's level limit it is the only way
     /// to send a 5K panel 1:1 (research/hevc-m5-2026-09-29).
     static func preferredCodec(receiverCapabilities: [VideoCapability]?,
-                               senderEncodesHEVC: Bool) -> String {
+                               senderEncodesHEVC: Bool,
+                               senderSendsRaw: Bool = false) -> String {
+        if senderSendsRaw,
+           receiverCapabilities?.contains(where: { $0.codec.lowercased() == rawCodec }) == true {
+            return rawCodec
+        }
         guard senderEncodesHEVC,
               receiverCapabilities?.contains(where: { $0.codec.lowercased() == hevcCodec }) == true
         else { return h264Codec }

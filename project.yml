@@ -164,6 +164,7 @@ targets:
       - Shared/Protocol.swift
       - Shared/DirectCable.swift
       - Shared/LogSnapshot.swift
+      - Shared/RawFrameCodec.swift
       - MacReceiver/FullscreenPreference.swift
       - iOS/ReceiverPanelGeometry.swift
     settings:

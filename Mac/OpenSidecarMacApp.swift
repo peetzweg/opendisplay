@@ -458,6 +458,36 @@ final class SenderController: ObservableObject {
         }
     }
 
+    // Cable-loss reconnects per service: a few tries in a window, so a cable
+    // that really is unplugged (with a stale record) cannot loop.
+    private var cableRetries: [String: (count: Int, since: Date)] = [:]
+
+    /// A cabled session just ended because the link died. Unplugging is how
+    /// people end a session, so this does not redial by itself; it only makes
+    /// the next sighting of the receiver on the direct cable count as a replug
+    /// (a short glitch leaves its record in place, which would otherwise never
+    /// look "newly" cabled). A receiver whose cable is really gone drops off
+    /// the cable and nothing happens.
+    private func rearmCableReconnect(_ name: String) {
+        guard autoConnectEnabled, !cableOptOut.contains(name) else { return }
+        let now = Date()
+        var entry = cableRetries[name] ?? (count: 0, since: now)
+        if now.timeIntervalSince(entry.since) > 300 { entry = (count: 0, since: now) }
+        guard entry.count < 3 else {
+            Log.info("\(name): cable reconnect gave up after 3 tries in 5 minutes")
+            return
+        }
+        entry.count += 1
+        cableRetries[name] = entry
+        onDirectCable.remove(name)
+        Log.info("\(name): cable link lost — will reconnect if it comes back (\(entry.count)/3)")
+        for delay in [2.0, 5.0, 10.0, 20.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.connectNewlyCabled()
+            }
+        }
+    }
+
     /// A live session may already talk to this receiver under another
     /// service name (renamed while streaming). Match the install id when the
     /// browse result carries TXT; it often does not, so also treat any live
@@ -712,7 +742,10 @@ final class SenderController: ObservableObject {
             // transport fallback — reconnecting is the user's call.
             guard let self, let session else { return }
             Log.info("device disconnected — session \(session.id) stopped")
+            let wasCabled = session.wired
+            let name = session.wifiServiceName ?? session.name
             self.end(session)
+            if wasCabled { self.rearmCableReconnect(name) }
         }
         sender.onPeerSleeping = { [weak self, weak session] in
             // The device locked. Unlike a plain disconnect this is a
