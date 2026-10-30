@@ -63,3 +63,15 @@ struct VideoCapability: Codable, Equatable {
         self.maxPixelsPerSecond = maxPixelsPerSecond
     }
 }
+
+/// A TCP mirror can arrive before the first UDP cursor datagram. Receipt on
+/// UDP must still acknowledge the channel even when its position is stale.
+struct CursorDatagramHandshake {
+    private var acknowledged = false
+    mutating func resetFlow() { acknowledged = false }
+    mutating func receive(sequence: UInt64, lastApplied: UInt64) -> (acknowledge: Bool, apply: Bool) {
+        let acknowledge = !acknowledged
+        acknowledged = true
+        return (acknowledge, sequence > lastApplied)
+    }
+}
