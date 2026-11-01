@@ -44,9 +44,10 @@ release-please creates. There are no per-platform tags.
   tagged tree therefore builds with `cargo --locked`, and `linux-release.yml`
   refuses a tag that differs from the workspace version. `od-sender
   --version` and `od-receiver --version` print the tag. The Arch PKGBUILDs
-  use the version as `pkgver`; after the release, `release.yml`'s
-  `bump-arch` job runs `linux/packaging/arch/opendisplay-sender/bump.sh X.Y.Z`
-  (and the receiver's) and commits the checksum and `.SRCINFO` to main.
+  use the version as `pkgver`; after the release, `arch-bump.yml` (called
+  from `release.yml`) runs `linux/packaging/arch/opendisplay-sender/bump.sh
+  X.Y.Z` (and the receiver's) and commits the checksum and `.SRCINFO` to
+  main.
 - **Android**: `versionName` is the tag, see below.
 
 The manifest's version must always be the latest released version. Never edit
@@ -244,6 +245,7 @@ A clean average does not excuse severe tail latency or recovery failures.
 - [ ] Confirm the download page, release assets, Sparkle feeds, and App Store or
       TestFlight version show the intended release.
 - [ ] Confirm the `bump-arch` job pointed both Arch PKGBUILDs on main at the
-      new tag; if it failed, run `bump.sh X.Y.Z` for both by hand and commit.
+      new tag; if it failed, run the "Arch PKGBUILD bump" workflow by hand
+      with the tag.
 - [ ] Keep the previous signed artifacts available as the rollback path and
       document any data or protocol state that prevents a safe downgrade.

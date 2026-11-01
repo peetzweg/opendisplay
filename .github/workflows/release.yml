@@ -126,56 +126,15 @@ jobs:
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
 
-  # Points the Arch PKGBUILDs on main at the new tag (pkgver, sha256sums,
-  # .SRCINFO). They build GitHub's tag tarball, and the documented install is
-  # `git pull && makepkg -si` on main, so a stale pkgver installs an old
-  # release, or fails before 1.26.0 where the tarball has no linux/ (#454).
-  # bump.sh needs makepkg, which refuses to run as root.
+  # Points the Arch PKGBUILDs on main at the new tag; see arch-bump.yml.
   bump-arch:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
-    runs-on: ubuntu-24.04
-    container: archlinux:latest
-    steps:
-      - name: Install base tools
-        run: |
-          pacman -Syu --noconfirm --needed base-devel git pacman-contrib
-          useradd --create-home builder
-
-      - uses: actions/checkout@v6
-        with:
-          ref: main
-
-      - name: Bump the PKGBUILDs
-        shell: bash
-        env:
-          TAG: ${{ needs.release-please.outputs.tag_name }}
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          chown -R builder: "$GITHUB_WORKSPACE"
-          sudo -u builder git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          arch=linux/packaging/arch
-          # A workflow_dispatch rebuild of an older release must not move
-          # the packages back.
-          cur="$(sed -n 's/^pkgver=//p' "$arch/opendisplay-sender/PKGBUILD")"
-          if (( $(vercmp "${TAG#v}" "$cur") <= 0 )); then
-            echo "PKGBUILDs already at $cur; nothing to do for $TAG"
-            exit 0
-          fi
-          for p in opendisplay-sender opendisplay-receiver; do
-            sudo -u builder "$arch/$p/bump.sh" "$TAG"
-          done
-          git add "$arch"/*/PKGBUILD "$arch"/*/.SRCINFO
-          git commit -m "chore(release): point the Arch PKGBUILDs at ${TAG} [skip ci]"
-          # build-mac pushes the Sparkle appcasts to main too, normally long
-          # after this; the two commits touch different files.
-          for attempt in 1 2 3; do
-            git pull --rebase origin main && git push origin HEAD:main && exit 0
-            sleep $((attempt * 10))
-          done
-          exit 1
+    permissions:
+      contents: write
+    uses: ./.github/workflows/arch-bump.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
 
   build-mac:
     needs: release-please

@@ -1,0 +1,72 @@
+name: Arch PKGBUILD bump
+
+# Points the Arch PKGBUILDs on main at a release tag (pkgver, sha256sums,
+# .SRCINFO) and commits the result. They build GitHub's tag tarball, and the
+# documented install is `git pull && makepkg -si` on main, so a stale pkgver
+# installs an old release, or fails before 1.26.0 where the tarball has no
+# linux/ (#454). release.yml calls this after every release; run it by hand
+# (Actions > Arch PKGBUILD bump) to redo a bump that failed. bump.sh needs
+# makepkg, which refuses to run as root.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to point the PKGBUILDs at, e.g. v1.30.1
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: arch-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install base tools
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git pacman-contrib
+          useradd --create-home builder
+
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Bump the PKGBUILDs
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          chown -R builder: "$GITHUB_WORKSPACE"
+          sudo -u builder git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          arch=linux/packaging/arch
+          # A workflow_dispatch rebuild of an older release must not move
+          # the packages back.
+          cur="$(sed -n 's/^pkgver=//p' "$arch/opendisplay-sender/PKGBUILD")"
+          if (( $(vercmp "${TAG#v}" "$cur") <= 0 )); then
+            echo "PKGBUILDs already at $cur; nothing to do for $TAG"
+            exit 0
+          fi
+          for p in opendisplay-sender opendisplay-receiver; do
+            sudo -u builder "$arch/$p/bump.sh" "$TAG"
+          done
+          git add "$arch"/*/PKGBUILD "$arch"/*/.SRCINFO
+          git commit -m "chore(release): point the Arch PKGBUILDs at ${TAG} [skip ci]"
+          # build-mac pushes the Sparkle appcasts to main too, normally long
+          # after this; the two commits touch different files.
+          for attempt in 1 2 3; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1
