@@ -147,6 +147,7 @@ jobs:
           ref: main
 
       - name: Bump the PKGBUILDs
+        shell: bash
         env:
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
@@ -168,8 +169,8 @@ jobs:
           done
           git add "$arch"/*/PKGBUILD "$arch"/*/.SRCINFO
           git commit -m "chore(release): point the Arch PKGBUILDs at ${TAG} [skip ci]"
-          # build-mac pushes the Sparkle appcasts to main around the same
-          # time; the two commits touch different files.
+          # build-mac pushes the Sparkle appcasts to main too, normally long
+          # after this; the two commits touch different files.
           for attempt in 1 2 3; do
             git pull --rebase origin main && git push origin HEAD:main && exit 0
             sleep $((attempt * 10))

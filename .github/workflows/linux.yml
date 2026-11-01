@@ -139,11 +139,11 @@ jobs:
       # compile itself is the checkout's, tested above.
       - name: makepkg the released source (both packages)
         run: |
+          (cd linux/packaging/arch/opendisplay-receiver && sudo -u builder makepkg --printsrcinfo | diff -u .SRCINFO -)
           for p in opendisplay-sender opendisplay-receiver; do
             dir="$RUNNER_TEMP/released/$p"
             install -d -o builder "$dir"
             install -m644 -o builder "linux/packaging/arch/$p/PKGBUILD" "$dir/"
-            (cd "linux/packaging/arch/$p" && sudo -u builder makepkg --printsrcinfo | diff -u .SRCINFO -)
             (cd "$dir" && sudo -u builder -H makepkg --nodeps --nobuild)
           done
 
