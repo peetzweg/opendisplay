@@ -132,6 +132,21 @@ jobs:
           # .SRCINFO is what the AUR shows; it must match the PKGBUILD.
           sudo -u builder makepkg --printsrcinfo | diff -u .SRCINFO -
 
+      # The documented install is plain `makepkg -si` on main, which builds
+      # the release tag the PKGBUILD names, not this checkout. This runs it up
+      # to prepare() (download, checksum, extract, cargo fetch). While main
+      # named v1.25.0, a tag from before linux/ existed, that path failed and
+      # nothing noticed (#454). The compile is the checkout's, tested above.
+      - name: makepkg the released source (both packages)
+        run: |
+          (cd linux/packaging/arch/opendisplay-receiver && sudo -u builder makepkg --printsrcinfo | diff -u .SRCINFO -)
+          for p in opendisplay-sender opendisplay-receiver; do
+            dir="$RUNNER_TEMP/released/$p"
+            install -d -o builder "$dir"
+            install -m644 -o builder "linux/packaging/arch/$p/PKGBUILD" "$dir/"
+            (cd "$dir" && sudo -u builder -H makepkg --nodeps --nobuild)
+          done
+
       # The packaged /usr/bin/od-sender on a headless Sway (wlroots, pixman,
       # no GPU): adopt and wlroots backends, capture, input placement, a full
       # stream into od-receiver --sink none, crash recovery with `clean`.
