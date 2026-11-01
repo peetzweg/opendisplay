@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols_wlr::screencopy::v1::client::{
@@ -210,7 +210,6 @@ pub fn capture_wlr(
     let mut buffers: Vec<ShmBuffer> = Vec::new();
     let mut frames = 0u64;
     let mut failures = 0u32;
-    let mut warned_format = false;
     let start = Instant::now();
     while start.elapsed() < duration && !stop.load(Ordering::Relaxed) {
         // The output may have gone while we waited; never ask for a frame then.
@@ -244,18 +243,6 @@ pub fn capture_wlr(
                 }
             }
         };
-        if !warned_format
-            && !matches!(
-                format,
-                wl_shm::Format::Xrgb8888
-                    | wl_shm::Format::Argb8888
-                    | wl_shm::Format::Xbgr8888
-                    | wl_shm::Format::Abgr8888
-            )
-        {
-            warn!("compositor offers {format:?}; frames are read as XRGB8888, colours may be off");
-            warned_format = true;
-        }
         if buffers.first().is_some_and(|b| {
             (b.width, b.height, b.stride, b.format) != (width, height, stride, format)
         }) {
