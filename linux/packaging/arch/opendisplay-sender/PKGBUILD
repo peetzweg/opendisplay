@@ -12,7 +12,7 @@
 # file, so the AUR repository only needs PKGBUILD and .SRCINFO.
 
 pkgname=opendisplay-sender
-pkgver=1.25.0
+pkgver=1.30.1
 # GitHub names the tarball's top directory opendisplay-${pkgver}: it drops the
 # tag's leading v.
 _tag="v${pkgver}"
@@ -34,7 +34,7 @@ makedepends_x86_64=('nasm')              # OpenH264's x86 assembly (fallback enc
 options=('!lto')  # cargo profile handles LTO
 
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/peetzweg/opendisplay/archive/refs/tags/${_tag}.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('97b1be2538f3a02605cd60e0a85ffce1623491df0d59d72fd05e819ebe7ddac3')
 
 prepare() {
   cd "opendisplay-${pkgver}/linux"
