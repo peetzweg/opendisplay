@@ -1,5 +1,6 @@
-//! BGRA → 4:2:0 for the FFmpeg encoders, split into horizontal bands that
-//! convert in parallel, each through its own swscale context.
+//! Captured RGB (BGRA or RGBA byte order, see [`PixelFormat`]) → 4:2:0 for
+//! the FFmpeg encoders, split into horizontal bands that convert in
+//! parallel, each through its own swscale context.
 //!
 //! swscale's own `threads` option does nothing for the stateful API we use
 //! (FFmpeg 9, measured), and a single context costs ~14-24 ms per 4096x2304
@@ -15,6 +16,8 @@ use std::thread;
 use anyhow::{Result, bail};
 use ff::format::Pixel;
 use ffmpeg_next as ff;
+
+use crate::backend::PixelFormat;
 
 /// Rows per band at least; smaller bands cost more in thread hand-off than
 /// they save.
@@ -53,6 +56,9 @@ pub struct Converter {
     bands: Vec<Band>,
     width: u32,
     height: u32,
+    /// The byte order the bands convert from.
+    source: Pixel,
+    /// The 4:2:0 format the bands convert to.
     format: Pixel,
 }
 
@@ -72,33 +78,18 @@ pub fn band_count(height: u32, threads: u16) -> usize {
 
 impl Converter {
     /// `format` is a 4:2:0 format (YUV420P or NV12); `width`/`height` even.
+    /// The bands start out converting from BGRA (`Xrgb8888`, what most
+    /// compositors offer) and follow the frames handed to [`Self::convert`].
     pub fn new(width: u32, height: u32, format: Pixel, bands: usize) -> Result<Self> {
         if !matches!(format, Pixel::YUV420P | Pixel::NV12) {
-            bail!("no BGRA conversion to {format:?}");
+            bail!("no RGB conversion to {format:?}");
         }
-        let bands = bands.max(1) as u32;
-        // Multiples of 16 rows keep every band's chroma rows whole and its
-        // plane offsets aligned; the last band takes the remainder.
-        let step = ((height / bands) & !15).max(16);
-        let mut out = Vec::new();
-        let mut y0 = 0;
-        while y0 < height {
-            let rows = if out.len() as u32 == bands - 1 || y0 + step >= height {
-                height - y0
-            } else {
-                step
-            };
-            out.push(Band {
-                ctx: new_context(width, rows, format)?,
-                y0,
-                rows,
-            });
-            y0 += rows;
-        }
+        let source = source_pixel(PixelFormat::Xrgb8888);
         Ok(Self {
-            bands: out,
+            bands: make_bands(width, height, source, format, bands)?,
             width,
             height,
+            source,
             format,
         })
     }
@@ -112,15 +103,34 @@ impl Converter {
         self.bands.len()
     }
 
-    /// Convert one BGRA/BGRX frame into `dst`, which must be `format` at
-    /// this converter's size.
-    pub fn convert(&mut self, bgra: &[u8], stride: u32, dst: &mut ff::frame::Video) -> Result<()> {
+    /// Convert one frame, 4 bytes per pixel in `source` order, into `dst`,
+    /// which must be `format` at this converter's size. A change of byte
+    /// order rebuilds the bands.
+    pub fn convert(
+        &mut self,
+        pixels: &[u8],
+        stride: u32,
+        source: PixelFormat,
+        dst: &mut ff::frame::Video,
+    ) -> Result<()> {
         let (w, h) = (self.width as usize, self.height as usize);
-        if (stride as usize) < w * 4 || bgra.len() < stride as usize * (h - 1) + w * 4 {
+        if (stride as usize) < w * 4 || pixels.len() < stride as usize * (h - 1) + w * 4 {
             bail!("frame buffer smaller than {w}x{h} at stride {stride}");
         }
         if dst.format() != self.format || dst.width() != self.width || dst.height() != self.height {
             bail!("destination frame does not match the converter");
+        }
+        let source = source_pixel(source);
+        // Rebuild only when the byte order changes.
+        if source != self.source {
+            self.bands = make_bands(
+                self.width,
+                self.height,
+                source,
+                self.format,
+                self.bands.len(),
+            )?;
+            self.source = source;
         }
         // SAFETY: plain reads of the frame's plane pointers.
         let planes = unsafe {
@@ -137,19 +147,48 @@ impl Converter {
         let (first, rest) = self.bands.split_first_mut().expect("at least one band");
         thread::scope(|s| {
             for band in rest {
-                s.spawn(move || convert_band(band, bgra, stride, planes));
+                s.spawn(move || convert_band(band, pixels, stride, planes));
             }
-            convert_band(first, bgra, stride, planes);
+            convert_band(first, pixels, stride, planes);
         });
         Ok(())
     }
 }
 
-fn convert_band(band: &mut Band, bgra: &[u8], stride: u32, planes: Planes) {
+fn make_bands(
+    width: u32,
+    height: u32,
+    source: Pixel,
+    format: Pixel,
+    bands: usize,
+) -> Result<Vec<Band>> {
+    let bands = bands.max(1) as u32;
+    // Multiples of 16 rows keep every band's chroma rows whole and its
+    // plane offsets aligned; the last band takes the remainder.
+    let step = ((height / bands) & !15).max(16);
+    let mut out = Vec::new();
+    let mut y0 = 0;
+    while y0 < height {
+        let rows = if out.len() as u32 == bands - 1 || y0 + step >= height {
+            height - y0
+        } else {
+            step
+        };
+        out.push(Band {
+            ctx: new_context(width, rows, source, format)?,
+            y0,
+            rows,
+        });
+        y0 += rows;
+    }
+    Ok(out)
+}
+
+fn convert_band(band: &mut Band, pixels: &[u8], stride: u32, planes: Planes) {
     let y0 = band.y0 as usize;
     let src = [
         // In bounds: `convert` checked the buffer covers every row.
-        bgra[y0 * stride as usize..].as_ptr(),
+        pixels[y0 * stride as usize..].as_ptr(),
         std::ptr::null(),
         std::ptr::null(),
         std::ptr::null(),
@@ -166,9 +205,9 @@ fn convert_band(band: &mut Band, bgra: &[u8], stride: u32, planes: Planes) {
         // frame `height` rows high, at the frame's own linesize.
         *ptr = unsafe { ptr.offset(row as isize * planes.linesize[p] as isize) };
     }
-    // SAFETY: the context was made for `width` x `band.rows` BGRA → format;
-    // source and destination pointers cover exactly that many rows, and no
-    // other band touches them.
+    // SAFETY: the context was made for `width` x `band.rows` of the frame's
+    // 4-byte pixels → format; source and destination pointers cover exactly
+    // that many rows, and no other band touches them.
     unsafe {
         ff::ffi::sws_scale(
             band.ctx,
@@ -182,14 +221,29 @@ fn convert_band(band: &mut Band, bgra: &[u8], stride: u32, planes: Planes) {
     }
 }
 
-fn new_context(width: u32, rows: u32, format: Pixel) -> Result<*mut ff::ffi::SwsContext> {
+fn source_pixel(f: PixelFormat) -> Pixel {
+    // wl_shm names are little-endian words, swscale's are byte orders:
+    // Xrgb8888 is B, G, R, X in memory, BGRA to swscale. The fourth byte
+    // is ignored either way.
+    match f {
+        PixelFormat::Xrgb8888 | PixelFormat::Argb8888 => Pixel::BGRA,
+        PixelFormat::Xbgr8888 | PixelFormat::Abgr8888 => Pixel::RGBA,
+    }
+}
+
+fn new_context(
+    width: u32,
+    rows: u32,
+    source: Pixel,
+    format: Pixel,
+) -> Result<*mut ff::ffi::SwsContext> {
     // SAFETY: plain constructor calls; the result is checked for null and
     // owned by the returned `Band`.
     unsafe {
         let ctx = ff::ffi::sws_getContext(
             width as i32,
             rows as i32,
-            Pixel::BGRA.into(),
+            source.into(),
             width as i32,
             rows as i32,
             format.into(),
@@ -204,7 +258,7 @@ fn new_context(width: u32, rows: u32, format: Pixel) -> Result<*mut ff::ffi::Sws
             std::ptr::null(),
         );
         if ctx.is_null() {
-            bail!("sws_getContext failed for {width}x{rows} BGRA -> {format:?}");
+            bail!("sws_getContext failed for {width}x{rows} {source:?} -> {format:?}");
         }
         // BT.709 both ways; source full range (desktop RGB), destination
         // limited (video), as the stream's VUI announces.
@@ -262,18 +316,74 @@ mod tests {
             for format in [Pixel::YUV420P, Pixel::NV12] {
                 let mut one = Converter::new(w, h, format, 1).unwrap();
                 let mut a = ff::frame::Video::new(format, w, h);
-                one.convert(&src, stride, &mut a).unwrap();
+                one.convert(&src, stride, PixelFormat::Xrgb8888, &mut a)
+                    .unwrap();
                 for n in [2, 3, 8] {
                     let mut many = Converter::new(w, h, format, n).unwrap();
                     assert!(many.bands() > 1);
                     let mut b = ff::frame::Video::new(format, w, h);
-                    many.convert(&src, stride, &mut b).unwrap();
+                    many.convert(&src, stride, PixelFormat::Xrgb8888, &mut b)
+                        .unwrap();
                     assert!(
                         planes(&a) == planes(&b),
                         "{w}x{h} {format:?} {n} bands differ"
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn rgba_order_converts_like_its_bgra_twin() {
+        ff::init().unwrap();
+        let (w, h) = (640, 362);
+        let (bgra, stride) = frame(w, h);
+        let mut rgba = bgra.clone();
+        for px in rgba.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+        for format in [Pixel::YUV420P, Pixel::NV12] {
+            let mut c = Converter::new(w, h, format, 3).unwrap();
+            let mut from_bgra = ff::frame::Video::new(format, w, h);
+            c.convert(&bgra, stride, PixelFormat::Xrgb8888, &mut from_bgra)
+                .unwrap();
+            let mut from_rgba = ff::frame::Video::new(format, w, h);
+            c.convert(&rgba, stride, PixelFormat::Xbgr8888, &mut from_rgba)
+                .unwrap();
+            assert!(planes(&from_bgra) == planes(&from_rgba), "{format:?}");
+            // The same bytes read in the other order must differ.
+            let mut swapped = ff::frame::Video::new(format, w, h);
+            c.convert(&rgba, stride, PixelFormat::Xrgb8888, &mut swapped)
+                .unwrap();
+            assert!(planes(&from_bgra) != planes(&swapped), "{format:?}");
+        }
+    }
+
+    #[test]
+    fn red_stays_red_in_either_order() {
+        ff::init().unwrap();
+        let (w, h) = (64, 64);
+        let stride = w * 4 + 32;
+        for (order, px) in [
+            (PixelFormat::Xrgb8888, [0u8, 0, 255, 255]),
+            (PixelFormat::Xbgr8888, [255u8, 0, 0, 255]),
+        ] {
+            let mut src = vec![0u8; (stride * h) as usize];
+            for row in src.chunks_exact_mut(stride as usize) {
+                for p in row[..(w * 4) as usize].chunks_exact_mut(4) {
+                    p.copy_from_slice(&px);
+                }
+            }
+            let mut c = Converter::new(w, h, Pixel::YUV420P, 2).unwrap();
+            let mut f = ff::frame::Video::new(Pixel::YUV420P, w, h);
+            c.convert(&src, stride, order, &mut f).unwrap();
+            let p = planes(&f);
+            let mean = |v: &[u8]| v.iter().map(|&b| b as u32).sum::<u32>() / v.len() as u32;
+            let (y, cb, cr) = (mean(&p[0]), mean(&p[1]), mean(&p[2]));
+            // Red in BT.709 limited range: Y 63, Cb 102, Cr 240.
+            assert!((60..=66).contains(&y), "{order:?}: Y {y}");
+            assert!((99..=105).contains(&cb), "{order:?}: Cb {cb}");
+            assert!((237..=243).contains(&cr), "{order:?}: Cr {cr}");
         }
     }
 
@@ -296,6 +406,9 @@ mod tests {
         ff::init().unwrap();
         let mut c = Converter::new(64, 64, Pixel::YUV420P, 1).unwrap();
         let mut f = ff::frame::Video::new(Pixel::YUV420P, 64, 64);
-        assert!(c.convert(&[0; 100], 256, &mut f).is_err());
+        assert!(
+            c.convert(&[0; 100], 256, PixelFormat::Xrgb8888, &mut f)
+                .is_err()
+        );
     }
 }

@@ -339,7 +339,6 @@ pub enum FrameBuf {
         width: u32,
         height: u32,
         stride: u32,
-        #[allow(dead_code)] // the encoders assume BGRX/BGRA, which is what capture prefers
         format: PixelFormat,
     },
     /// Already converted to the encoder's 4:2:0 format by the convert stage

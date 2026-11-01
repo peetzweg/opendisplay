@@ -244,11 +244,16 @@ pub fn capture_wlr(
                 }
             }
         };
-        if !warned_format && !matches!(format, wl_shm::Format::Xrgb8888 | wl_shm::Format::Argb8888)
+        if !warned_format
+            && !matches!(
+                format,
+                wl_shm::Format::Xrgb8888
+                    | wl_shm::Format::Argb8888
+                    | wl_shm::Format::Xbgr8888
+                    | wl_shm::Format::Abgr8888
+            )
         {
-            warn!(
-                "compositor offers {format:?}; the encoders expect XRGB/ARGB8888, colours may be off"
-            );
+            warn!("compositor offers {format:?}; frames are read as XRGB8888, colours may be off");
             warned_format = true;
         }
         if buffers.first().is_some_and(|b| {
