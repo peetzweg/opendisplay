@@ -12,6 +12,7 @@ pub mod hyprland;
 pub mod kde;
 pub mod lock;
 pub mod wlroots;
+pub mod x11;
 
 use std::fmt;
 use std::str::FromStr;
@@ -38,6 +39,9 @@ pub enum BackendId {
     /// GNOME: virtual monitor and input over Mutter's D-Bus APIs.
     Gnome,
     Portal,
+    /// X11 (Xorg): an output turned on through RandR on a spare connector,
+    /// MIT-SHM capture, XTest input.
+    X11,
 }
 
 impl fmt::Display for BackendId {
@@ -49,6 +53,7 @@ impl fmt::Display for BackendId {
             BackendId::Kde => "kde",
             BackendId::Gnome => "gnome",
             BackendId::Portal => "portal",
+            BackendId::X11 => "x11",
         })
     }
 }
@@ -200,10 +205,15 @@ pub trait Backend: Send {
     fn describe(&self) -> String;
     fn caps(&self) -> Caps;
     /// Frames come through a Wayland capture protocol (`wayland/capture.rs`,
-    /// `wayland/screencopy.rs`); false for PipeWire backends, which ignore
-    /// the capture choice.
+    /// `wayland/screencopy.rs`); false for PipeWire and X11 backends, which
+    /// ignore the capture choice.
     fn wayland_capture(&self) -> bool {
         true
+    }
+    /// How a backend without Wayland capture gets its frames, for the log
+    /// and `doctor`.
+    fn capture_label(&self) -> &'static str {
+        "PipeWire"
     }
     /// A reason to capture with something other than the default protocol
     /// (backend/capture.rs); `None` = no preference.

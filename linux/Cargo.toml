@@ -49,6 +49,10 @@ gstreamer-app = "0.25"
 gtk4 = { version = "0.11", features = ["v4_14"] }
 gst-plugin-gtk4 = { version = "0.15", features = ["wayland", "dmabuf", "gtk_v4_14"] }
 openh264 = { version = "0.9", features = ["source"] }
+# X11 backend: RandR outputs, MIT-SHM capture, XTest input, XFixes cursor.
+# Pure Rust, no libxcb.
+x11rb = { version = "0.13", features = ["randr", "shm", "damage", "xfixes", "xtest"] }
+libc = "0.2"
 # Encoder + swscale only; ffmpeg-next needs `format` to compile, never used.
 ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling"] }
 

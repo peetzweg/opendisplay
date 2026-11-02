@@ -34,7 +34,8 @@ The sender is a **beta**. It is tested on **Omarchy / Hyprland 0.56 on Apple
 silicon (Asahi Linux)**; x86_64 is expected to work and needs testers. Sway,
 KDE Plasma and GNOME have their own backends, marked **experimental**: each
 passes an automated test on a headless copy of that desktop, but none has run
-on a real desktop session yet. Reports are very welcome in
+on a real desktop session yet. X11 sessions have an experimental backend
+too. Reports are very welcome in
 [#299](https://github.com/peetzweg/opendisplay/issues/299).
 
 | | Setup |
@@ -42,8 +43,9 @@ on a real desktop session yet. Reports are very welcome in
 | **Tested** | Arch / Omarchy, Hyprland 0.56, aarch64 (Asahi Linux on an M1 Pro), CPU encoding. Receivers: iPhone (App Store), Mac receiver app (Intel iMac) |
 | **Expected to work** | Arch / Omarchy on x86_64. Any distribution with Hyprland 0.55+. iPad and Android (Google Play beta) as receivers: Android streamed fine in a first session, but touch, scroll, rotation, lock and quit are not checked yet |
 | **Experimental** | **Sway 1.10+**, **KDE Plasma 6.8+** (6.7 and older with the desktop entry in place, see [KDE Plasma](/docs/linux/desktops/#kde-plasma)), **GNOME 50+** (older GNOME may work, untested). Verified on headless desktops only |
+| **Experimental on X11** | **Any desktop on Xorg** with a free video connector (most Intel and AMD laptops). Tried on KDE Plasma 5.27, Intel Iris Xe, with an iPhone; see [X11](/docs/linux/desktops/#x11) |
 | **Existing outputs only** | niri, COSMIC, river, labwc, Wayfire and similar: `od-sender run --output <name>` streams an output you created yourself, if the compositor offers the screen-capture and virtual-pointer protocols `od-sender doctor` lists |
-| **Not supported yet** | X11 sessions, Hyprland older than 0.55, Flatpak, SteamOS Gaming Mode, USB cable transport, HEVC, Apple Pencil pressure (mapped to a plain pointer), audio, mirror mode |
+| **Not supported yet** | Hyprland older than 0.55, Flatpak, SteamOS Gaming Mode, USB cable transport, HEVC, Apple Pencil pressure (mapped to a plain pointer), audio, mirror mode |
 
 Prebuilt tarballs exist for **x86_64** and **aarch64**. On an unsupported
 desktop `od-sender` exits with a message that names what is missing.

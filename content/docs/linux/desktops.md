@@ -1,7 +1,7 @@
 ---
 title: Linux desktop notes
 nav: Desktops
-description: How the OpenDisplay Linux sender works on Hyprland, Sway, KDE Plasma and GNOME, what each desktop needs, and how to stream an existing output on other compositors.
+description: How the OpenDisplay Linux sender works on Hyprland, Sway, KDE Plasma, GNOME and X11, what each desktop needs, and how to stream an existing output on other compositors.
 order: 4
 updated: 2026-10-22
 ---
@@ -16,9 +16,8 @@ shows what it detected and which protocols it found.
 | Sway 1.10+ | Experimental, verified headless only | Created and removed by the sender |
 | KDE Plasma 6.8+ | Experimental, verified headless only | Created by the sender, removed by KWin |
 | GNOME 50+ | Experimental, verified headless only | Created by the sender, removed by Mutter |
+| X11 (any desktop on Xorg) | Experimental, tried on KDE Plasma 5.27 | A free video connector turned on by the sender |
 | niri, COSMIC, river, labwc, Wayfire… | Existing outputs only | You create it, `--output <name>` |
-
-X11 sessions are not supported.
 
 ## Hyprland
 
@@ -115,6 +114,39 @@ GNOME rounds the scale to one it supports (an iPhone's 3 becomes 2).
 
 `--workspace` is ignored on GNOME, with a warning. Not available from a
 Flatpak.
+
+## X11
+
+Any desktop running on Xorg (KDE Plasma 5, Cinnamon, Xfce, MATE, GNOME on
+Xorg, i3, …). `od-sender` picks the X11 backend when `XDG_SESSION_TYPE=x11`;
+`--backend x11` forces it.
+
+X11 cannot create a monitor out of nothing, so `od-sender` borrows an unused
+video connector: an HDMI or DisplayPort socket with nothing plugged in, and a
+display controller (CRTC) that no monitor is using. It gives that connector a
+mode named after the receiver (`od-xxxxxx`) and turns it on with RandR, so it
+behaves like a real monitor for your window manager and panels. `od-sender
+doctor` lists the connectors it can use. This works on most Intel and AMD
+GPUs; the proprietary NVIDIA driver usually does not allow it, and a machine
+with every connector in use has none to spare.
+
+- **Size**: X11 has no per-display scale, so the display is made in logical
+  pixels (an iPhone at 3x gets 390x844) and the receiver scales it up. Use
+  `--scale 2` or `--scale 1.5` for more room at a smaller size.
+- **Display settings**: KDE's display settings do not list the virtual
+  display (other desktops' may not either), because the connector still
+  reports nothing plugged in. It works as a monitor all the same; `xrandr`
+  shows it.
+- **Capture** reads the display's part of the screen with MIT-SHM, only when
+  something in it changed (XDamage), so an idle display costs almost nothing.
+  The cursor goes over the side channel, or is drawn into the video with
+  `--cursor video`.
+- **Scrolling** is sent as mouse-wheel clicks, since X11 has no smooth
+  scrolling for injected input.
+- `--output <name>` streams an output that is already on (a second monitor,
+  or one you set up with `xrandr`) instead of creating one.
+- After a crash the connector stays on; `od-sender clean` turns it off, and
+  the next `run` for the same receiver reuses it.
 
 ## Other compositors: stream an existing output
 
