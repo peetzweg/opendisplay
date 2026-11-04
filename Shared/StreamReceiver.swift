@@ -308,9 +308,10 @@ final class StreamReceiver: ObservableObject {
         var txt = NWTXTRecord()
         txt["id"] = Self.installID
         txt["pv"] = String(WireProtocol.version)   // issue #132
-        // Encrypted transport offered (PROTOCOL.md 11.1). The ports follow
-        // from the base port; the key only says "this receiver can pair".
-        txt["sec"] = "1"
+        // Encrypted transport offered (PROTOCOL.md 11.1) — only with a TLS
+        // listener up: a receiver without a usable identity must not invite
+        // pairing it cannot complete. The ports follow from the base port.
+        if tlsListener != nil { txt["sec"] = "1" }
         return NWListener.Service(name: serviceName, type: "_opensidecar._tcp",
                                   domain: nil, txtRecord: txt)
     }
@@ -593,7 +594,9 @@ final class StreamReceiver: ObservableObject {
     private func startSecureListeners() {
         TrustStore.shared.refreshSnapshot()   // arm the verify block before the first accept
         startTLSListener()
+        guard tlsListener != nil else { return }   // no identity: plain only
         pairing.start(port: pairPort)
+        listener?.service = advertisedService     // now with sec=1
     }
 
     private func stopSecureListeners() {
@@ -608,6 +611,10 @@ final class StreamReceiver: ObservableObject {
         tlsListener = nil
         tlsListenerHealthy = false
         startTLSListener()
+        if tlsListener != nil {
+            pairing.start(port: pairPort)
+            listener?.service = advertisedService
+        }
     }
 
     private func startTLSListener() {
