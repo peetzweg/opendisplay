@@ -73,6 +73,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // wired path (Thunderbolt Bridge / Ethernet) rather than WiFi — the UI
     // labels the row so the user can see the cable is actually in use.
     @MainActor var onTransportPath: ((_ wired: Bool) -> Void)?
+    // Whether the live path is the direct host-to-host cable (link-local,
+    // wired, Mac receiver) — the only TCP path trusted without encryption.
+    // Ethernet through a switch is wired but still a shared network.
+    @MainActor var onDirectLink: ((Bool) -> Void)?
     // Fired on every hello — carries the receiver's install id so the
     // controller can deduplicate USB/WiFi sessions to the same device.
     @MainActor var onHello: ((PhoneInfo) -> Void)?
@@ -272,7 +276,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // has. Computed by refreshDirectLinkClassification, cleared the moment
     // the session decides to redial (scheduleReconnect/switchTransport):
     // dial-phase failures take the grace/refusal rules, never this exit.
-    private var currentPathDirectLink = false
+    private var currentPathDirectLink = false {
+        didSet {
+            guard currentPathDirectLink != oldValue else { return }
+            let direct = currentPathDirectLink
+            Task { @MainActor in self.onDirectLink?(direct) }
+        }
+    }
     private var lastCursorSent: (x: Double, y: Double, visible: Bool) = (-1, -1, false)
     private var lastCursorPNGHash = 0
     // Cursor side channel (UDP, WiFi only): positions queue behind video
@@ -1705,6 +1715,26 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // two in a row mean the pairing no longer holds on one side.
     private var consecutiveTLSRejections = 0
     private static let maxTLSRejections = 2
+    // The connection whose rejection was last counted: a TLS 1.3 rejection
+    // surfaces twice (the receive error, then .failed) and counts once.
+    private var tlsRejectionCountedFor: ObjectIdentifier?
+
+    /// A paired receiver refused this Mac's certificate. TLS 1.3 reports that
+    /// after `.ready` (the server checks the client certificate last), as a
+    /// receive error and then `.failed`. Returns true once the sender has
+    /// parked: two rejections in a row mean the receiver dropped the pairing,
+    /// and redialing would only loop.
+    private func noteTLSRejection(on conn: NWConnection, peerID: String) -> Bool {
+        if tlsRejectionCountedFor != ObjectIdentifier(conn) {
+            tlsRejectionCountedFor = ObjectIdentifier(conn)
+            consecutiveTLSRejections += 1
+            guard consecutiveTLSRejections >= Self.maxTLSRejections else { return false }
+            Log.info("TLS handshake rejected by paired receiver \(peerID) — pairing is stale")
+            Task { await self.status("This device no longer accepts this Mac. Forget the pairing and pair again.") }
+            Task { @MainActor in self.onPairingRejected?(peerID) }
+        }
+        return consecutiveTLSRejections >= Self.maxTLSRejections
+    }
 
     private var dialGeneration = 0 {
         didSet { dialTask?.cancel() }
@@ -2040,8 +2070,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let self else { return }
             switch state {
             case .ready:
+                // Not proof the receiver accepted us: in TLS 1.3 the client
+                // is ready before the server has checked its certificate. The
+                // rejection count resets on the receiver's hello instead.
                 self.connectionSecure = tls != nil
-                self.consecutiveTLSRejections = 0
                 if tls != nil { Log.info("encrypted session with \(self.endpointName)") }
                 self.becomeReady(conn)
             case .failed(let error):
@@ -2049,15 +2081,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.connectionReady = false
                 if let tls {
                     if case .tls = error {
-                        self.consecutiveTLSRejections += 1
-                    } else {
+                        if self.noteTLSRejection(on: conn, peerID: tls.peerID) {
+                            return   // parked: the controller ends the session
+                        }
+                    } else if self.tlsRejectionCountedFor != ObjectIdentifier(conn) {
                         self.consecutiveTLSRejections = 0   // network trouble, not the pairing
-                    }
-                    if self.consecutiveTLSRejections >= Self.maxTLSRejections {
-                        Log.info("TLS handshake rejected by paired receiver \(tls.peerID) — pairing is stale")
-                        Task { await self.status("This device no longer accepts this Mac. Forget the pairing and pair again.") }
-                        Task { @MainActor in self.onPairingRejected?(tls.peerID) }
-                        return   // parked: the controller ends the session
                     }
                 }
                 if case .posix(let code) = error, code == .ECONNREFUSED {
@@ -2532,6 +2560,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     // redial), not the link dying.
                     var isOwnCancel = false
                     if case .posix(let code) = error, code == .ECANCELED { isOwnCancel = true }
+                    // Before the receiver's hello, a TLS error on a secure
+                    // connection is the receiver refusing our certificate.
+                    if let self, self.connection === conn, self.connectionSecure,
+                       !self.helloSeenOnConnection, case .tls = error,
+                       case .tcp(_, let tls?) = self.transport,
+                       self.noteTLSRejection(on: conn, peerID: tls.peerID) {
+                        return   // parked: the controller ends the session
+                    }
                     if let self, self.connection === conn, !isOwnCancel {
                         self.linkDied("receive failed: \(error)")
                     }
@@ -2592,6 +2628,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 let previous = lastHello
                 lastHello = info
                 helloSeenOnConnection = true
+                // The receiver accepted this Mac's certificate.
+                if connectionSecure { consecutiveTLSRejections = 0 }
                 // A fresh dial classifies before the hello names the device —
                 // now that it has, decide again (see the comment on the func).
                 if let conn = connection { refreshDirectLinkClassification(for: conn) }

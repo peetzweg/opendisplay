@@ -151,14 +151,18 @@ final class DeviceSession: ObservableObject, Identifiable {
     // The live TCP path runs over a cable (Thunderbolt Bridge / Ethernet)
     // rather than WiFi — reported by the sender once connected.
     @Published var wired = false
+    // The live path is the direct host-to-host cable, not merely wired:
+    // Ethernet through a switch is still a network others share.
+    @Published var directCable = false
     // The live transport is mutual TLS with a paired receiver (issue #16).
     @Published var encrypted = false
 
     var transportLabel: String { onUSB ? "USB" : wired ? "Cable" : "WiFi" }
-    /// What the row says about the link's protection.
+    /// What the row says about the link's protection. Only USB and the
+    /// direct cable go unlabeled: anything else crosses a network.
     var securityLabel: String? {
         if encrypted { return "Encrypted" }
-        if onUSB || wired { return nil }
+        if onUSB || directCable { return nil }
         return "Not encrypted"
     }
 
@@ -810,6 +814,9 @@ final class SenderController: ObservableObject {
         sender.onTransportPath = { [weak session] wired in
             session?.wired = wired
         }
+        sender.onDirectLink = { [weak session] direct in
+            session?.directCable = direct
+        }
         sender.onPeerClosed = { [weak self, weak session] in
             // The receiver app quit — a deliberate goodbye, so no reconnect
             // waits around. Reopening the app is a fresh start handled by
@@ -1238,7 +1245,11 @@ extension ContentView {
     @ViewBuilder
     func securityMenu(for entry: SenderController.DeviceEntry) -> some View {
         if let id = controller.pairedReceiverID(for: entry) {
-            Button("Forget Pairing") { controller.forgetPairing(receiverID: id) }
+            Button("Forget Pairing") {
+                controller.forgetPairing(receiverID: id)
+                // A "no longer accepts this Mac" note is resolved by this.
+                if let target = entry.wifiTarget { controller.note(target, nil) }
+            }
         }
         if controller.hasPlaintextApproval(entry) {
             Button("Ask Before Connecting Unencrypted") { controller.revokePlaintextApproval(entry) }
