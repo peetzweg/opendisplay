@@ -33,8 +33,38 @@ final class TrustStore {
     private var snapshot: [(peerID: String, spki: Data)] = []
 
     private init() {
+        // Keychain items outlive an app deletion on iOS; UserDefaults do not.
+        // No flag means a fresh install (or the first launch of a build that
+        // has pairing): whatever trust state is left belongs to a previous
+        // install whose peers no longer know us.
+        if !UserDefaults.standard.bool(forKey: WireCrypto.trustStoreInitializedDefaultsKey) {
+            purgeAll()
+            UserDefaults.standard.set(true, forKey: WireCrypto.trustStoreInitializedDefaultsKey)
+        }
         refreshSnapshot()
     }
+
+    /// The data-protection keychain (TN3137) needs a keychain-access-group
+    /// entitlement on macOS, which only team-signed builds carry. Ad hoc dev
+    /// builds (run.sh) and unsigned CI builds get errSecMissingEntitlement,
+    /// so on macOS they fall back to the login keychain: same items, same
+    /// queries. iOS always uses the data-protection keychain and ignores this.
+    static let useDataProtectionKeychain: Bool = {
+        #if os(macOS)
+        let probe: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: WireCrypto.pinKeychainService,
+            kSecMatchLimit: kSecMatchLimitOne,
+            kSecUseDataProtectionKeychain: true,
+        ]
+        let status = SecItemCopyMatching(probe as CFDictionary, nil)
+        if status == errSecMissingEntitlement {
+            Log.info("trust store: no keychain entitlement (unsigned or ad hoc build) — using the login keychain")
+            return false
+        }
+        #endif
+        return true
+    }()
 
     // MARK: - Own identity
 
@@ -60,14 +90,14 @@ final class TrustStore {
             Log.info("ERROR: ownSPKI failed to copy certificate from identity (status \(status))")
             return nil
         }
-        return spkiFromCertificate(cert)
+        return Self.spki(of: cert)
     }
 
     /// Keychain-backed install ID, created atomically with the identity and
     /// deleted by `purgeAll()` — id and key live and die together.
-    /// The caller's own self-id: the Mac uses it as macInstallID for its wire
-    /// identity. Never called on iOS — the phone's wire id is
-    /// PhoneReceiver.installID (UserDefaults-backed).
+    /// The sender's id in pairing and `unpair` (receivers pin it). Receivers
+    /// identify themselves with StreamReceiver.installID instead, the id
+    /// their hello and Bonjour TXT already carry.
     func installID() -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -95,7 +125,7 @@ final class TrustStore {
             kSecAttrAccount: peerID,
             kSecReturnData: true,
             kSecMatchLimit: kSecMatchLimitOne,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
         var out: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
@@ -116,7 +146,7 @@ final class TrustStore {
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: WireCrypto.pinKeychainService,
             kSecAttrAccount: peerID,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
         SecItemDelete(deleteQuery as CFDictionary)
 
@@ -127,7 +157,7 @@ final class TrustStore {
             kSecAttrLabel: displayName,
             kSecValueData: spki,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         guard status == errSecSuccess else {
@@ -144,7 +174,7 @@ final class TrustStore {
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: WireCrypto.pinKeychainService,
             kSecAttrAccount: peerID,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
         let status = SecItemDelete(query as CFDictionary)
         if status != errSecSuccess, status != errSecItemNotFound {
@@ -161,22 +191,22 @@ final class TrustStore {
             [
                 kSecClass: kSecClassGenericPassword,
                 kSecAttrService: WireCrypto.pinKeychainService,
-                kSecUseDataProtectionKeychain: true,
+                kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
             ],
             [
                 kSecClass: kSecClassGenericPassword,
                 kSecAttrService: WireCrypto.identityKeychainLabel,
-                kSecUseDataProtectionKeychain: true,
+                kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
             ],
             [
                 kSecClass: kSecClassCertificate,
                 kSecAttrLabel: WireCrypto.identityKeychainLabel,
-                kSecUseDataProtectionKeychain: true,
+                kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
             ],
             [
                 kSecClass: kSecClassKey,
                 kSecAttrApplicationTag: Data(WireCrypto.identityKeychainLabel.utf8),
-                kSecUseDataProtectionKeychain: true,
+                kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
             ],
         ]
         for query in deletions {
@@ -199,7 +229,7 @@ final class TrustStore {
             kSecAttrService: WireCrypto.pinKeychainService,
             kSecReturnAttributes: true,
             kSecMatchLimit: kSecMatchLimitAll,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
         var out: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
@@ -244,7 +274,7 @@ final class TrustStore {
             kSecReturnAttributes: true,
             kSecReturnData: true,
             kSecMatchLimit: kSecMatchLimitAll,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
         var out: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
@@ -303,7 +333,7 @@ final class TrustStore {
             kSecAttrLabel: WireCrypto.identityKeychainLabel,
             kSecReturnRef: true,
             kSecMatchLimit: kSecMatchLimitOne,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
         var out: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
@@ -322,7 +352,7 @@ final class TrustStore {
             kSecAttrAccount: WireCrypto.installIDAccount,
             kSecReturnData: true,
             kSecMatchLimit: kSecMatchLimitOne,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
         var out: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
@@ -394,7 +424,7 @@ final class TrustStore {
             kSecValueRef: secKey,
             kSecAttrApplicationTag: Data(WireCrypto.identityKeychainLabel.utf8),
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ] as CFDictionary, nil)
         guard status == errSecSuccess || status == errSecDuplicateItem else {
             Log.info("ERROR: SecItemAdd(key) failed (status \(status))")
@@ -411,7 +441,7 @@ final class TrustStore {
             kSecValueRef: secCert,
             kSecAttrLabel: WireCrypto.identityKeychainLabel,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ] as CFDictionary, nil)
         guard status == errSecSuccess || status == errSecDuplicateItem else {
             Log.info("ERROR: SecItemAdd(certificate) failed (status \(status))")
@@ -426,7 +456,7 @@ final class TrustStore {
             kSecAttrAccount: WireCrypto.installIDAccount,
             kSecValueData: Data(installID.utf8),
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ] as CFDictionary, nil)
         guard status == errSecSuccess || status == errSecDuplicateItem else {
             Log.info("ERROR: SecItemAdd(installID) failed (status \(status))")
@@ -443,7 +473,7 @@ final class TrustStore {
             kSecAttrLabel: WireCrypto.identityKeychainLabel,
             kSecReturnRef: true,
             kSecMatchLimit: kSecMatchLimitOne,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ] as CFDictionary, &out)
         guard status == errSecSuccess else {
             Log.info("ERROR: identity fetch after generation failed (status \(status))")
@@ -467,19 +497,19 @@ final class TrustStore {
         SecItemDelete([
             kSecClass: kSecClassKey,
             kSecAttrApplicationTag: Data(WireCrypto.identityKeychainLabel.utf8),
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ] as CFDictionary)
         SecItemDelete([
             kSecClass: kSecClassCertificate,
             kSecAttrLabel: WireCrypto.identityKeychainLabel,
-            kSecUseDataProtectionKeychain: true,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ] as CFDictionary)
     }
 
     /// Same-source SPKI extraction from a certificate already in the
     /// Keychain: cert → SecKey → X9.63 → CryptoKit → DER. Never hand-assemble
     /// SPKI headers; never return raw X9.63 from any public API.
-    private func spkiFromCertificate(_ cert: SecCertificate) -> Data? {
+    static func spki(of cert: SecCertificate) -> Data? {
         guard let key = SecCertificateCopyKey(cert) else {
             Log.info("ERROR: SecCertificateCopyKey failed")
             return nil

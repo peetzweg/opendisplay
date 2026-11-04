@@ -24,10 +24,19 @@ enum CaptureMode: String {
     case extend   // virtual display (Milestone 2)
 }
 
+/// Pinned mutual TLS for a WiFi dial to a paired receiver (PROTOCOL.md 11.4,
+/// from #151). Travels inside the transport, so failover and reconnects
+/// keep it.
+struct TLSSessionConfig {
+    let identity: SecIdentity
+    let pinnedReceiverSPKI: Data   // DER SPKI pinned for this receiver
+    let peerID: String             // the receiver install id it is pinned under
+}
+
 /// How the sender reaches the receiver. Reconnects re-dial from scratch, so
 /// a USB device that was replugged (new usbmuxd DeviceID) is found again.
 enum SenderTransport {
-    case tcp(NWEndpoint)                   // WiFi (Bonjour) or -host/-port override
+    case tcp(NWEndpoint, tls: TLSSessionConfig? = nil)  // WiFi (Bonjour) or -host/-port override
     case usb(udid: String?, port: UInt16)  // native usbmuxd dial; nil = first device
     case accessory(serial: String)         // Android over USB in accessory mode (AOA)
 }
@@ -1690,7 +1699,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private func connect() {
         guard !stopped else { return }
         switch transport {
-        case .tcp(let endpoint): connectTCP(endpoint)
+        case .tcp(let endpoint, let tls): connectTCP(endpoint, tls: tls)
         case .usb(let udid, let port):
             connectWired { (try await Usbmux.dial(udid: udid, port: port, queue: self.queue), nil) }
         case .accessory(let serial):
@@ -1965,7 +1974,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         return result
     }
 
-    private func connectTCP(_ endpoint: NWEndpoint) {
+    private func connectTCP(_ endpoint: NWEndpoint, tls: TLSSessionConfig?) {
         let options = NWProtocolTCP.Options()
         options.noDelay = true   // latency matters more than throughput here
         // No interface steering: macOS already ranks a Thunderbolt Bridge or
@@ -1973,8 +1982,24 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // there is one (field-tested: en10 chosen over en0). A WiFi-prohibited
         // pre-dial was tried and only ever hung until its timeout, adding 2s
         // to every connect. becomeReady reports which path won.
-        let params = NWParameters(tls: nil, tcp: options)
-        let conn = NWConnection(to: endpoint, using: params)
+        let params: NWParameters
+        let target: NWEndpoint
+        if let tls {
+            let pinned = [tls.pinnedReceiverSPKI]   // captured: no Keychain I/O in the verify block
+            guard let tlsOptions = TLSConfigurator.mutualTLSOptions(
+                    identity: tls.identity, pinnedSPKIs: { pinned },
+                    isListener: false, queue: queue) else {
+                Task { await self.status("Encryption unavailable on this Mac — not connecting") }
+                return   // never plaintext for a paired receiver
+            }
+            params = NWParameters(tls: tlsOptions, tcp: options)
+            target = WireCrypto.endpoint(endpoint, serviceType: WireCrypto.tlsServiceType,
+                                         portOffset: WireCrypto.tlsPortOffset)
+        } else {
+            params = NWParameters(tls: nil, tcp: options)
+            target = endpoint
+        }
+        let conn = NWConnection(to: target, using: params)
         connection = conn
         // A dial to a withdrawn Bonjour service (receiver asleep or app
         // closed) sits in .preparing forever — it neither fails nor resolves

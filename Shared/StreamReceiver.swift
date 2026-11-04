@@ -14,6 +14,7 @@
 
 import Foundation
 import Network
+import Security
 import AVFoundation
 import CoreMedia
 import VideoToolbox
@@ -80,9 +81,43 @@ final class StreamReceiver: ObservableObject {
     /// True when the connected Mac understands pencil/proximity wire messages.
     var macSupportsPencilWire: Bool { macProtocolVersion >= WireProtocol.pencilWireVersion }
 
+    // Pairing and the encrypted transport (issue #16, PROTOCOL.md 11).
+    /// The code to show while a sender waits for it; nil otherwise.
+    @Published var pairingPrompt: PairingListener.Prompt?
+    /// Set briefly after a pairing succeeds, for a confirmation in the UI.
+    @Published var pairedNotice: String?
+    /// The live session runs over mutual TLS with a paired sender.
+    @Published var encrypted = false
+    /// Senders this receiver has paired with, for the Forget list.
+    @Published private(set) var pairedSenders: [(id: String, name: String)] = []
+
     private var listener: NWListener?
     private var listenerHealthy = false
     private var connection: NWConnection?
+    // The mutual TLS listener (base port + 2) and the pairing channel
+    // (base port + 3). They follow the plain listener's lifecycle.
+    private var tlsListener: NWListener?
+    private var tlsListenerHealthy = false
+    private lazy var pairing: PairingListener = {
+        let pairing = PairingListener(queue: queue, receiverID: Self.installID,
+                                      receiverName: { [weak self] in self?.serviceName ?? "OpenDisplay" })
+        pairing.onPrompt = { [weak self] prompt in self?.pairingPrompt = prompt }
+        pairing.onPaired = { [weak self] _, name in
+            guard let self else { return }
+            self.reloadPairedSenders()
+            self.pairedNotice = "Paired with \(name)"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                if self?.pairedNotice == "Paired with \(name)" { self?.pairedNotice = nil }
+            }
+        }
+        return pairing
+    }()
+    // Whether `connection` is a mutual TLS session, and the paired sender
+    // its certificate belongs to. Only touched on `queue`.
+    private var connectionSecure = false
+    private var connectedPeerID: String?
+    private var tlsPort: UInt16 { port &+ WireCrypto.tlsPortOffset }
+    private var pairPort: UInt16 { port &+ WireCrypto.pairPortOffset }
     // Cursor side channel: UDP on port+1. Cursor positions ride TCP behind
     // multi-hundred-KB video frames, so over WiFi one late frame stalls the
     // cursor with it (head-of-line blocking). UDP datagrams skip that queue.
@@ -273,7 +308,19 @@ final class StreamReceiver: ObservableObject {
         var txt = NWTXTRecord()
         txt["id"] = Self.installID
         txt["pv"] = String(WireProtocol.version)   // issue #132
+        // Encrypted transport offered (PROTOCOL.md 11.1). The ports follow
+        // from the base port; the key only says "this receiver can pair".
+        txt["sec"] = "1"
         return NWListener.Service(name: serviceName, type: "_opensidecar._tcp",
+                                  domain: nil, txtRecord: txt)
+    }
+
+    /// The TLS listener's own Bonjour service (PROTOCOL.md 11.1): same name,
+    /// so the sender dials it by name.
+    private var advertisedTLSService: NWListener.Service {
+        var txt = NWTXTRecord()
+        txt["id"] = Self.installID
+        return NWListener.Service(name: serviceName, type: WireCrypto.tlsServiceType,
                                   domain: nil, txtRecord: txt)
     }
 
@@ -286,6 +333,8 @@ final class StreamReceiver: ObservableObject {
             self.serviceName = resolved
             if self.listener != nil {
                 self.listener?.service = self.advertisedService
+                self.tlsListener?.service = self.advertisedTLSService
+                self.pairing.republish()
                 Log.info("re-advertising as \"\(resolved)\"")
             }
         }
@@ -370,6 +419,51 @@ final class StreamReceiver: ObservableObject {
             self.startListener()
             self.armLivenessTimers()
         }
+        reloadPairedSenders()
+    }
+
+    // MARK: - Paired senders
+
+    private func reloadPairedSenders() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let peers = TrustStore.shared.pinnedPeers()
+                .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+                .map { (id: $0.peerID, name: $0.displayName) }
+            DispatchQueue.main.async { self?.pairedSenders = peers }
+        }
+    }
+
+    /// Forget a paired sender: tell it to drop its pin of us when it is the
+    /// live session (PROTOCOL.md 11.5), drop ours, and end that session.
+    func forget(senderID: String) {
+        queue.async {
+            let finish = { [weak self] in
+                guard let self else { return }
+                TrustStore.shared.forget(peerID: senderID)
+                if self.connectionSecure, self.connectedPeerID == senderID {
+                    Log.info("forgot the live sender — closing its session")
+                    self.connection?.cancel()
+                }
+                self.reloadPairedSenders()
+            }
+            guard self.connectionSecure, self.connectedPeerID == senderID,
+                  let conn = self.connection, conn.state == .ready else {
+                finish()
+                return
+            }
+            var done = false
+            let once = { [weak self] in
+                self?.queue.async {
+                    guard !done else { return }
+                    done = true
+                    finish()
+                }
+            }
+            Log.info("unpair sent to \(senderID)")
+            self.sendControl(["type": WireMessage.unpair, "fromID": Self.installID, "toID": senderID],
+                             on: conn) { once() }
+            self.queue.asyncAfter(deadline: .now() + 2) { once() }
+        }
     }
 
     /// Leave receiver duty for good: announce "closing" to a live sender (so
@@ -394,7 +488,14 @@ final class StreamReceiver: ObservableObject {
     /// or enterSleep deliberately took it down on lock).
     func ensureListening() {
         queue.async {
-            guard !self.listenerHealthy else { return }
+            guard !self.listenerHealthy else {
+                if self.tlsListener == nil || !self.tlsListenerHealthy {
+                    Log.info("TLS listener not healthy — restarting")
+                    self.restartTLSListener()
+                }
+                self.pairing.ensureListening()
+                return
+            }
             Log.info("listener not healthy — restarting")
             self.restartListener()
         }
@@ -455,6 +556,7 @@ final class StreamReceiver: ObservableObject {
                 self.listener = nil
                 self.listenerHealthy = false
                 self.stopCursorListener()
+                self.stopSecureListeners()
                 self.setConnected(false)
                 self.setStatus(status)
                 completion?()
@@ -478,7 +580,104 @@ final class StreamReceiver: ObservableObject {
         listener?.cancel()
         listener = nil
         listenerHealthy = false
+        stopSecureListeners()
         startListener()
+    }
+
+    // MARK: - Encrypted transport listeners (PROTOCOL.md 11)
+
+    /// Started with the plain listener. Failing to start either one only
+    /// takes encryption off the table (hello and TXT then do not offer it);
+    /// the plain listener keeps working for every sender that does not
+    /// need it.
+    private func startSecureListeners() {
+        TrustStore.shared.refreshSnapshot()   // arm the verify block before the first accept
+        startTLSListener()
+        pairing.start(port: pairPort)
+    }
+
+    private func stopSecureListeners() {
+        tlsListener?.cancel()
+        tlsListener = nil
+        tlsListenerHealthy = false
+        pairing.stop()
+    }
+
+    private func restartTLSListener() {
+        tlsListener?.cancel()
+        tlsListener = nil
+        tlsListenerHealthy = false
+        startTLSListener()
+    }
+
+    private func startTLSListener() {
+        guard tlsListener == nil else { return }
+        guard let identity = TrustStore.shared.ownIdentity(),
+              let tlsOptions = TLSConfigurator.mutualTLSOptions(
+                identity: identity,
+                // Live snapshot: a pin added by pairing takes effect at once.
+                pinnedSPKIs: { TrustStore.shared.allPinnedPeerSPKIs() },
+                isListener: true, queue: queue) else {
+            Log.info("TLS listener: no identity — encryption unavailable")
+            return
+        }
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        let params = NWParameters(tls: tlsOptions, tcp: tcp)
+        params.allowLocalEndpointReuse = true
+        params.serviceClass = .interactiveVideo
+        let listener: NWListener
+        do {
+            listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: tlsPort)!)
+        } catch {
+            Log.info("TLS listener failed on :\(tlsPort): \(error)")
+            return
+        }
+        tlsListener = listener
+        listener.service = advertisedTLSService
+        listener.newConnectionHandler = { [weak self] conn in
+            self?.handleNewConnection(conn, secure: true)
+        }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            guard let self, let listener, self.tlsListener === listener else { return }
+            switch state {
+            case .ready:
+                self.tlsListenerHealthy = true
+                Log.info("TLS listener ready on :\(self.tlsPort)")
+            case .failed(let error):
+                Log.info("TLS listener failed: \(error) — restarting in 1s")
+                self.tlsListenerHealthy = false
+                self.queue.asyncAfter(deadline: .now() + 1) { self.restartTLSListener() }
+            case .cancelled:
+                self.tlsListenerHealthy = false
+            default: break
+            }
+        }
+        listener.start(queue: queue)
+    }
+
+    /// The paired sender whose certificate this TLS connection presented —
+    /// the verify block already required it to be pinned.
+    private func pinnedPeerID(of conn: NWConnection) -> String? {
+        guard let metadata = conn.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else {
+            return nil
+        }
+        var leaf: SecCertificate?
+        _ = sec_protocol_metadata_access_peer_certificate_chain(metadata.securityProtocolMetadata) { cert in
+            if leaf == nil { leaf = sec_certificate_copy_ref(cert).takeRetainedValue() }
+        }
+        guard let leaf, let spki = TrustStore.spki(of: leaf) else { return nil }
+        return TrustStore.shared.peerID(forSPKI: spki)
+    }
+
+    /// Whether a plain connection may replace the live session. A paired
+    /// sender's encrypted session must not be taken over by anyone on the
+    /// network who can open a socket; the cable (USB loopback or the direct
+    /// host-to-host link) is physical trust and still wins, as it always has.
+    private func mayReplaceSecureSession(with conn: NWConnection) -> Bool {
+        let peer = String(describing: conn.endpoint)
+        if peer.hasPrefix("127.0.0.1") || peer.hasPrefix("::1") || peer.hasPrefix("localhost") { return true }
+        return DirectCable.carries(conn)
     }
 
     /// The UDP cursor listener follows the TCP listener's lifecycle: created
@@ -500,6 +699,10 @@ final class StreamReceiver: ObservableObject {
         cursorListener = udp
         udp.newConnectionHandler = { [weak self] conn in
             guard let self, self.cursorListener === udp else { conn.cancel(); return }
+            // An encrypted session keeps the cursor on its TLS stream (no
+            // cursorPort in its hello), so a datagram flow now is not from
+            // the paired sender: anyone on the network could aim it here.
+            guard !self.connectionSecure else { conn.cancel(); return }
             // A UDP "connection" is one remote host:port flow. The newest
             // one is the live sender (a rebuilt sender socket gets a fresh
             // ephemeral port) and starts its sequence over.
@@ -607,59 +810,7 @@ final class StreamReceiver: ObservableObject {
         // mode (USB/usbmux connects straight to the port and ignores this).
         listener?.service = advertisedService
         listener?.newConnectionHandler = { [weak self] conn in
-            guard let self else { return }
-            Log.info("new connection from \(String(describing: conn.endpoint))")
-            // usbmux-forwarded (cable) connections arrive from loopback;
-            // anything else came over the network.
-            let peer = String(describing: conn.endpoint)
-            self.transport = (peer.hasPrefix("127.0.0.1") || peer.hasPrefix("::1")
-                              || peer.hasPrefix("localhost")) ? "USB" : "WiFi"
-            // A Bonjour dial races IPv6 and IPv4 and both handshakes can
-            // complete; the sender cancels its loser within milliseconds.
-            // Adopting every newcomer at once evicted the winner for a
-            // connection that was already dying (seen in the field as a
-            // reset-by-peer storm). With a connection in hand, a newcomer
-            // has to stay alive for a moment before it replaces it.
-            // A closed socket still reads as .ready until a receive hits
-            // EOF, so the proof is bytes: greet the newcomer and adopt it
-            // the moment it streams something back; a socket that closes
-            // or errors first is discarded and the session stays put.
-            if let current = self.connection, current.state != .cancelled,
-               !Self.isFailed(current.state) {
-                self.pendingConnections.append(conn)
-                conn.stateUpdateHandler = { [weak self] state in
-                    guard let self, case .ready = state else { return }
-                    // This socket has not won the session yet. Keep cursor UDP
-                    // out of its provisional hello: otherwise its flow could
-                    // arrive before adopt(), then be indistinguishable from
-                    // the old session's flow that adopt must retire.
-                    self.sendHello(on: conn, includeCursorPort: false)
-                    conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 18) {
-                        [weak self] data, _, isComplete, error in
-                        guard let self else { return }
-                        // Only a still-tracked candidate may adopt: adoption
-                        // of a rival and stop() both clear the list, so a
-                        // late callback can't evict a session or resurrect a
-                        // stopped receiver.
-                        guard self.pendingConnections.contains(where: { $0 === conn }) else {
-                            conn.cancel()
-                            return
-                        }
-                        self.pendingConnections.removeAll { $0 === conn }
-                        if let data, !data.isEmpty {
-                            self.adopt(conn, greeted: true, initialData: data)
-                        } else {
-                            Log.info("ignored a twin connection that closed at once"
-                                     + (error.map { " (\($0))" } ?? ""))
-                            conn.cancel()
-                        }
-                        _ = isComplete
-                    }
-                }
-                conn.start(queue: self.queue)
-            } else {
-                self.adopt(conn)
-            }
+            self?.handleNewConnection(conn, secure: false)
         }
         listener?.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
@@ -679,6 +830,67 @@ final class StreamReceiver: ObservableObject {
         }
         listener?.start(queue: queue)
         startCursorListener()
+        startSecureListeners()
+    }
+
+    /// A connection on either listener: the plain one, or (`secure`) the
+    /// mutual TLS one, whose handshake has only let a pinned sender through.
+    private func handleNewConnection(_ conn: NWConnection, secure: Bool) {
+        Log.info("new \(secure ? "TLS " : "")connection from \(String(describing: conn.endpoint))")
+        // A Bonjour dial races IPv6 and IPv4 and both handshakes can
+        // complete; the sender cancels its loser within milliseconds.
+        // Adopting every newcomer at once evicted the winner for a
+        // connection that was already dying (seen in the field as a
+        // reset-by-peer storm). With a connection in hand, a newcomer
+        // has to stay alive for a moment before it replaces it.
+        // A closed socket still reads as .ready until a receive hits
+        // EOF, so the proof is bytes: greet the newcomer and adopt it
+        // the moment it streams something back; a socket that closes
+        // or errors first is discarded and the session stays put.
+        if let current = self.connection, current.state != .cancelled,
+           !Self.isFailed(current.state) {
+            self.pendingConnections.append(conn)
+            conn.stateUpdateHandler = { [weak self] state in
+                guard let self, case .ready = state else { return }
+                // A paired sender's encrypted session is not up for grabs by
+                // a plain socket from the network (PROTOCOL.md 11.4).
+                if !secure, self.connectionSecure, !self.mayReplaceSecureSession(with: conn) {
+                    Log.info("refused a plain connection while an encrypted session is live")
+                    self.pendingConnections.removeAll { $0 === conn }
+                    conn.cancel()
+                    return
+                }
+                // This socket has not won the session yet. Keep cursor UDP
+                // out of its provisional hello: otherwise its flow could
+                // arrive before adopt(), then be indistinguishable from
+                // the old session's flow that adopt must retire.
+                self.sendHello(on: conn, includeCursorPort: false)
+                conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 18) {
+                    [weak self] data, _, isComplete, error in
+                    guard let self else { return }
+                    // Only a still-tracked candidate may adopt: adoption
+                    // of a rival and stop() both clear the list, so a
+                    // late callback can't evict a session or resurrect a
+                    // stopped receiver.
+                    guard self.pendingConnections.contains(where: { $0 === conn }) else {
+                        conn.cancel()
+                        return
+                    }
+                    self.pendingConnections.removeAll { $0 === conn }
+                    if let data, !data.isEmpty {
+                        self.adopt(conn, secure: secure, greeted: true, initialData: data)
+                    } else {
+                        Log.info("ignored a twin connection that closed at once"
+                                 + (error.map { " (\($0))" } ?? ""))
+                        conn.cancel()
+                    }
+                    _ = isComplete
+                }
+            }
+            conn.start(queue: self.queue)
+        } else {
+            self.adopt(conn, secure: secure)
+        }
     }
 
     /// Make `conn` the session: replace any existing connection and reset
@@ -686,10 +898,20 @@ final class StreamReceiver: ObservableObject {
     /// without the cursor port while it proved itself (see the listener), with
     /// the bytes it sent back in `initialData`. Once adopted, the full hello
     /// opens a cursor flow that unambiguously belongs to this session.
-    private func adopt(_ conn: NWConnection, greeted: Bool = false, initialData: Data? = nil) {
+    private func adopt(_ conn: NWConnection, secure: Bool, greeted: Bool = false, initialData: Data? = nil) {
         if greeted { Log.info("newcomer proved itself — adopting it as the session") }
         connection?.cancel()
         connection = conn
+        connectionSecure = secure
+        connectedPeerID = nil
+        DispatchQueue.main.async { self.encrypted = secure }
+        // usbmux-forwarded (cable) connections arrive from loopback;
+        // anything else came over the network. Labelled here, not when the
+        // socket arrives: a newcomer that never wins must not relabel the
+        // live session.
+        let peer = String(describing: conn.endpoint)
+        transport = (peer.hasPrefix("127.0.0.1") || peer.hasPrefix("::1")
+                     || peer.hasPrefix("localhost")) ? "USB" : "WiFi"
         // The race is decided: rival candidates die here.
         for pending in pendingConnections where pending !== conn { pending.cancel() }
         pendingConnections.removeAll()
@@ -719,6 +941,10 @@ final class StreamReceiver: ObservableObject {
             if self.transport != "USB", let path = conn.currentPath {
                 self.transport = path.usesInterfaceType(.wifi) ? "WiFi" : "Cable"
             }
+            if secure {
+                self.connectedPeerID = self.pinnedPeerID(of: conn)
+                Log.info("encrypted session with paired sender \(self.connectedPeerID ?? "?")")
+            }
             self.setConnected(true)
             self.sendHello(on: conn)
         }
@@ -726,7 +952,9 @@ final class StreamReceiver: ObservableObject {
             guard let self, conn === self.connection else { return }   // replaced: stay quiet
             switch state {
             case .ready: onReady()
-            case .failed, .cancelled: self.setConnected(false)
+            case .failed, .cancelled:
+                DispatchQueue.main.async { self.encrypted = false }
+                self.setConnected(false)
             default: break
             }
         }
@@ -887,6 +1115,18 @@ final class StreamReceiver: ObservableObject {
                 ?? "Update OpenDisplay from the App Store to keep using your second display."
             let store = (obj["store"] as? String).flatMap { URL(string: $0) } ?? AppStore.updateURL
             DispatchQueue.main.async { self.peerSignal = .updateReceiver(message: message, storeURL: store) }
+        case WireMessage.unpair:
+            // The paired sender forgot us (PROTOCOL.md 11.5). Only honoured
+            // on its own encrypted session: anything else could be anyone.
+            guard connectionSecure, let peer = connectedPeerID,
+                  obj["fromID"] as? String == peer, obj["toID"] as? String == Self.installID else {
+                Log.info("ignored unpair: not from the paired sender of this session")
+                return
+            }
+            Log.info("paired sender \(peer) forgot us — dropping its pin")
+            TrustStore.shared.forget(peerID: peer)
+            reloadPairedSenders()
+            connection?.cancel()
         default:
             break
         }
@@ -973,7 +1213,10 @@ final class StreamReceiver: ObservableObject {
         hello["videoCaps"] = videoCaps
         // Additive capability: only offered while the UDP listener is bound,
         // so a sender never dials a port nobody answers on.
-        let announcesCursorPort = includeCursorPort && cursorListenerReady
+        // Never on an encrypted session: the datagrams would carry the cursor
+        // outside TLS, unauthenticated (PROTOCOL.md 11.4).
+        let secureSession = connection === conn && connectionSecure
+        let announcesCursorPort = includeCursorPort && cursorListenerReady && !secureSession
         if announcesCursorPort { hello["cursorPort"] = Int(cursorPort) }
         // Additive: decode ceiling (PROTOCOL.md 6.5) — ask for the full
         // desktop but a stream no larger than this machine can decode.
@@ -991,6 +1234,12 @@ final class StreamReceiver: ObservableObject {
         // phone's radio — and then have the session classified as a cable
         // whose loss must end it instead of reconnecting.
         if acceptsPowerActions(on: conn) { hello["power"] = powerActions.map(\.rawValue) }
+        // Additive (PROTOCOL.md 11.1): this receiver can pair and serve
+        // mutual TLS. Offered only while both listeners are up, so a sender
+        // never dials a port nobody answers on.
+        if tlsListenerHealthy, pairing.healthy {
+            hello["sec"] = ["tls": Int(tlsPort), "pair": Int(pairPort)]
+        }
         let addrs = advertisesAddresses ? Self.reachableAddresses() : []
         if !addrs.isEmpty { hello["addrs"] = addrs }
         lastAdvertisedAddrs = addrs
