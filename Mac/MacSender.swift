@@ -59,6 +59,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // Fired when the receiver announces the app is quitting: deliberate,
     // so the controller ends the session without arming a reconnect.
     @MainActor var onPeerClosed: (() -> Void)?
+    // The paired receiver revoked the pairing (WireMessage.unpair) — the
+    // controller owns trust, so it validates and drops the pin.
+    @MainActor var onUnpaired: ((_ fromID: String, _ toID: String) -> Void)?
+    // A paired receiver keeps rejecting this Mac's TLS handshake: its pin of
+    // us (or ours of it) is stale. Carries the receiver id. The sender has
+    // parked; it never falls back to plaintext.
+    @MainActor var onPairingRejected: ((String) -> Void)?
+    // Whether the connection that just came up runs mutual TLS — follows
+    // the live socket through reconnects, failover and cable migration.
+    @MainActor var onSecurity: ((Bool) -> Void)?
     // Fired once a TCP connection is live, with whether it runs over a
     // wired path (Thunderbolt Bridge / Ethernet) rather than WiFi — the UI
     // labels the row so the user can see the cable is actually in use.
@@ -1461,6 +1471,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self.disconnectedSince = Date()
             self.connectionReady = false
             self.currentPathDirectLink = false   // the new transport re-classifies
+            self.connectionSecure = false
+            self.consecutiveTLSRejections = 0
             self.dialGeneration += 1   // a dial still in flight must not adopt
             self.connection?.cancel()
             self.connection = nil
@@ -1687,6 +1699,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     // migration) superseded it. Only touched on `queue`. Superseding also
     // cancels the dial itself: an accessory dial opens the app on the
     // device and holds the device for up to a minute.
+    // The live connection runs mutual TLS (PROTOCOL.md 11.4). Only on `queue`.
+    private var connectionSecure = false
+    // Consecutive TLS-layer handshake failures for a paired receiver (#151):
+    // two in a row mean the pairing no longer holds on one side.
+    private var consecutiveTLSRejections = 0
+    private static let maxTLSRejections = 2
+
     private var dialGeneration = 0 {
         didSet { dialTask?.cancel() }
     }
@@ -1709,7 +1728,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Bookkeeping shared by both transports once a connection is live.
     private func becomeReady(_ conn: NWConnection) {
-        Log.info("connection ready to \(endpointName)")
+        Log.info("connection ready to \(endpointName)\(connectionSecure ? " (encrypted)" : "")")
+        let secure = connectionSecure
+        Task { @MainActor in self.onSecurity?(secure) }
         connectionGeneration &+= 1
         let readyGeneration = connectionGeneration
         // Per-session; the receiver rewound its floor with the connection.
@@ -1924,6 +1945,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         connection?.viabilityUpdateHandler = nil
         connection?.cancel()
         connection = conn
+        connectionSecure = false   // plain on the direct cable: physical trust
         conn.stateUpdateHandler = { [weak self] state in
             guard let self, self.connection === conn else { return }
             switch state {
@@ -2018,10 +2040,26 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let self else { return }
             switch state {
             case .ready:
+                self.connectionSecure = tls != nil
+                self.consecutiveTLSRejections = 0
+                if tls != nil { Log.info("encrypted session with \(self.endpointName)") }
                 self.becomeReady(conn)
             case .failed(let error):
                 Log.info("connection failed: \(error)")
                 self.connectionReady = false
+                if let tls {
+                    if case .tls = error {
+                        self.consecutiveTLSRejections += 1
+                    } else {
+                        self.consecutiveTLSRejections = 0   // network trouble, not the pairing
+                    }
+                    if self.consecutiveTLSRejections >= Self.maxTLSRejections {
+                        Log.info("TLS handshake rejected by paired receiver \(tls.peerID) — pairing is stale")
+                        Task { await self.status("This device no longer accepts this Mac. Forget the pairing and pair again.") }
+                        Task { @MainActor in self.onPairingRejected?(tls.peerID) }
+                        return   // parked: the controller ends the session
+                    }
+                }
                 if case .posix(let code) = error, code == .ECONNREFUSED {
                     self.dialRefused()
                 }
@@ -2077,6 +2115,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                         return
                     }
                     self.connection = conn
+                    self.connectionSecure = false   // the cable is physical trust
                     conn.stateUpdateHandler = { [weak self] state in
                         guard let self else { return }
                         switch state {
@@ -2652,6 +2691,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             // without the silence grace and without waiting for a wake.
             Log.info("receiver app closed — ending session")
             Task { @MainActor in self.onPeerClosed?() }
+        case WireMessage.unpair:
+            // The paired receiver forgot this Mac (PROTOCOL.md 11.5). Only an
+            // encrypted session's peer is authenticated, so only it counts.
+            guard case .tcp(_, let tls?) = transport, connectionSecure,
+                  let fromID = obj["fromID"] as? String, fromID == tls.peerID,
+                  let toID = obj["toID"] as? String else {
+                Log.info("ignored unpair: not on an encrypted session with that receiver")
+                return
+            }
+            Log.info("receiver \(fromID) forgot this Mac")
+            Task { @MainActor in self.onUnpaired?(fromID, toID) }
         default:
             // Unknown types are a normal consequence of the additive wire
             // protocol: a newer peer can send messages this build predates.
@@ -3247,6 +3297,35 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// message text is user-facing prose). Dormant while minSupportedPeer is
     /// 1, but the copy must fit the platform the day a floor is raised: a
     /// Mac receiver updates via Sparkle/the site, not the App Store.
+    /// Tell the paired receiver of this encrypted session to drop its pin of
+    /// this Mac (PROTOCOL.md 11.5). `completion` runs on the main actor once
+    /// the frame is handed off, or after 2s on a dying link (#151), so the
+    /// caller can end the session without racing the send.
+    func sendUnpair(fromID: String, toID: String, completion: @escaping @MainActor () -> Void) {
+        queue.async {
+            guard let connection = self.connection, self.connectionReady, self.connectionSecure,
+                  let payload = try? JSONSerialization.data(withJSONObject: [
+                    "type": WireMessage.unpair, "fromID": fromID, "toID": toID]) else {
+                Task { @MainActor in completion() }
+                return
+            }
+            var header = UInt32(payload.count).bigEndian
+            var frame = Data(bytes: &header, count: 4)
+            frame.append(payload)
+            var fired = false
+            let fireOnce = {
+                self.queue.async {
+                    guard !fired else { return }
+                    fired = true
+                    Task { @MainActor in completion() }
+                }
+            }
+            Log.info("unpair sent to \(toID)")
+            connection.send(content: frame, completion: .contentProcessed { _ in fireOnce() })
+            self.queue.asyncAfter(deadline: .now() + 2) { fireOnce() }
+        }
+    }
+
     private func sendUpdateRequired(kind: String) {
         let isMac = kind == "Mac"
         let dict: [String: Any] = [

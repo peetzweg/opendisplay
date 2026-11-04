@@ -51,13 +51,22 @@ final class TrustStore {
     /// queries. iOS always uses the data-protection keychain and ignores this.
     static let useDataProtectionKeychain: Bool = {
         #if os(macOS)
+        // Reads of a missing item succeed without the entitlement; only a
+        // write tells. Add and remove a throwaway row.
         let probe: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
-            kSecAttrService: WireCrypto.pinKeychainService,
-            kSecMatchLimit: kSecMatchLimitOne,
+            kSecAttrService: WireCrypto.pinKeychainService + ".probe",
+            kSecAttrAccount: "probe",
+            kSecValueData: Data([0]),
             kSecUseDataProtectionKeychain: true,
         ]
-        let status = SecItemCopyMatching(probe as CFDictionary, nil)
+        var status = SecItemAdd(probe as CFDictionary, nil)
+        if status == errSecSuccess || status == errSecDuplicateItem {
+            var delete = probe
+            delete.removeValue(forKey: kSecValueData)
+            SecItemDelete(delete as CFDictionary)
+            status = errSecSuccess
+        }
         if status == errSecMissingEntitlement {
             Log.info("trust store: no keychain entitlement (unsigned or ad hoc build) — using the login keychain")
             return false
@@ -156,10 +165,9 @@ final class TrustStore {
             kSecAttrAccount: peerID,
             kSecAttrLabel: displayName,
             kSecValueData: spki,
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
         ]
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        let status = SecItemAdd(withAccessibility(addQuery) as CFDictionary, nil)
         guard status == errSecSuccess else {
             Log.info("ERROR: setPin failed for peer \(peerID) (status \(status))")
             return false
@@ -268,31 +276,14 @@ final class TrustStore {
     /// Re-read all pins from the Keychain into the snapshot. Called by
     /// init, setPin, forget, purgeAll; listeners also call it on start.
     func refreshSnapshot() {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: WireCrypto.pinKeychainService,
-            kSecReturnAttributes: true,
-            kSecReturnData: true,
-            kSecMatchLimit: kSecMatchLimitAll,
-            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
-        ]
-        var out: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        // Attributes for all rows, then each row's data: the macOS login
+        // keychain refuses kSecReturnData together with kSecMatchLimitAll
+        // (errSecParam), and the same two steps work everywhere.
         var fresh: [(peerID: String, spki: Data)] = []
-        // kSecReturnAttributes + kSecReturnData + kSecMatchLimitAll returns an
-        // array of attribute dictionaries, each carrying the pin bytes under
-        // kSecValueData and the peerID under kSecAttrAccount. (With
-        // kSecReturnData ALONE the shape is instead a bare [Data]; casting the
-        // wrong shape silently yields an empty snapshot, which makes the TLS
-        // verify block reject every pinned peer as NoAuth.)
-        if status == errSecSuccess, let items = out as? [[CFString: Any]] {
-            fresh = items.compactMap { item in
-                guard let spki = item[kSecValueData] as? Data,
-                      let peerID = item[kSecAttrAccount] as? String else { return nil }
-                return (peerID: peerID, spki: spki)
+        for peer in pinnedPeers() {
+            if let spki = pin(peerID: peer.peerID) {
+                fresh.append((peerID: peer.peerID, spki: spki))
             }
-        } else if status != errSecItemNotFound {
-            Log.info("ERROR: refreshSnapshot lookup failed (status \(status))")
         }
         lock.lock()
         snapshot = fresh
@@ -360,20 +351,45 @@ final class TrustStore {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Frozen identity-generation call sequence. Must be called
-    /// with `lock` held. On any failure, deletes whatever partial items were
-    /// added and returns nil — no orphans, no crash.
+    /// Identity generation. Must be called with `lock` held. On any failure,
+    /// deletes whatever partial items were added and returns nil — no
+    /// orphans, no crash.
+    ///
+    /// The key is born in the keychain (SecKeyCreateRandomKey, permanent) and
+    /// the certificate is signed through that SecKey. #151 generated the key
+    /// in CryptoKit and added it with kSecValueRef, which only the
+    /// data-protection keychain accepts; the macOS login keychain (ad hoc
+    /// builds, Developer ID builds without a provisioning profile) rejects
+    /// such a ref with errSecInvalidItemRef.
     private func generateAndStoreIdentity() -> SecIdentity? {
-        // 1. CryptoKit key — we own the SPKI bytes end to end.
-        let priv = P256.Signing.PrivateKey()
         let installID = UUID().uuidString
+        let tag = Data(WireCrypto.identityKeychainLabel.utf8)
 
-        // 2. Self-sign with swift-certificates (native CryptoKit signer, no
-        //    SecKey bridge for signing).
-        let certKey: Certificate.PrivateKey
+        // 1. Key pair, private half stored in the keychain.
+        var privateAttributes: [CFString: Any] = [
+            kSecAttrIsPermanent: true,
+            kSecAttrApplicationTag: tag,
+            kSecAttrLabel: WireCrypto.identityKeychainLabel,
+        ]
+        if Self.useDataProtectionKeychain {
+            privateAttributes[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        }
+        let keyAttributes: [CFString: Any] = [
+            kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits: 256,
+            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
+            kSecPrivateKeyAttrs: privateAttributes,
+        ]
+        var cfErr: Unmanaged<CFError>?
+        guard let privateKey = SecKeyCreateRandomKey(keyAttributes as CFDictionary, &cfErr) else {
+            Log.info("ERROR: SecKeyCreateRandomKey failed: \(String(describing: cfErr?.takeRetainedValue()))")
+            return nil
+        }
+
+        // 2. Self-sign with swift-certificates through the SecKey.
         let certificate: Certificate
         do {
-            certKey = Certificate.PrivateKey(priv)
+            let certKey = try Certificate.PrivateKey(privateKey)
             let name = try DistinguishedName { CommonName(installID) }
             let now = Date()
             certificate = try Certificate(
@@ -391,10 +407,12 @@ final class TrustStore {
                 issuerPrivateKey: certKey)
         } catch {
             Log.info("ERROR: identity self-sign failed: \(error)")
+            deletePartialIdentityItems()
             return nil
         }
 
-        // 3. DER-serialize (SwiftASN1).
+        // 3. DER-serialize (SwiftASN1) and store the certificate. The
+        //    identity forms when its public key matches the stored key.
         let certDER: Data
         do {
             var serializer = DER.Serializer()
@@ -402,92 +420,57 @@ final class TrustStore {
             certDER = Data(serializer.serializedBytes)
         } catch {
             Log.info("ERROR: identity DER serialization failed: \(error)")
+            deletePartialIdentityItems()
             return nil
         }
-
-        // 4. Import the private key as a SecKey (X9.63: 04||X||Y||K).
-        var cfErr: Unmanaged<CFError>?
-        guard let secKey = SecKeyCreateWithData(priv.x963Representation as CFData, [
-            kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeyClass: kSecAttrKeyClassPrivate,
-        ] as CFDictionary, &cfErr) else {
-            Log.info("ERROR: SecKeyCreateWithData failed: \(String(describing: cfErr?.takeRetainedValue()))")
-            return nil
-        }
-
-        // 5. Add key, then cert. The keychain auto-derives the key's
-        //    kSecAttrApplicationLabel (SHA-1 of public key); the identity
-        //    forms when that matches the cert's public key — byte-identical
-        //    by construction here.
-        var status = SecItemAdd([
-            kSecClass: kSecClassKey,
-            kSecValueRef: secKey,
-            kSecAttrApplicationTag: Data(WireCrypto.identityKeychainLabel.utf8),
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
-        ] as CFDictionary, nil)
-        guard status == errSecSuccess || status == errSecDuplicateItem else {
-            Log.info("ERROR: SecItemAdd(key) failed (status \(status))")
-            return nil
-        }
-
         guard let secCert = SecCertificateCreateWithData(nil, certDER as CFData) else {
             Log.info("ERROR: SecCertificateCreateWithData failed")
             deletePartialIdentityItems()
             return nil
         }
-        status = SecItemAdd([
+        var status = SecItemAdd(withAccessibility([
             kSecClass: kSecClassCertificate,
             kSecValueRef: secCert,
             kSecAttrLabel: WireCrypto.identityKeychainLabel,
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
-        ] as CFDictionary, nil)
+        ]) as CFDictionary, nil)
         guard status == errSecSuccess || status == errSecDuplicateItem else {
             Log.info("ERROR: SecItemAdd(certificate) failed (status \(status))")
             deletePartialIdentityItems()
             return nil
         }
 
-        // 6. Persist installID in the SAME namespace (id+key die together).
-        status = SecItemAdd([
+        // 4. Persist installID in the SAME namespace (id+key die together).
+        status = SecItemAdd(withAccessibility([
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: WireCrypto.identityKeychainLabel,
             kSecAttrAccount: WireCrypto.installIDAccount,
             kSecValueData: Data(installID.utf8),
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
-        ] as CFDictionary, nil)
+        ]) as CFDictionary, nil)
         guard status == errSecSuccess || status == errSecDuplicateItem else {
             Log.info("ERROR: SecItemAdd(installID) failed (status \(status))")
             deletePartialIdentityItems()
             return nil
         }
 
-        // 7. Fetch the implicitly-formed identity — the ONLY sanctioned
-        //    retrieval (a SecIdentityCreateWithCertificate fallback is
-        //    deliberately NOT implemented).
-        var out: CFTypeRef?
-        status = SecItemCopyMatching([
-            kSecClass: kSecClassIdentity,
-            kSecAttrLabel: WireCrypto.identityKeychainLabel,
-            kSecReturnRef: true,
-            kSecMatchLimit: kSecMatchLimitOne,
-            kSecUseDataProtectionKeychain: Self.useDataProtectionKeychain,
-        ] as CFDictionary, &out)
-        guard status == errSecSuccess else {
-            Log.info("ERROR: identity fetch after generation failed (status \(status))")
+        // 5. Fetch the identity the pair formed.
+        guard let identity = queryIdentity() else {
+            Log.info("ERROR: identity fetch after generation failed")
             deletePartialIdentityItems()
             return nil
         }
-        guard let identity = out else {
-            Log.info("ERROR: identity fetch after generation returned no ref")
-            deletePartialIdentityItems()
-            return nil
+        return identity
+    }
+
+    /// kSecAttrAccessible exists only in the data-protection keychain; the
+    /// login keychain rejects it.
+    private func withAccessibility(_ query: [CFString: Any]) -> [CFString: Any] {
+        var query = query
+        if Self.useDataProtectionKeychain {
+            query[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         }
-        // Safe force-cast: errSecSuccess + kSecReturnRef on kSecClassIdentity
-        // is documented to yield a SecIdentity.
-        return (identity as! SecIdentity)
+        return query
     }
 
     /// Cleanup for a failed/partial generateAndStoreIdentity() run: deletes

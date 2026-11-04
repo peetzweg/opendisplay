@@ -81,6 +81,18 @@ final class ReceiverController: ObservableObject {
                 self?.connected = connected
             }
             .store(in: &cancellables)
+        // A sender asked to pair: the code must be on screen, so bring the
+        // panel forward unless the video window is already showing it.
+        receiver.$pairingPrompt
+            .map { $0 != nil }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] prompting in
+                guard prompting, self?.streaming != true else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.windows.first { $0.title == "OpenDisplay Receiver" }?.makeKeyAndOrderFront(nil)
+            }
+            .store(in: &cancellables)
         // Streaming = connected and the video format is known — that's when
         // the window has something to show (and when to take it down again).
         receiver.$connected.combineLatest(receiver.$videoSize)
@@ -537,13 +549,17 @@ struct ReceiverPerfOverlay: View {
     @AppStorage("showAnalytics") private var showAnalytics = false
 
     var body: some View {
-        if showAnalytics {
-            VStack {
-                Spacer()
-                PerfOverlay(stats: receiver.perf, videoSize: receiver.videoSize)
-                    .padding(.bottom, 10)
+        ZStack {
+            if showAnalytics {
+                VStack {
+                    Spacer()
+                    PerfOverlay(stats: receiver.perf, videoSize: receiver.videoSize)
+                        .padding(.bottom, 10)
+                }
+                .allowsHitTesting(false)
             }
-            .allowsHitTesting(false)
+            // A second Mac pairing while this one streams (issue #16).
+            PairingCodeOverlay(receiver: receiver)
         }
     }
 }
