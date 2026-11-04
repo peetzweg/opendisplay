@@ -268,8 +268,12 @@ the same with both, because both send colour at a quarter of the resolution
 
 **Is my screen content sent anywhere?** No. One direct TCP connection
 between your Mac and your device, over your cable or your LAN. No servers,
-no accounts, no analytics. Full details — including what the apps store
-locally and the current WiFi-encryption caveat — on the
+no accounts, no analytics. Over WiFi, a Mac and an iPhone, iPad or Mac
+receiver pair once with a code shown on the receiver and are encrypted
+from then on (mutual TLS 1.3, PROTOCOL.md section 11); a receiver that
+cannot encrypt yet (older versions, Linux, Android) connects only after
+you confirm that. Cables stay unencrypted: they never leave the desk. Full
+details on the
 [privacy page](https://peetzweg.github.io/opendisplay/privacy.html).
 
 **What's the license? Can I fork it or use it commercially?**
