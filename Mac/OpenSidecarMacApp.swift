@@ -230,6 +230,13 @@ final class SenderController: ObservableObject {
     var running: Bool { !sessions.isEmpty }
 
     private var browser: NWBrowser?
+    /// Local Network access is off for this app. macOS has no API to ask,
+    /// but a browse it blocks waits with a policy-denied error.
+    @Published private(set) var localNetworkDenied = false
+    private var browserRestart: Task<Void, Never>?
+    private var browserRestartDelay = Duration.seconds(2)
+    private var lastLoggedBrowserState = ""
+    private var lastLoggedReceivers: [String]?
     private var usbWatcher: UsbmuxDeviceWatcher?
     private var accessoryWatcher: AccessoryDeviceWatcher?
 
@@ -314,10 +321,17 @@ final class SenderController: ObservableObject {
     private func startBrowsing() {
         // TXT records carry the receiver's install id (new receivers).
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_opensidecar._tcp", domain: nil), using: .tcp)
+        browser.stateUpdateHandler = { [weak self, weak browser] state in
+            DispatchQueue.main.async {
+                guard let self, let browser, self.browser === browser else { return }
+                self.browserStateChanged(state)
+            }
+        }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.discovered = Array(results)
+                self.logDiscoveredReceivers()
                 self.endSessionsWhoseServiceVanished()
                 self.autoConnect()
                 self.connectNewlyCabled()
@@ -325,6 +339,58 @@ final class SenderController: ObservableObject {
         }
         browser.start(queue: .main)
         self.browser = browser
+    }
+
+    /// A browse that fails or is blocked shows no devices and logged nothing
+    /// (#463): say why, and start over after a failure, which is final.
+    private func browserStateChanged(_ state: NWBrowser.State) {
+        let line: String
+        switch state {
+        case .ready:
+            localNetworkDenied = false
+            browserRestartDelay = .seconds(2)
+            line = "WiFi discovery: browsing for receivers"
+        case .waiting(let error):
+            localNetworkDenied = Self.isPolicyDenied(error)
+            line = localNetworkDenied
+                ? "WiFi discovery: blocked, Local Network access is off for this app"
+                    + " (System Settings > Privacy & Security > Local Network)"
+                : "WiFi discovery: waiting (\(error))"
+        case .failed(let error):
+            localNetworkDenied = Self.isPolicyDenied(error)
+            let delay = browserRestartDelay
+            browserRestartDelay = min(delay * 2, .seconds(60))
+            browser?.cancel()
+            browserRestart?.cancel()
+            browserRestart = Task { [weak self] in
+                try? await Task.sleep(for: delay)
+                guard let self, !Task.isCancelled else { return }
+                self.startBrowsing()
+            }
+            line = "WiFi discovery: failed (\(error)), restarting in \(delay.components.seconds)s"
+        default:
+            return
+        }
+        // A browser can flap between the same states; log only a change.
+        guard line != lastLoggedBrowserState else { return }
+        lastLoggedBrowserState = line
+        Log.info(line)
+    }
+
+    private static func isPolicyDenied(_ error: NWError) -> Bool {
+        if case .dns(let code) = error { return code == DNSServiceErrorType(kDNSServiceErr_PolicyDenied) }
+        return false
+    }
+
+    /// Which receivers the browse sees, logged when the set changes, so a
+    /// report with an empty device list shows whether anything answered.
+    private func logDiscoveredReceivers() {
+        let names = discovered.compactMap { serviceName(of: $0) }.sorted()
+        guard names != lastLoggedReceivers else { return }
+        lastLoggedReceivers = names
+        Log.info(names.isEmpty
+                 ? "WiFi discovery: no receivers found"
+                 : "WiFi discovery: found \(names.joined(separator: ", "))")
     }
 
     // MARK: - Physical-device identity
@@ -1081,12 +1147,15 @@ struct ContentView: View {
                         request: { permissions.requestAccessibility() }
                     )
                     // macOS offers no API to query Local Network access, so
-                    // infer from discovery results and let the user check.
+                    // infer from discovery: a blocked browse is a definite no,
+                    // an empty one may just mean no receiver is open.
                     permissionRow(
                         "Local Network",
                         granted: !controller.discovered.isEmpty,
-                        uncertain: controller.discovered.isEmpty,
-                        help: "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
+                        uncertain: controller.discovered.isEmpty && !controller.localNetworkDenied,
+                        help: controller.localNetworkDenied
+                            ? "Off for OpenDisplay on this Mac, so WiFi mode finds no devices. Allow OpenDisplay under Privacy & Security → Local Network."
+                            : "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
                         anchor: "Privacy_LocalNetwork"
                     )
                 }
