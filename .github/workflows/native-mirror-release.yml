@@ -1,0 +1,124 @@
+name: Publish validated native installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run:
+        description: Successful main-branch candidate workflow run ID
+        required: true
+        type: string
+      evidence_path:
+        description: Physical evidence JSON committed on main under tools/native-screen-mirroring/release/results/
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-installer-publication
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.repository == 'therealjosemaria/opendisplay' && github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+      - name: Validate candidate origin before downloading or executing it
+        uses: actions/github-script@v9
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          EVIDENCE_PATH: ${{ inputs.evidence_path }}
+        with:
+          script: |
+            const fs = require('fs');
+            if (!/^[1-9][0-9]{0,15}$/.test(process.env.CANDIDATE_RUN)) throw Error('Invalid run ID');
+            if (!/^tools\/native-screen-mirroring\/release\/results\/[a-zA-Z0-9_-]+\.json$/.test(process.env.EVIDENCE_PATH)) throw Error('Invalid evidence path');
+            fs.accessSync(process.env.EVIDENCE_PATH);
+            const {data: run} = await github.rest.actions.getWorkflowRun({...context.repo, run_id: Number(process.env.CANDIDATE_RUN)});
+            const {validateRun} = await import(`${process.env.GITHUB_WORKSPACE}/tools/native-screen-mirroring/scripts/ci-artifact.js`);
+            validateRun(run, `${context.repo.owner}/${context.repo.repo}`, run.head_sha);
+            fs.writeFileSync('candidate-run.json', JSON.stringify(run));
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-mirror-installer-ARM64
+          path: candidate
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run }}
+      - name: Install test-only tools
+        run: brew install ffmpeg cmake pkgconf libplist openssl@3
+      - name: Rerun all tests from the frozen ZIP
+        run: node tools/native-screen-mirroring/scripts/ci-artifact.js verify candidate
+      - name: Enforce checksum, source, automated and physical release gates
+        env:
+          EVIDENCE_PATH: ${{ inputs.evidence_path }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: node tools/native-screen-mirroring/scripts/ci-artifact.js approve candidate "$EVIDENCE_PATH" candidate-run.json "$RELEASE_REPOSITORY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: approved-native-installer
+          path: |
+            candidate/*.zip
+            candidate/candidate.json
+            candidate/evidence.json
+            candidate/tests.tap
+            candidate/native-tests.log
+            candidate/SHA256SUMS.txt
+            candidate/release.json
+            candidate/RELEASE.md
+          if-no-files-found: error
+
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: native-mirror-release
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: approved-native-installer
+          path: approved
+      - name: Publish the approved bytes without rebuilding or overwriting
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const metadata = JSON.parse(fs.readFileSync('approved/release.json'));
+            const candidate = JSON.parse(fs.readFileSync('approved/candidate.json'));
+            if (!/^native-mirror-v\d+\.\d+\.\d+-arm64-[a-f0-9]{12}$/.test(metadata.tag) ||
+                !/^iPhone-Native-Mirror-\d+\.\d+\.\d+-arm64\.zip$/.test(metadata.artifact) ||
+                !/^[a-f0-9]{40}$/.test(metadata.sourceCommit)) throw Error('Invalid approved metadata');
+            const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+            if (sha(fs.readFileSync(`approved/${metadata.artifact}`)) !== candidate.artifactSHA256) throw Error('Approved ZIP changed');
+            // Existing tags/releases are never reused, replaced or deleted.
+            try {
+              await github.rest.git.getRef({...context.repo, ref: `tags/${metadata.tag}`});
+              throw Error('Release tag already exists');
+            } catch (error) { if (error.status !== 404) throw error; }
+            const {data: release} = await github.rest.repos.createRelease({...context.repo,
+              tag_name: metadata.tag, target_commitish: metadata.sourceCommit,
+              name: `iPhone Native Mirror ${candidate.version} (${candidate.architecture})`,
+              body: fs.readFileSync('approved/RELEASE.md', 'utf8'), draft: true, prerelease: true});
+            let zipAsset;
+            for (const name of [metadata.artifact, 'candidate.json', 'evidence.json', 'tests.tap', 'native-tests.log', 'SHA256SUMS.txt']) {
+              const {data: asset} = await github.rest.repos.uploadReleaseAsset({...context.repo, release_id: release.id,
+                name, data: fs.readFileSync(`approved/${name}`)});
+              if (name === metadata.artifact) zipAsset = asset;
+            }
+            const downloaded = await github.request('GET /repos/{owner}/{repo}/releases/assets/{asset_id}', {
+              ...context.repo, asset_id: zipAsset.id, headers: {accept: 'application/octet-stream'}});
+            if (sha(Buffer.from(downloaded.data)) !== candidate.artifactSHA256) throw Error('Uploaded ZIP checksum mismatch; release remains a draft');
+            await github.rest.repos.updateRelease({...context.repo, release_id: release.id, draft: false});
+            await core.summary.addLink('Validated installer release', release.html_url).write();
