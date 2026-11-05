@@ -1836,7 +1836,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             guard let self, self.probeRoundGeneration == round else { return }
             for probe in self.upgradeProbes {
-                self.probeOutcomes.append("\(probe.endpoint) no answer in 3s")
+                // Name it like the other outcomes: the host, without the port.
+                let host = if case .hostPort(let host, _) = probe.endpoint { "\(host)" } else { "\(probe.endpoint)" }
+                self.probeOutcomes.append("\(host) no answer in 3s")
             }
             self.upgradeProbes.forEach { $0.cancel() }
             self.upgradeProbes.removeAll()
