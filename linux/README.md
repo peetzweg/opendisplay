@@ -38,7 +38,7 @@ Reports are very welcome ([#299](https://github.com/peetzweg/opendisplay/issues/
 | **Expected to work** | Arch / Omarchy on x86_64. Any distro with Hyprland 0.55+. iPad and Android (Google Play beta) as receivers: Android streamed fine in a first session (Pixel 10a, 53 fps, 33 ms), but touch, scroll, rotation, lock and quit are not checked yet |
 | **Experimental** | **Sway 1.10+**, **KDE Plasma 6.8+** (6.7 and older with the desktop entry in place, see [KDE Plasma](#kde-plasma)), **GNOME 50+** (older GNOME may work, untested). Verified on headless desktops only |
 | **Existing outputs only** | niri, COSMIC, river, labwc, Wayfire and similar: `od-sender run --output <name>` streams an output you created yourself, if the compositor offers the screen-capture and virtual-pointer protocols `od-sender doctor` lists |
-| **Not supported yet** | X11 sessions, Hyprland older than 0.55, Flatpak, SteamOS Gaming Mode, USB cable transport, HEVC, Apple Pencil pressure (mapped to a plain pointer), audio, mirror mode |
+| **Not supported yet** | X11 sessions, Hyprland older than 0.55, Flatpak, SteamOS Gaming Mode, HEVC, Apple Pencil pressure (mapped to a plain pointer), audio, mirror mode |
 
 On an unsupported desktop `od-sender` exits with a message that names what is
 missing.
@@ -127,6 +127,7 @@ od-sender doctor              # what od-sender will use on this desktop
 od-sender list                # receivers on the network: name, address, protocol version, id
 od-sender run                 # the only receiver on the network
 od-sender run --to iPhone     # or pick one by name, receiver id, or address (host:port)
+od-sender run --usb           # connect to an iPhone/iPad over USB cable (usbmuxd)
 od-sender clean               # remove virtual displays left behind by a crashed sender
 ```
 

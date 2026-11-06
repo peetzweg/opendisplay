@@ -12,6 +12,7 @@ mod latest;
 mod pipewire;
 mod session;
 mod tailscale;
+pub mod usbmux;
 mod wayland;
 
 use std::net::SocketAddr;
@@ -79,13 +80,16 @@ enum Cmd {
     /// Ctrl+C disconnects.
     #[command(visible_alias = "connect")]
     Run {
-        /// Receiver: `host:port`, or a name/id to discover. Omitted: the only
-        /// receiver on the network (several: pick one with --to).
-        #[arg(long, value_name = "NAME|ID|ADDR")]
+        /// Receiver: `host:port`, or a name/id to discover, or `usb` / `usb:<id>`.
+        /// Omitted: the only receiver on the network (several: pick one with --to).
+        #[arg(long, value_name = "NAME|ID|ADDR|usb")]
         to: Option<String>,
         /// Same as --to: `od-sender connect iMac`.
         #[arg(value_name = "RECEIVER", conflicts_with = "to")]
         receiver: Option<String>,
+        /// Connect over USB cable via usbmuxd (Apple devices) (§2.2).
+        #[arg(long, conflicts_with_all = ["connect"])]
+        usb: bool,
         /// Keep looking until the receiver appears instead of giving up after
         /// 10 s (for the systemd unit and login autostart).
         #[arg(long)]
@@ -179,12 +183,12 @@ enum Cmd {
 
 /// A receiver to dial; `id` and the Bonjour name only when discovered.
 struct Receiver {
-    addr: SocketAddr,
+    endpoint: session::Endpoint,
     id: Option<String>,
     name: String,
 }
 
-/// Resolve `--to` (or the legacy `--connect`/`--name`) to an address.
+/// Resolve `--to` (or the legacy `--connect`/`--name`, or `--usb`) to an address or endpoint.
 /// `run` found no receiver (exit codes are documented in linux/README.md).
 const EXIT_NO_RECEIVER: i32 = 3;
 /// `run` without `--to` found several receivers.
@@ -196,16 +200,34 @@ fn resolve_receiver(
     name: Option<String>,
     wait: bool,
     tailscale: bool,
+    usb: bool,
 ) -> Result<Receiver> {
+    let to = to.or(name);
+    let is_usb = usb
+        || to.as_deref() == Some("usb")
+        || to.as_deref().is_some_and(|s| s.starts_with("usb:"));
+    if is_usb {
+        let dev_id = to
+            .as_deref()
+            .and_then(|t| t.strip_prefix("usb:"))
+            .and_then(|s| s.parse::<u32>().ok());
+        return Ok(Receiver {
+            endpoint: session::Endpoint::Usb(dev_id),
+            id: None,
+            name: match dev_id {
+                Some(id) => format!("USB:{id}"),
+                None => "USB".into(),
+            },
+        });
+    }
     let direct = |addr: SocketAddr| Receiver {
-        addr,
+        endpoint: session::Endpoint::Network(addr),
         id: None,
         name: addr.to_string(),
     };
     if let Some(a) = connect {
         return Ok(direct(a));
     }
-    let to = to.or(name);
     if let Some(a) = to.as_deref().and_then(|t| t.parse::<SocketAddr>().ok()) {
         return Ok(direct(a));
     }
@@ -228,7 +250,7 @@ fn resolve_receiver(
         found.instance, found.addr, found.pv, found.id
     );
     Ok(Receiver {
-        addr: found.addr,
+        endpoint: session::Endpoint::Network(found.addr),
         id: found.id,
         name: found.instance,
     })
@@ -284,6 +306,7 @@ fn real_main() -> Result<i32> {
         Cmd::Run {
             to,
             receiver,
+            usb,
             wait,
             connect,
             name,
@@ -318,10 +341,16 @@ fn real_main() -> Result<i32> {
             let mut backend = detect::detect(&backend.request_with(config.capture))?;
             let rt = tokio::runtime::Runtime::new()?;
             let ran = rt.block_on(async {
-                let receiver =
-                    resolve_receiver(to, connect, name, wait, config.tailscale.unwrap_or(true))?;
+                let receiver = resolve_receiver(
+                    to,
+                    connect,
+                    name,
+                    wait,
+                    config.tailscale.unwrap_or(true),
+                    usb,
+                )?;
                 session::run(
-                    receiver.addr,
+                    receiver.endpoint,
                     backend.as_mut(),
                     session::RunOptions {
                         bitrate_mbps: eff.bitrate_mbps.unwrap_or(20.0),
