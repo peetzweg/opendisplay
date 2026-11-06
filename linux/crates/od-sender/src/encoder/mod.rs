@@ -158,26 +158,39 @@ impl Encoder {
         match &self.imp {
             Imp::Ffmpeg(e) => Some(e.format()),
             // OpenH264 converts with its own coefficients and announces no
-            // BT.709 colour; keep its frames BGRA.
+            // BT.709 colour; its frames stay unconverted.
             Imp::OpenH264(_) => None,
         }
     }
 
-    /// Encode one frame: BGRX/BGRA, or already converted by a
+    /// Encode one frame: 4-byte RGB pixels in the capture's byte order
+    /// ([`crate::backend::PixelFormat`]), or already converted by a
     /// [`ConvertStage`]; a dmabuf frame is an error until a VA-API backend
     /// exists. Returns the pictures the encoder produced, in order: usually
     /// one, none when it skipped the frame or holds it, two when a lagging
     /// encoder catches up.
     pub fn encode(&mut self, frame: &Frame, force_idr: bool) -> Result<Vec<Encoded>> {
         match (&frame.buf, &mut self.imp) {
-            (FrameBuf::Cpu { pixels, stride, .. }, Imp::Ffmpeg(e)) => {
-                e.encode(pixels, *stride, force_idr, frame.captured_at)
-            }
-            (FrameBuf::Cpu { pixels, stride, .. }, Imp::OpenH264(e)) => {
-                e.encode(pixels, *stride, force_idr, frame.captured_at)
-            }
+            (
+                FrameBuf::Cpu {
+                    pixels,
+                    stride,
+                    format,
+                    ..
+                },
+                Imp::Ffmpeg(e),
+            ) => e.encode(pixels, *stride, *format, force_idr, frame.captured_at),
+            (
+                FrameBuf::Cpu {
+                    pixels,
+                    stride,
+                    format,
+                    ..
+                },
+                Imp::OpenH264(e),
+            ) => e.encode(pixels, *stride, *format, force_idr, frame.captured_at),
             (FrameBuf::Yuv(y), Imp::Ffmpeg(e)) => e.encode_yuv(y, force_idr, frame.captured_at),
-            (FrameBuf::Yuv(_), _) => bail!("{} takes BGRA frames only", self.label()),
+            (FrameBuf::Yuv(_), _) => bail!("{} takes RGB frames only", self.label()),
             (FrameBuf::Dmabuf { .. }, _) => bail!("{} cannot encode dmabuf frames", self.label()),
         }
     }

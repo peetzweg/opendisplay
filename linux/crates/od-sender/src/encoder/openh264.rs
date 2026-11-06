@@ -10,9 +10,10 @@ use openh264::encoder::{
     BitRate, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, RateControlMode,
     SpsPpsStrategy, UsageType,
 };
-use openh264::formats::{BgraSliceU8, YUVBuffer};
+use openh264::formats::{BgraSliceU8, RgbaSliceU8, YUVBuffer};
 
 use super::{Encoded, EncoderSettings};
+use crate::backend::PixelFormat;
 
 /// OpenH264 refuses larger frames, at the first `encode` rather than at
 /// creation; checking up front lets `auto` skip it cleanly.
@@ -65,27 +66,33 @@ impl OpenH264Encoder {
 
     pub fn encode(
         &mut self,
-        bgra: &[u8],
+        pixels: &[u8],
         stride: u32,
+        format: PixelFormat,
         force_idr: bool,
         captured_at: Instant,
     ) -> Result<Vec<Encoded>> {
         let t0 = Instant::now();
         let row = (self.width * 4) as usize;
         let src: &[u8] = if stride as usize == row {
-            &bgra[..row * self.height as usize]
+            &pixels[..row * self.height as usize]
         } else {
             self.packed.clear();
             for y in 0..self.height as usize {
                 let start = y * stride as usize;
-                self.packed.extend_from_slice(&bgra[start..start + row]);
+                self.packed.extend_from_slice(&pixels[start..start + row]);
             }
             &self.packed
         };
-        let yuv = YUVBuffer::from_bgra8_source(BgraSliceU8::new(
-            src,
-            (self.width as usize, self.height as usize),
-        ));
+        let dims = (self.width as usize, self.height as usize);
+        let yuv = match format {
+            PixelFormat::Xrgb8888 | PixelFormat::Argb8888 => {
+                YUVBuffer::from_bgra8_source(BgraSliceU8::new(src, dims))
+            }
+            PixelFormat::Xbgr8888 | PixelFormat::Abgr8888 => {
+                YUVBuffer::from_rgba8_source(RgbaSliceU8::new(src, dims))
+            }
+        };
         if force_idr {
             self.inner.force_intra_frame();
         }
@@ -121,11 +128,45 @@ mod tests {
         }
     }
 
+    fn solid(w: u32, h: u32, px: [u8; 4]) -> (Vec<u8>, u32) {
+        // Stride with padding, like a real capture buffer.
+        let stride = w * 4 + 32;
+        let mut v = vec![0u8; (stride * h) as usize];
+        for row in v.chunks_exact_mut(stride as usize) {
+            for p in row[..(w * 4) as usize].chunks_exact_mut(4) {
+                p.copy_from_slice(&px);
+            }
+        }
+        (v, stride)
+    }
+
+    fn idr(px: &[u8], stride: u32, format: PixelFormat) -> Vec<u8> {
+        let mut e = OpenH264Encoder::new(64, 64, settings()).unwrap();
+        e.encode(px, stride, format, true, Instant::now())
+            .unwrap()
+            .into_iter()
+            .flat_map(|e| e.unit.annexb)
+            .collect()
+    }
+
     #[test]
     fn refuses_frames_above_its_limit_at_creation() {
         assert!(supports(3840, 2160) && supports(2160, 3840) && supports(2556, 1178));
         assert!(!supports(4096, 2304) && !supports(2304, 4096) && !supports(3840, 2162));
         let e = OpenH264Encoder::new(4096, 2304, settings()).err().unwrap();
         assert!(e.to_string().contains("at most 3840x2160"), "{e}");
+    }
+
+    #[test]
+    fn rgba_order_encodes_like_its_bgra_twin() {
+        let (bgrx, stride) = solid(64, 64, [0, 0, 255, 255]);
+        let (rgbx, _) = solid(64, 64, [255, 0, 0, 255]);
+        let red_from_bgrx = idr(&bgrx, stride, PixelFormat::Xrgb8888);
+        let red_from_rgbx = idr(&rgbx, stride, PixelFormat::Xbgr8888);
+        assert!(!red_from_bgrx.is_empty());
+        assert_eq!(red_from_bgrx, red_from_rgbx);
+        // The same bytes read in the other order are pure blue.
+        let blue = idr(&rgbx, stride, PixelFormat::Xrgb8888);
+        assert_ne!(red_from_bgrx, blue);
     }
 }
