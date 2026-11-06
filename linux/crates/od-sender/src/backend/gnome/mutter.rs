@@ -9,7 +9,7 @@
 //! consumer negotiates, so the capture asks for the same size.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -124,6 +124,13 @@ impl Placement {
 impl State {
     pub fn connectors(&self) -> Vec<String> {
         self.1.iter().map(|m| m.0.0.clone()).collect()
+    }
+
+    fn new_placement(&self, before: &[String]) -> Option<Placement> {
+        self.1
+            .iter()
+            .filter(|m| !before.contains(&m.0.0))
+            .find_map(|m| self.placement(&m.0.0))
     }
 
     pub fn placement(&self, connector: &str) -> Option<Placement> {
@@ -244,7 +251,10 @@ pub struct Request {
 }
 
 impl VirtualMonitor {
-    pub fn create(req: &Request) -> Result<Self> {
+    pub fn create<T>(
+        req: &Request,
+        connect_stream: impl FnOnce(u32) -> Result<T>,
+    ) -> Result<(Self, T)> {
         let conn = Connection::session().context("connecting to the session bus")?;
         let before = display_state(&conn)?.connectors();
 
@@ -326,26 +336,38 @@ impl VirtualMonitor {
             NODE_WITHIN,
         ))?;
 
-        // The new connector is ours; Mutter names virtual ones Meta-<n>.
-        let mut placement = None;
-        for _ in 0..20 {
+        debug!(node = vm.node, stream = %vm.stream, "Mutter announced PipeWire node; connecting consumer before waiting for monitor");
+        // Mutter < 50 creates the monitor only after a consumer negotiates
+        // the PipeWire format. Keep that consumer alive for the session.
+        let capture = connect_stream(vm.node)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
             let state = display_state(&conn)?;
-            placement = state
+            let added: Vec<_> = state
                 .connectors()
                 .into_iter()
-                .find(|c| !before.contains(c))
-                .and_then(|c| state.placement(&c));
-            if placement.is_some() {
+                .filter(|c| !before.contains(c))
+                .collect();
+            debug!(node = vm.node, serial = state.0, ?before, ?added,
+                monitors = ?state.1, logical_monitors = ?state.2,
+                "waiting for negotiated virtual monitor");
+            if let Some(p) = state.new_placement(&before) {
+                vm.placement = p;
                 break;
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "Mutter added no active monitor within 5s after connecting PipeWire node {}; previous connectors: {:?}; new connectors: {:?}; monitor state: {:?}",
+                    vm.node,
+                    before,
+                    added,
+                    state.1
+                );
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        match placement {
-            Some(p) => vm.placement = p,
-            None => bail!("Mutter added no monitor for the stream"),
-        }
         debug!("mutter virtual monitor {:?} node {}", vm.placement, vm.node);
-        Ok(vm)
+        Ok((vm, capture))
     }
 
     /// Set the monitor's scale (nearest one Mutter supports) and position
@@ -514,6 +536,41 @@ mod tests {
             ],
             HashMap::new(),
         )
+    }
+
+    #[test]
+    fn new_monitor_must_have_a_current_mode_and_can_appear_after_negotiation() {
+        let mut s = state();
+        let before = s.connectors();
+        // A PipeWire node alone is not a DisplayConfig monitor.
+        assert_eq!(s.new_placement(&before), None);
+        s.1.push(Monitor(
+            connector("Meta-2"),
+            vec![mode(2360, 1640, 60.0, false)],
+            HashMap::new(),
+        ));
+        assert_eq!(s.new_placement(&before), None);
+        s.1.last_mut().unwrap().1[0]
+            .6
+            .insert("is-current".into(), true.into());
+        assert_eq!(s.new_placement(&before).unwrap().connector, "Meta-2");
+    }
+
+    #[test]
+    fn inactive_new_connector_does_not_hide_an_active_one() {
+        let mut s = state();
+        s.1.insert(
+            0,
+            Monitor(
+                connector("pending"),
+                vec![mode(800, 600, 60.0, false)],
+                HashMap::new(),
+            ),
+        );
+        assert_eq!(
+            s.new_placement(&["Meta-0".into()]).unwrap().connector,
+            "Meta-1"
+        );
     }
 
     #[test]
