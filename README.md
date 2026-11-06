@@ -422,10 +422,11 @@ hover needs iPadOS 16.4 and a hover-capable iPad and Pencil pairing (see
 [Apple's list](https://support.apple.com/guide/ipad/ipadc55b6c7a/ipados));
 everything else works the same on every supported version.
 
-- **TestFlight** (recommended): join the public beta at
-  [testflight.apple.com/join/3NYaY11c](https://testflight.apple.com/join/3NYaY11c).
+- **App Store** (recommended):
+  [OpenDisplay](https://apps.apple.com/app/id6780264891).
 - **Build from source**: open the project in Xcode, select your free Apple ID
-  under Signing, hit Run. Takes ~2 minutes.
+  under Signing, change the bundle identifier to one of your own, hit Run.
+  Takes ~2 minutes.
 
 ## Quick start (from source)
 
@@ -515,7 +516,6 @@ Tracked as [roadmap issues](https://github.com/peetzweg/opendisplay/issues?q=is%
 
 **Connectivity & distribution**
 - [#16](https://github.com/peetzweg/opendisplay/issues/16) Encrypted WiFi transport with pairing code
-- [ ] App Store release of the iOS app + notarized Mac downloads
 
 **Input**
 - [#4](https://github.com/peetzweg/opendisplay/issues/4) Apple Pencil with pressure and tilt
