@@ -3,7 +3,7 @@ title: Third-party Android receivers for OpenDisplay
 nav: Android receivers
 description: Community Android receivers for OpenDisplay, including one built for GrapheneOS and de-Googled Pixel devices, as alternatives to the official Android beta on Google Play.
 order: 3
-updated: 2026-10-27
+updated: 2026-11-05
 ---
 
 ## Official receiver first
@@ -29,6 +29,10 @@ unlocked.
 The Mac finds the device in Android's default USB mode (no data transfer)
 and in file transfer. In PTP, MIDI or USB tethering mode it does not show
 up unless USB debugging is on; switch back to one of the first two.
+
+With USB debugging on, a running `adb` server on the Mac holds the device
+and the cable cannot connect. Run `adb kill-server`, and the Mac picks the
+device up within a few seconds.
 
 The community receivers below are for devices without Google Play, such as
 **GrapheneOS** phones and tablets, or for connection setups the official

@@ -9,6 +9,11 @@
 // once. Interfaces appear after the device is configured, so it is settled
 // by then. Devices join the controller's wired list as `aoa:<USB serial>`.
 //
+// A device another app holds open (on macOS a running adb server does that
+// to every phone with USB debugging on) cannot be asked at all. That is not
+// a "no": it is asked again every `busyRetryInterval` while it stays
+// plugged in, and listed the moment it answers (`adb kill-server`).
+//
 // Device attach still lists, without a request, what is known already: a
 // device in accessory mode, and a serial that answered earlier this run.
 //
@@ -24,6 +29,7 @@ import IOKit
 @MainActor
 final class AccessoryDeviceWatcher {
     private static let detachGrace: Duration = .seconds(6)
+    private static let busyRetryInterval: Duration = .seconds(3)
 
     private var devices: [String: UsbmuxDevice] = [:]          // by serial
     private var serialByEntry: [UInt64: String] = [:]          // device registry entry id
@@ -35,6 +41,9 @@ final class AccessoryDeviceWatcher {
     // arrive separately, and it is asked once. A device unplugged mid-probe
     // drops out here, so a late answer cannot list a device that is gone.
     private var asked: Set<UInt64> = []
+    // The ask still running for a device, by registry entry: one Task that
+    // keeps asking a busy device until it answers or is unplugged.
+    private var probes: [UInt64: Task<Void, Never>] = [:]
     private let onChange: ([UsbmuxDevice]) -> Void
     private let port: IONotificationPortRef
     private var deviceAddedIterator: io_iterator_t = 0
@@ -143,18 +152,37 @@ final class AccessoryDeviceWatcher {
         }
         Log.info("AOA: asking \(name ?? serial) for accessory support (\(function.rawValue) interface)")
         asked.insert(entry)
-        // The control request blocks for up to a second on a device that
-        // ignores it — keep it off the main thread. A refusal is final;
-        // silence (busy, slow to answer) gets two more tries.
-        Task.detached {
+        probes[entry]?.cancel()
+        probes[entry] = Task {
+            defer { IOObjectRelease(device) }
+            var answer = await Self.ask(device)
+            if answer == .busy {
+                Log.info("AOA: \(name ?? serial) is in use by another app, usually adb. "
+                    + "Run `adb kill-server` to free it; asking again while it stays plugged in")
+            }
+            while answer == .busy {
+                try? await Task.sleep(for: Self.busyRetryInterval)
+                guard !Task.isCancelled else { return }
+                answer = await Self.ask(device)
+            }
+            guard !Task.isCancelled else { return }
+            probes[entry] = nil
+            probed(serial: serial, name: name, entry: entry, answer: answer)
+        }
+    }
+
+    /// GET_PROTOCOL, off the main thread: the control request blocks for up
+    /// to a second on a device that ignores it. A refusal or busy is final
+    /// for this round; silence (slow to answer) gets two more tries.
+    private nonisolated static func ask(_ device: io_service_t) async -> AOA.ProtocolAnswer {
+        await Task.detached {
             var answer = AOA.ProtocolAnswer.silent
             for attempt in 0..<3 where answer == .silent {
                 if attempt > 0 { try? await Task.sleep(for: .milliseconds(500)) }
                 answer = AOA.askProtocol(device)
             }
-            IOObjectRelease(device)
-            await self.probed(serial: serial, name: name, entry: entry, answer: answer)
-        }
+            return answer
+        }.value
     }
 
     private func probed(serial: String, name: String?, entry: UInt64, answer: AOA.ProtocolAnswer) {
@@ -181,6 +209,7 @@ final class AccessoryDeviceWatcher {
             let entry = Self.entryID(service)
             IOObjectRelease(service)
             asked.remove(entry)
+            probes.removeValue(forKey: entry)?.cancel()
             guard let serial = serialByEntry.removeValue(forKey: entry),
                   devices[serial] != nil else { continue }
             pendingDetach[serial]?.cancel()
