@@ -52,8 +52,11 @@ This patch does not claim to solve stream-to-connector attribution generally.
 Connect the consumer immediately after PipeWireStreamAdded, before polling
 DisplayConfig. Retain that same consumer through arrangement and delivery;
 start/stop_capture attach/detach the frame sink. This avoids a second negotiation
-when delivery starts. Discard early frames, retain early stream errors, and
-release capture before stopping the Mutter session on close/reconfigure/error.
+when delivery starts. Retain only the latest frame received before delivery
+starts (or while delivery is stopped), then send it when the sink is attached.
+This lets a static desktop produce its first image without another redraw.
+Preserve early stream errors and release capture before stopping the Mutter
+session on close/reconfigure/error.
 
 Use a 5-second monitor deadline after connecting, with diagnostics containing
 node, state serial, baseline/new connectors, modes and logical monitors.
@@ -84,7 +87,10 @@ resolution, `--version` and `run --help` passed without the build environment.
 The original ~/.local/bin/od-sender SHA-256 remained
 `c0686fe3d01bccc6be01119f7de55a69cdd0645bf1afa6bcb9f35c09d62bd2ac`.
 
-All **156 sender tests passed** using a writable private XDG_RUNTIME_DIR.
+All **160 sender tests passed** using a writable private XDG_RUNTIME_DIR.
+This includes four delivery tests covering a static frame before start,
+latest-frame retention and ordering, restart after paused delivery, and an
+early stream error clearing the pending frame.
 Initial tests using /run/user/1000 failed because the sandbox makes that path
 read-only. Reproduce the successful run from the repository root:
 
@@ -98,7 +104,9 @@ XDG_RUNTIME_DIR="$PWD/build/gnome-48-fix/test-runtime" \
 ```
 
 Logs: `build/gnome-48-fix/build.log` and
-`build/gnome-48-fix/test-local-runtime.log`.
+`build/gnome-48-fix/test-local-runtime.log` for the initial fix;
+`build/gnome-48-fix/frame-retention-build.log` and
+`build/gnome-48-fix/frame-retention-test.log` for the frame-retention follow-up.
 
 `bash linux/testbench/gnome-api-tests.sh` also passed all 10 Mutter/layout unit
 tests, including two new monitor-readiness tests. This smaller harness does not
@@ -151,6 +159,8 @@ If it fails, distinguish these cases from logs while the session is alive:
 The reporter confirmed that the patched sender works with an iPad receiver
 over Wi-Fi on Debian 13 (Trixie), GNOME 48.7 / Wayland, PipeWire 1.4.2 and
 WirePlumber 0.5.8. This is a user-reported real-device result.
+That confirmation predates the frame-retention follow-up; the follow-up has
+unit-test coverage but has not yet been confirmed on the iPad.
 
 Separate results for scale 1 versus scale 2, pointer input, reconnection,
 reconfiguration, and monitor/layout cleanup have not been reported; the steps

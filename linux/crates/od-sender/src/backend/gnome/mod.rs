@@ -134,7 +134,8 @@ fn info_of(name: &str, vm: &VirtualMonitor) -> DisplayInfo {
 }
 
 /// Keep the consumer connected from monitor creation through teardown.
-/// Frames before start_capture (and while stopped) are discarded.
+/// Keep the latest frame before start_capture (and while stopped) so a
+/// static desktop can be delivered without waiting for another redraw.
 struct Capture {
     _stream: PwCapture,
     delivery: Arc<Mutex<Delivery>>,
@@ -143,7 +144,38 @@ struct Capture {
 #[derive(Default)]
 struct Delivery {
     sink: Option<FrameSink>,
+    pending: Option<super::Frame>,
     ended: Option<String>,
+}
+
+impl Delivery {
+    fn event(&mut self, event: CaptureEvent) {
+        if self.ended.is_some() {
+            return;
+        }
+        if let CaptureEvent::Ended(why) = &event {
+            self.pending = None;
+            self.ended = Some(why.clone());
+        }
+        if let Some(sink) = self.sink.as_mut() {
+            sink(event);
+        } else if let CaptureEvent::Frame(frame) = event {
+            self.pending = Some(frame);
+        }
+    }
+
+    // Called with the delivery lock held: a new frame cannot overtake the
+    // pending one while the sink is attached.
+    fn start(&mut self, mut sink: FrameSink) -> Result<()> {
+        if let Some(why) = &self.ended {
+            bail!("PipeWire capture ended before delivery started: {why}");
+        }
+        if let Some(frame) = self.pending.take() {
+            sink(CaptureEvent::Frame(frame));
+        }
+        self.sink = Some(sink);
+        Ok(())
+    }
 }
 
 impl Capture {
@@ -158,13 +190,7 @@ impl Capture {
             },
             size,
             Box::new(move |event| {
-                let mut delivery = target.lock().unwrap();
-                if let CaptureEvent::Ended(why) = &event {
-                    delivery.ended = Some(why.clone());
-                }
-                if let Some(sink) = delivery.sink.as_mut() {
-                    sink(event);
-                }
+                target.lock().unwrap().event(event);
             }),
         )?;
         Ok(Self {
@@ -218,12 +244,7 @@ impl VirtualDisplay for GnomeDisplay {
         let Some(capture) = &self.capture else {
             bail!("no PipeWire capture");
         };
-        let mut delivery = capture.delivery.lock().unwrap();
-        if let Some(why) = &delivery.ended {
-            bail!("PipeWire capture ended before delivery started: {why}");
-        }
-        delivery.sink = Some(sink);
-        Ok(())
+        capture.delivery.lock().unwrap().start(sink)
     }
 
     fn stop_capture(&mut self) {
@@ -278,5 +299,97 @@ impl Drop for GnomeDisplay {
     fn drop(&mut self) {
         self.stop_capture();
         // VirtualMonitor's own Drop stops the session.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{Frame, FrameBuf, PixelFormat};
+    use std::sync::mpsc::{self, TryRecvError};
+    use std::time::Instant;
+
+    fn frame(width: u32) -> CaptureEvent {
+        CaptureEvent::Frame(Frame {
+            captured_at: Instant::now(),
+            presentation_ns: None,
+            buf: FrameBuf::Cpu {
+                pixels: vec![0; width as usize * 4].into(),
+                width,
+                height: 1,
+                stride: width * 4,
+                format: PixelFormat::Xrgb8888,
+            },
+        })
+    }
+
+    fn receiver() -> (FrameSink, mpsc::Receiver<CaptureEvent>) {
+        let (tx, rx) = mpsc::channel();
+        (Box::new(move |event| tx.send(event).unwrap()), rx)
+    }
+
+    fn width(event: CaptureEvent) -> u32 {
+        match event {
+            CaptureEvent::Frame(frame) => frame.dimensions().0,
+            CaptureEvent::Ended(why) => panic!("unexpected end: {why}"),
+        }
+    }
+
+    #[test]
+    fn static_frame_arriving_before_start_is_delivered_without_another_redraw() {
+        let mut delivery = Delivery::default();
+        delivery.event(frame(1));
+        let (sink, rx) = receiver();
+        delivery.start(sink).unwrap();
+        assert_eq!(width(rx.try_recv().unwrap()), 1);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert!(delivery.pending.is_none());
+    }
+
+    #[test]
+    fn only_latest_pending_frame_is_delivered_before_live_frames() {
+        let mut delivery = Delivery::default();
+        delivery.event(frame(1));
+        delivery.event(frame(2));
+        let (sink, rx) = receiver();
+        delivery.start(sink).unwrap();
+        delivery.event(frame(3));
+        assert_eq!(width(rx.try_recv().unwrap()), 2);
+        assert_eq!(width(rx.try_recv().unwrap()), 3);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn frames_while_delivery_is_stopped_are_available_on_restart() {
+        let mut delivery = Delivery::default();
+        let (sink, rx) = receiver();
+        delivery.start(sink).unwrap();
+        delivery.event(frame(1));
+        assert_eq!(width(rx.try_recv().unwrap()), 1);
+        delivery.sink = None;
+        delivery.event(frame(2));
+        delivery.event(frame(3));
+        let (sink, rx) = receiver();
+        delivery.start(sink).unwrap();
+        assert_eq!(width(rx.try_recv().unwrap()), 3);
+    }
+
+    #[test]
+    fn end_before_start_discards_pending_frame_and_preserves_error() {
+        let mut delivery = Delivery::default();
+        delivery.event(frame(1));
+        delivery.event(CaptureEvent::Ended("stream lost".into()));
+        assert!(delivery.pending.is_none());
+        delivery.event(frame(2));
+        let (sink, rx) = receiver();
+        assert!(
+            delivery
+                .start(sink)
+                .unwrap_err()
+                .to_string()
+                .contains("stream lost")
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(delivery.pending.is_none());
     }
 }
