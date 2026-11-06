@@ -1,3 +1,14 @@
+> [!NOTE]
+> **🌴 Away until November 17**
+>
+> Thank you for all the issues and pull requests. They're what make OpenDisplay
+> better. I'm offline for three weeks, so replies, reviews, and releases will be
+> slow. Since the app has access to your screen and input, I only merge changes
+> I've tested myself, so pull requests will wait too.
+>
+> Nothing is abandoned. Please keep the reports coming and go easy on the
+> project while it's quiet. I'll be back to keep making it better.
+
 <div align="center">
 
 <img src="public/logo.png" width="128" alt="OpenDisplay app icon" />
@@ -118,6 +129,14 @@ screen — Duet, Luna, OBS, and Zoom trigger it too. Apple Sidecar doesn't,
 only because it's implemented inside the OS rather than on public capture
 APIs. It cannot (and shouldn't) be hidden by an app; it's how macOS tells
 you a capture is running.
+
+**Why don't I get notifications while a device is connected?**
+For the same reason: macOS treats any app that captures the screen as
+*sharing* it, and by default hides notifications while the screen is shared.
+Luna Display and DisplayLink run into the same thing, and no app can opt
+out. To keep notifications, turn on System Settings → Notifications →
+**Allow notifications when mirroring or sharing the display**. That setting
+covers real screen sharing too, such as in a video call.
 
 **The Mac app doesn't show my iPhone in the Connection menu (WiFi).**
 Both sides need **Local Network** permission, and both fail *silently*

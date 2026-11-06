@@ -61,6 +61,7 @@ enum AOA {
         case notAccessory      // START sent, but it never came back as an accessory (locked?)
         case noApp             // accessory up, but the receiver never said hello
         case noInterface
+        case busy              // another app (usually adb) holds the device
 
         var errorDescription: String? {
             switch self {
@@ -69,6 +70,7 @@ enum AOA {
             case .notAccessory: return "device did not switch to accessory mode"
             case .noApp: return "OpenDisplay did not open on the device"
             case .noInterface: return "accessory exposes no bulk endpoints"
+            case .busy: return "another app (usually adb) is using the device; `adb kill-server` frees it"
             }
         }
     }
@@ -114,6 +116,7 @@ enum AOA {
         // repeats every 2 s until the device re-enumerates or time runs out:
         // unlocking then connects within seconds instead of after a timeout.
         var found: Device?
+        var busy = false   // the last handshake found the device held by another app
         let deadline = ContinuousClock.now + reenumerationTimeout
         while found == nil, ContinuousClock.now < deadline {
             try Task.checkCancellation()
@@ -123,12 +126,17 @@ enum AOA {
                     break
                 }
                 // A device mid re-enumeration may not answer; the next round asks again.
-                try? handshake(current.service)
+                do {
+                    try handshake(current.service)
+                    busy = false
+                } catch {
+                    busy = (error as? Failure) == .busy
+                }
                 current.release()
             }
             found = try await waitForDevice(serial: serial, accessory: true, timeout: .seconds(2))
         }
-        guard let accessory = found else { throw Failure.notAccessory }
+        guard let accessory = found else { throw busy ? Failure.busy : Failure.notAccessory }
         defer { accessory.release() }
         let relay: AccessoryRelay
         do {
@@ -214,25 +222,67 @@ enum AOA {
         IOUSBDeviceRequest(bmRequestType: type, bRequest: code, wValue: 0, wIndex: index, wLength: length)
     }
 
-    /// GET_PROTOCOL: the AOA version (1 or 2), or nil when the device does
-    /// not answer — the only way to tell an Android device from any other.
-    static func protocolVersion(of service: io_service_t) -> Int? {
-        guard let device = try? IOUSBHostDevice(__ioService: service, options: [],
-                                                queue: nil, interestHandler: nil) else { return nil }
+    enum ProtocolAnswer: Equatable {
+        case version(Int)   // AOA 1 or 2
+        case refused        // stalled, or answered 0: not an Android device
+        case busy           // another app (usually adb) holds the device open
+        case silent         // could not be opened, or no reply in time
+
+        /// What a failed open or control request says about the device.
+        init(failure: Error) {
+            switch UInt32(truncatingIfNeeded: (failure as NSError).code) {
+            case AOA.pipeStalled: self = .refused
+            case AOA.exclusiveAccess: self = .busy
+            default: self = .silent
+            }
+        }
+    }
+
+    /// kUSBHostReturnPipeStalled: the device rejected the request.
+    static let pipeStalled: UInt32 = 0xE000_5000
+    /// kIOReturnExclusiveAccess: another process opened the device for
+    /// itself. On macOS a running adb server does that to every Android
+    /// device with USB debugging on, until `adb kill-server`.
+    static let exclusiveAccess: UInt32 = 0xE000_02C5
+
+    /// GET_PROTOCOL, the only way to tell an Android device from any other.
+    /// It is a vendor request, which some devices act on (#419): only send it
+    /// to a device that shows an AndroidUSBFunction.
+    static func askProtocol(_ service: io_service_t) -> ProtocolAnswer {
+        let device: IOUSBHostDevice
+        do {
+            device = try IOUSBHostDevice(__ioService: service, options: [], queue: nil, interestHandler: nil)
+        } catch {
+            // Nothing was sent, so only "held by another app" means anything.
+            return ProtocolAnswer(failure: error) == .busy ? .busy : .silent
+        }
         defer { device.destroy() }
         let data = NSMutableData(length: 2)!
         var transferred = 0
-        guard (try? device.__send(request(0xC0, getProtocol, length: 2), data: data,
-                                  bytesTransferred: &transferred, completionTimeout: 1)) != nil,
-              transferred == 2 else { return nil }
+        do {
+            try device.__send(request(0xC0, getProtocol, length: 2), data: data,
+                              bytesTransferred: &transferred, completionTimeout: 1)
+        } catch {
+            return ProtocolAnswer(failure: error)
+        }
+        guard transferred == 2 else { return .refused }
         let version = Int(UInt16(littleEndian: data.bytes.loadUnaligned(as: UInt16.self)))
-        return version >= 1 ? version : nil
+        return version >= 1 ? .version(version) : .refused
     }
 
     private static func handshake(_ service: io_service_t) throws {
-        guard protocolVersion(of: service) != nil else { throw Failure.notSupported }
-        let device = try IOUSBHostDevice(__ioService: service, options: [],
-                                         queue: nil, interestHandler: nil)
+        switch askProtocol(service) {
+        case .version: break
+        case .busy: throw Failure.busy
+        case .refused, .silent: throw Failure.notSupported
+        }
+        let device: IOUSBHostDevice
+        do {
+            device = try IOUSBHostDevice(__ioService: service, options: [], queue: nil, interestHandler: nil)
+        } catch {
+            // Taken between the two opens.
+            throw ProtocolAnswer(failure: error) == .busy ? Failure.busy : error
+        }
         defer { device.destroy() }
         var transferred = 0
         for (index, value) in identity.enumerated() {

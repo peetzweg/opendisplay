@@ -199,9 +199,10 @@ impl VirtualDisplay for GnomeDisplay {
             bail!("no virtual monitor");
         };
         let p = &vm.placement;
+        let (width, height) = p.layout_size();
         Ok(Box::new(RemoteInput::start(
             vm.input(),
-            Mapper::new(p.width, p.height, p.scale),
+            Mapper::new(width, height, p.scale),
         )?))
     }
 

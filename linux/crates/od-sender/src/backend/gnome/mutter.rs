@@ -99,6 +99,26 @@ pub struct Placement {
     pub x: i32,
     pub y: i32,
     pub scale: f64,
+    /// DisplayConfig `layout-mode` 1 (logical pixels, the default) rather
+    /// than 2 (physical pixels).
+    pub logical_layout: bool,
+}
+
+impl Placement {
+    /// The stream's size in the units of absolute pointer motion. Mutter adds
+    /// stream coordinates to the view's layout rectangle unscaled
+    /// (`meta_screen_cast_virtual_stream_transform_position`), so they are
+    /// layout units: logical pixels in logical layout mode, mode pixels in
+    /// physical.
+    pub fn layout_size(&self) -> (f64, f64) {
+        let (w, h) = (self.width as f64, self.height as f64);
+        if self.logical_layout {
+            let s = self.scale.max(0.1);
+            (w / s, h / s)
+        } else {
+            (w, h)
+        }
+    }
 }
 
 impl State {
@@ -121,6 +141,7 @@ impl State {
             x: l.map_or(0, |l| l.0),
             y: l.map_or(0, |l| l.1),
             scale: l.map_or(1.0, |l| l.2),
+            logical_layout: super::layout::logical_layout(self),
         })
     }
 }
@@ -248,6 +269,7 @@ impl VirtualMonitor {
                 x: 0,
                 y: 0,
                 scale: 1.0,
+                logical_layout: true,
             },
             stopped: false,
         };
@@ -508,9 +530,34 @@ mod tests {
                 x: 1280,
                 y: 0,
                 scale: 2.0,
+                logical_layout: true,
             })
         );
         assert_eq!(s.placement("Meta-9"), None);
+    }
+
+    #[test]
+    fn layout_size_follows_the_layout_mode() {
+        let mut s = state();
+        // No `layout-mode` property: logical, as Mutter's default.
+        assert_eq!(
+            s.placement("Meta-1").unwrap().layout_size(),
+            (585.0, 1266.0)
+        );
+        s.3.insert("layout-mode".to_string(), OwnedValue::from(1u32));
+        assert_eq!(
+            s.placement("Meta-1").unwrap().layout_size(),
+            (585.0, 1266.0)
+        );
+        s.3.insert("layout-mode".to_string(), OwnedValue::from(2u32));
+        let p = s.placement("Meta-1").unwrap();
+        assert!(!p.logical_layout);
+        assert_eq!(p.layout_size(), (1170.0, 2532.0));
+        // Scale 1 is the same in both modes.
+        assert_eq!(
+            s.placement("Meta-0").unwrap().layout_size(),
+            (1280.0, 800.0)
+        );
     }
 
     #[test]

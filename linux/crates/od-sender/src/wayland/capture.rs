@@ -284,7 +284,15 @@ impl CaptureThread {
                 // A panic in here (or in the sink) must still tell the session
                 // that capture is gone, so it rebuilds instead of idling.
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut warned_format = false;
                     let on_frame = |info: &FrameInfo, lease: Lease| {
+                        if !warned_format && !is_known_format(info.format) {
+                            warn!(
+                                "compositor captures as {:?}; frames are read as XRGB8888, colours may be off",
+                                info.format
+                            );
+                            warned_format = true;
+                        }
                         sink(CaptureEvent::Frame(Frame {
                             captured_at: info.ready_at,
                             presentation_ns: info.presentation_ns,
@@ -348,6 +356,18 @@ impl Drop for CaptureThread {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// The formats the encoders convert from; anything else is read as XRGB8888
+/// by [`pixel_format`], and the capture thread warns once.
+fn is_known_format(f: wl_shm::Format) -> bool {
+    matches!(
+        f,
+        wl_shm::Format::Xrgb8888
+            | wl_shm::Format::Argb8888
+            | wl_shm::Format::Xbgr8888
+            | wl_shm::Format::Abgr8888
+    )
 }
 
 pub(super) fn pixel_format(f: wl_shm::Format) -> PixelFormat {

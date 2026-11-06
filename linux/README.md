@@ -137,6 +137,14 @@ the [config file](#configuration)). `--to` matches part of a receiver's name
 or its full id, or connects straight to a `host:port`. `--wait` keeps looking
 until the receiver appears.
 
+Bonjour does not cross VPNs. When it finds nothing and
+[Tailscale](https://tailscale.com) is running, `run` and `list` also try the
+online Tailscale peers on port 9000 and use the ones that answer as an
+OpenDisplay receiver, named as `tailscale status` shows them. This adds about
+a second, only when Bonjour found nothing; `tailscale = false` in the config
+file turns it off. `run --wait` does not try Tailscale: give it the address
+(`--to <tailscale-ip>:9000`).
+
 `od-sender` detects your desktop (Hyprland, Sway, KDE Plasma or GNOME) and
 creates the virtual display there, by default to the right of your current
 monitors; `--backend` overrides the choice. Once it is up, `run` prints one
@@ -207,6 +215,7 @@ encoder = "auto"         # "auto", "v4l2m2m", "x264" or "openh264"
 cursor = "auto"          # "auto", "video" or "off" (true/false: auto/off)
 capture = "auto"         # "auto", "ext" or "wlr"
 workspace = "8"          # Hyprland/Sway: show workspace 8 on the virtual display
+tailscale = true         # false: never try Tailscale peers when Bonjour finds nothing
 
 # Overrides for one receiver: position, scale, bitrate-mbps and workspace.
 [receiver."3F2A9C1E-..."]
@@ -309,7 +318,9 @@ session.
   network, which usually blocks devices from seeing each other)? On iPhone and
   iPad, Settings → Privacy & Security → Local Network must allow OpenDisplay.
   `od-sender list --timeout 10` shows what answers; `od-sender run --to
-  <device-ip>:9000` skips discovery.
+  <device-ip>:9000` skips discovery. Over a VPN, Bonjour does not reach the
+  device: Tailscale peers are tried automatically (`RUST_LOG=debug` shows
+  each probe); with another VPN, use `--to <vpn-ip>:9000`.
 * **"several receivers found"** (exit 4): pick one with `--to <name>`, or set
   `to = "…"` in the config file.
 * **The receiver stays black**: on Hyprland, see

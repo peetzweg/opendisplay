@@ -66,8 +66,14 @@ over USB (dial a tunneled port), and one code path serves both transports.
   coalescing them reads as input lag.
 * A receiver serves **one sender at a time**. When a new inbound connection
   arrives while one is active, the receiver MUST adopt the new connection
-  and drop the old one (the official receiver cancels the old connection
-  and resets its decoder state).
+  and drop the old one once the newcomer proves itself with bytes: it
+  greets the newcomer with a provisional `hello` (without `cursorPort`),
+  keeps serving the live sender, and switches when the newcomer's first
+  bytes arrive, handing those bytes to the new session. A newcomer that
+  closes or stays silent is dropped and the live session is untouched; it
+  may be the loser of a sender's dial race or a probe (6.4). Adopting
+  cancels the old connection, resets decoder state and sends the full
+  `hello`.
 
 ## 2. Transport bindings
 
@@ -113,6 +119,14 @@ Android has no usbmuxd. The official sender reaches an Android receiver on
 the cable through Android Open Accessory (AOA), which works on any Android
 device with no developer settings. The byte stream is exactly the one
 described in this document, and the receiver opens it with `hello`.
+
+These control requests are vendor requests, and devices other than Android
+may act on them: a USB Ethernet chip common in docks drops its network link
+on `GET_PROTOCOL`. So a sender MUST NOT ask a device that has not answered
+before unless it exposes an Android USB function: an adb interface
+(`FF/42/01`) or an interface whose name contains `MTP` (`06/01/01`, or
+`FF/FF/00` on older kernels). A stall during discovery is final for that
+attachment.
 
 The sender sends the Android Open Accessory control requests
 (`GET_PROTOCOL` 51, `SEND_STRING` 52, `START` 53) with this identity:
@@ -288,7 +302,7 @@ Coordinates use the conventions of section 7.
 
 | `type` | Since | Fields | Purpose |
 |---|---|---|---|
-| `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `device`?, `id`?, `pv`?, `displayMaxFrameRate`?, `videoCaps`?, `panel`? | Identify the panel and receiver video capabilities; (re)sent on connect and on rotation |
+| `hello` | pv 1 | `pixelsWide`, `pixelsHigh`, `scale`, `device`?, `id`?, `pv`?, `displayMaxFrameRate`?, `videoCaps`?, `panel`? | Identify the panel and receiver video capabilities; (re)sent on connect and whenever the panel changes |
 | `ping` | pv 1 | `t` | Liveness + clock sync probe |
 | `touch` | pv 1 | `phase`, `x`, `y`, `t`?, `button`? | Finger input |
 | `scroll` | pv 1 | `dx`, `dy`, `phase`? | Two-finger scroll |
@@ -308,7 +322,8 @@ nothing before it arrives.
 * `pixelsWide`, `pixelsHigh` (int): **deprecated**, superseded by `panel`
   (section 6.7) and removed at the next `pv` bump. The desktop the receiver
   wants, as pixels of a 2x desktop, in the **current orientation**
-  (portrait swaps them). On iOS these are the physical pixels; the Mac
+  (portrait swaps them). On iOS these are the physical pixels of the
+  app's window (the whole panel when it fills the screen); the Mac
   receiver sends its point size x 2, which is its physical pixels only on
   a Retina panel. A sender that receives a valid `panel` ignores them.
 * `scale` (number): **deprecated** with them. The device's UI scale
@@ -344,10 +359,13 @@ nothing before it arrives.
   no bump.
 
 A receiver MUST re-send `hello` on the live connection whenever its
-announced dimensions change (rotation). The sender rebuilds the display in
-response; the official sender debounces this by 300 ms so an orientation
-flurry settles into one rebuild, and replies to *every* `hello` with a
-fresh `welcome` (receivers treat repeats idempotently).
+announced dimensions change (rotation, a fold, a window resize). The
+sender rebuilds the display in response; the official sender rebuilds
+25 ms after a lone change (hellos within those 25 ms count as the same
+change) and, for a burst (a change within 500 ms of the previous one),
+waits until 150 ms after the last so it settles into one rebuild. It
+replies to *every* `hello` with a fresh `welcome` (receivers treat
+repeats idempotently).
 
 **`ping`** carries `t` (number): milliseconds since the Unix epoch on the
 receiver's clock. The sender MUST reply with `pong` echoing `t` (section
@@ -616,7 +634,7 @@ desktop/quality policy, then reports the result with `streamConfig`.
 
 Every official receiver advertises H.264. A receiver with a hardware HEVC
 decoder also advertises HEVC: the Mac receiver up to 5120×2880 at 60 FPS, the
-iOS receiver up to its panel's long side on either axis at 60 FPS, within any
+iOS receiver up to its window's long side on either axis at 60 FPS, within any
 decode budget. HEVC is additive: a peer that ignores the new capability keeps
 H.264.
 
@@ -723,9 +741,13 @@ swaps every pair).
   size the receiver itself currently runs (a Mac's "looks like" display
   setting). Absent means the receiver has no such setting.
 
+A receiver that runs in a window smaller than its screen (iPad Split View
+or Stage Manager, one half of a foldable's split) reports that window's
+pixels, and a foldable reports the screen it is currently on.
+
 The receiver MUST re-send `hello` whenever any `panel` value changes
-(rotation, a display-mode change on a Mac), even if the deprecated fields
-did not change.
+(rotation, a fold or unfold, a window resize, a display-mode change on a
+Mac), even if the deprecated fields did not change.
 
 A sender uses `panel` only when `pixelsWide/High` are integers of at least
 2, `scale` is a finite number above 0, and `pointsWide/High` are both
@@ -852,7 +874,8 @@ Rules already stated elsewhere, gathered:
 * `hello` first, on every connection (6.1). Video starts only after it.
 * First frame after (re)connect is an IDR (5.3).
 * Rotation is a re-`hello` on the live connection, not a reconnect (6.1).
-* A new inbound connection replaces the current one (section 1).
+* A new inbound connection replaces the current one once it sends bytes
+  (section 1).
 * Silence over ~5 s is death (8.2); `sleeping`/`closing` are best-effort
   courtesies, absence of them means nothing (6.1).
 

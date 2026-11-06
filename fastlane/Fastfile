@@ -137,6 +137,15 @@ platform :ios do
       output_name:      "OpenSidecariOS",
       xcargs:           version_xcargs
     )
+    # 1.30.0 shipped built with the iOS 26 SDK because the runner's default
+    # Xcode was 26.6, and iPhone Duo letterboxed it (issues #446, #448).
+    # Refuse to upload anything built with an older SDK than the one Duo needs.
+    plist = File.join(lane_context[SharedValues::XCODEBUILD_ARCHIVE],
+                      "Products/Applications/OpenSidecariOS.app/Info.plist")
+    sdk = sh("/usr/libexec/PlistBuddy", "-c", "Print :DTPlatformVersion", plist).strip
+    if Gem::Version.new(sdk) < Gem::Version.new("27.1")
+      UI.user_error!("Built with the iOS #{sdk} SDK; iPhone Duo needs 27.1 or later")
+    end
     upload_to_testflight(
       api_key:                           key,
       app_identifier:                    "com.peetzweg.opensidecar.ios",

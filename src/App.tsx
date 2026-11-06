@@ -512,6 +512,15 @@ export default function App() {
               the OS. It's a feature, not a bug: you always know a capture is running.</p>
             </details>
             <details>
+              <summary>Why don't I get notifications while a device is connected?</summary>
+              <p>For the same reason: macOS treats any app that captures the screen as sharing it, and
+              by default hides notifications while the screen is shared. Luna Display and DisplayLink
+              run into the same thing, and no app can opt out. To keep notifications, turn on System
+              Settings → Notifications → <strong>Allow notifications when mirroring or sharing the
+              display</strong>. That setting covers real screen sharing too, such as in a video
+              call.</p>
+            </details>
+            <details>
               <summary>WiFi mode can't find my iPhone — why?</summary>
               <p>WiFi discovery needs the <strong>Local Network</strong> permission on <em>both</em>
               sides, and macOS/iOS deny it silently if the prompt was missed: check System Settings →

@@ -13,6 +13,7 @@
 //! encoder = "auto"            # auto | v4l2m2m | x264 | openh264
 //! cursor = "auto"            # auto | video | off; true = auto, false = off
 //! capture = "auto"           # auto | ext | wlr (auto: wlr on Hyprland < 0.57)
+//! tailscale = true           # false: never probe Tailscale peers (#409)
 //!
 //! [receiver."3F2A9C1E-..."]   # id (from `od-sender list`) or Bonjour name
 //! position = "auto-left"
@@ -92,6 +93,7 @@ struct RawConfig {
     cursor: Option<CursorValue>,
     capture: Option<String>,
     workspace: Option<String>,
+    tailscale: Option<bool>,
     #[serde(default)]
     receiver: BTreeMap<String, RawOverride>,
 }
@@ -126,6 +128,8 @@ pub struct Config {
     pub encoder: Option<encoder::Backend>,
     pub capture: Option<CaptureChoice>,
     pub cursor: Option<CursorMode>,
+    /// Try the Tailscale peers when Bonjour finds nothing (default: yes).
+    pub tailscale: Option<bool>,
     /// The top-level per-receiver settings.
     pub defaults: Layer,
     /// `[receiver."<key>"]` tables, by id or Bonjour name.
@@ -178,6 +182,7 @@ impl Config {
                 .capture
                 .map(|c| CaptureChoice::from_str(&c, true).map_err(|m| anyhow!("capture: {m}")))
                 .transpose()?,
+            tailscale: raw.tailscale,
             defaults: layer(raw.position, raw.scale, raw.bitrate_mbps, raw.workspace)?,
             receivers,
         })
@@ -240,6 +245,7 @@ mod tests {
         encoder = "x264"
         cursor = false
         capture = "wlr"
+        tailscale = false
 
         [receiver."3F2A9C1E-AAAA"]
         position = "-1600,0"
@@ -257,6 +263,8 @@ mod tests {
         assert_eq!(c.max_fps, Some(60.0));
         assert_eq!(c.encoder, Some(encoder::Backend::X264));
         assert_eq!(c.capture, Some(CaptureChoice::Wlr));
+        assert_eq!(c.tailscale, Some(false));
+        assert!(Config::parse("tailscale = \"no\"").is_err());
         assert!(Config::parse("capture = \"dmabuf\"").is_err());
         assert_eq!(c.cursor, Some(CursorMode::Off));
         let video = Config::parse("cursor = \"video\"").unwrap();

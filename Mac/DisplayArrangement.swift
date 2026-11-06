@@ -37,19 +37,61 @@ enum DisplayArrangement {
     /// overlap; WindowServer then snaps it, and the snap becomes the next
     /// saved position (#203).
     ///
+    /// Pass `resizing` when the display already exists and only changes
+    /// mode (a fold, a rotation): it is then left out of the layout the
+    /// placement is checked against, and where it sits now is the fallback
+    /// when the saved spot does not fit today's layout.
+    ///
     /// Nil on first contact — let macOS choose.
-    static func origin(for size: CGSize, device: String) -> CGPoint? {
+    static func origin(for size: CGSize, device: String,
+                       resizing displayID: CGDirectDisplayID? = nil) -> CGPoint? {
         guard let placement = load(device) else { return nil }
-        if placement.rect.size == size { return placement.rect.origin }
-        let main = CGDisplayBounds(CGMainDisplayID())
-        // Records from before #203 did not store a side. If one already
-        // touches the main display, infer it now so an otherwise clean
-        // existing arrangement also gains the stable behavior on rotation.
-        if let side = placement.side ?? side(of: placement.rect, relativeTo: main, preferring: nil) {
-            return origin(for: size, from: placement.rect, side: side,
-                          relativeTo: main)
+        return origin(for: size, saved: placement.rect, side: placement.side,
+                      main: CGDisplayBounds(CGMainDisplayID()),
+                      others: activeDisplayBounds().filter { $0.id != displayID }.map(\.bounds),
+                      current: displayID.map(CGDisplayBounds))
+    }
+
+    /// Pure policy seam. `others` are the displays already on the desktop,
+    /// never the one being placed; `current` is where that one sits now
+    /// during a live resize.
+    static func origin(for size: CGSize, saved: CGRect, side: Side?, main: CGRect,
+                       others: [CGRect], current: CGRect?) -> CGPoint {
+        let candidate: CGPoint
+        if saved.size == size {
+            candidate = saved.origin
+        } else if let side = side ?? self.side(of: saved, relativeTo: main, preferring: nil) {
+            // Records from before #203 did not store a side. If one already
+            // touches the main display, infer it now so an otherwise clean
+            // existing arrangement also gains the stable behavior on rotation.
+            candidate = origin(for: size, from: saved, side: side, relativeTo: main)
+        } else {
+            candidate = remappedOrigin(from: saved, to: size, against: others)
         }
-        return remappedOrigin(from: placement.rect, to: size, against: activeDisplayBounds())
+        // A record written under another layout (a monitor that is gone, a
+        // neighbour that moved) asks for a spot WindowServer must snap. On a
+        // live display that snap is a second display reconfiguration on
+        // every fold or rotation, ~0.5 s of stale picture each, and the
+        // record never heals because snaps are not saved (#203). The display
+        // already sits somewhere valid: keep it on its side from there.
+        guard let current, !fits(CGRect(origin: candidate, size: size), among: others) else {
+            return candidate
+        }
+        let fromCurrent = remappedOrigin(from: current, to: size, against: others)
+        return fits(CGRect(origin: fromCurrent, size: size), among: others) ? fromCurrent : candidate
+    }
+
+    /// Whether WindowServer would take `rect` as asked: it overlaps no
+    /// other display and touches at least one (a shared corner counts).
+    static func fits(_ rect: CGRect, among displays: [CGRect]) -> Bool {
+        var touches = displays.isEmpty
+        for display in displays {
+            let wide = min(rect.maxX, display.maxX) - max(rect.minX, display.minX)
+            let high = min(rect.maxY, display.maxY) - max(rect.minY, display.minY)
+            if wide > 0, high > 0 { return false }
+            if wide >= 0, high >= 0 { touches = true }
+        }
+        return touches
     }
 
     /// The user-visible slot a virtual display occupies relative to the main
@@ -210,12 +252,12 @@ enum DisplayArrangement {
         overlap(of: first, and: second) ?? 0
     }
 
-    private static func activeDisplayBounds() -> [CGRect] {
+    private static func activeDisplayBounds() -> [(id: CGDirectDisplayID, bounds: CGRect)] {
         var count: UInt32 = 0
         guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
-        return ids.prefix(Int(count)).map(CGDisplayBounds)
+        return ids.prefix(Int(count)).map { ($0, CGDisplayBounds($0)) }
     }
 
     private static func key(_ device: String) -> String { "displayOrigin.\(device)" }
