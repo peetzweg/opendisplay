@@ -151,8 +151,20 @@ final class DeviceSession: ObservableObject, Identifiable {
     // The live TCP path runs over a cable (Thunderbolt Bridge / Ethernet)
     // rather than WiFi — reported by the sender once connected.
     @Published var wired = false
+    // The live path is the direct host-to-host cable, not merely wired:
+    // Ethernet through a switch is still a network others share.
+    @Published var directCable = false
+    // The live transport is mutual TLS with a paired receiver (issue #16).
+    @Published var encrypted = false
 
     var transportLabel: String { onUSB ? "USB" : wired ? "Cable" : "WiFi" }
+    /// What the row says about the link's protection. Only USB and the
+    /// direct cable go unlabeled: anything else crosses a network.
+    var securityLabel: String? {
+        if encrypted { return "Encrypted" }
+        if onUSB || directCable { return nil }
+        return "Not encrypted"
+    }
 
     // The Display size control (extend only): the choice for this device
     // and what each choice gives on it, from the latest hello.
@@ -265,10 +277,29 @@ final class SenderController: ObservableObject {
     // same hardware is recognized across transports even when the user
     // renamed the advertised service. @Published so the device list regroups
     // the moment an identity is learned.
-    @Published private var installIDByUDID: [String: String] =
+    @Published var installIDByUDID: [String: String] =
         UserDefaults.standard.dictionary(forKey: "installIDByUDID") as? [String: String] ?? [:] {
         didSet { UserDefaults.standard.set(installIDByUDID, forKey: "installIDByUDID") }
     }
+    // Pairing and the encrypted transport (issue #16) — see WiFiSecurity.swift.
+    var tlsBrowser: NWBrowser?
+    // Receivers whose TLS service is visible: service name -> TXT install id.
+    @Published var secureServices: [String: String] = [:]
+    // Receivers the user chose to reach unencrypted without being asked
+    // again (install id, or session id when the id is unknown).
+    var plaintextApproved = Set(UserDefaults.standard.stringArray(forKey: "plaintextApproved") ?? []) {
+        didSet { UserDefaults.standard.set(Array(plaintextApproved), forKey: "plaintextApproved") }
+    }
+    // Per-target guidance for device rows (why a device is not connected).
+    @Published var wifiNotes: [String: String] = [:]
+    var pairingInFlight = Set<String>()
+    // Install id per Bonjour service name, learned from hellos and pairing:
+    // browse results often arrive without their TXT record.
+    @Published var installIDByWifiName: [String: String] =
+        UserDefaults.standard.dictionary(forKey: "installIDByWifiName") as? [String: String] ?? [:] {
+        didSet { UserDefaults.standard.set(installIDByWifiName, forKey: "installIDByWifiName") }
+    }
+
     private let autoConnectEnabled = UserDefaults.standard.object(forKey: "autostart") == nil
         || UserDefaults.standard.bool(forKey: "autostart")
 
@@ -303,6 +334,7 @@ final class SenderController: ObservableObject {
 
     init() {
         startBrowsing()
+        startBrowsingSecure()
         usbWatcher = UsbmuxDeviceWatcher { [weak self] devices in
             self?.usbmuxDevices = devices
             self?.wiredDevicesChanged()
@@ -395,7 +427,7 @@ final class SenderController: ObservableObject {
 
     // MARK: - Physical-device identity
 
-    private func serviceName(of result: NWBrowser.Result) -> String? {
+    func serviceName(of result: NWBrowser.Result) -> String? {
         if case .service(let name, _, _, _) = result.endpoint { return name }
         return nil
     }
@@ -520,7 +552,7 @@ final class SenderController: ObservableObject {
                   // own opt-out, never this one.
                   !usbDevices.contains(where: { sameDevice(result, $0) }) else { continue }
             Log.info("\(name) appeared on the direct cable — connecting")
-            connect(to: .wifi(result))
+            connect(to: .wifi(result), cableTrusted: true)
         }
     }
 
@@ -561,6 +593,7 @@ final class SenderController: ObservableObject {
         guard !session.onUSB, let portNum = UInt16(port) else { return }
         Log.info("cable attached for \(session.id) — migrating to USB")
         session.onUSB = true
+        session.encrypted = false   // the cable is physical trust
         session.usbUDID = device.udid
         // The match may have been by name only — pin the strong identity so
         // future matching (and the next launch) recognizes the pair.
@@ -576,10 +609,22 @@ final class SenderController: ObservableObject {
         for session in sessions where session.onUSB {
             guard let udid = session.usbUDID, detachedUDIDs.contains(udid),
                   let result = wifiService(for: session) else { continue }
-            Log.info("cable detached for \(session.id) — failing over to WiFi")
+            // Off the cable the stream crosses the network: only encrypted
+            // to a paired receiver, or plain where the user said so for
+            // good. Otherwise no failover — the session ends after its grace.
+            let tls: TLSSessionConfig?
+            switch decideWiFi(result, userInitiated: false) {
+            case .encrypted(let config): tls = config
+            case .plain: tls = nil
+            case .deferred:
+                Log.info("cable detached for \(session.id) — no WiFi failover without encryption or consent")
+                continue
+            }
+            Log.info("cable detached for \(session.id) — failing over to WiFi\(tls != nil ? " (encrypted)" : "")")
             session.onUSB = false
+            session.encrypted = tls != nil
             session.wifiServiceName = serviceName(of: result)
-            session.sender.switchTransport(to: .tcp(result.endpoint))
+            session.sender.switchTransport(to: .tcp(result.endpoint, tls: tls))
         }
     }
 
@@ -679,13 +724,28 @@ final class SenderController: ObservableObject {
     }
 
     func connect(to target: ConnectionTarget, userInitiated: Bool = false,
-                 awaitingWake: Bool = false) {
+                 awaitingWake: Bool = false, cableTrusted: Bool = false,
+                 plaintextApprovedOnce: Bool = false) {
         let id = target.sessionID
         if let existing = session(for: id) {
             // A failed session holds no pipeline — replace the corpse
             // instead of letting it swallow the fresh attempt.
             guard existing.failed else { return }
             end(existing)
+        }
+
+        // Over the network: encrypted to a paired receiver, pairing first
+        // for one that can, explicit consent for one that cannot
+        // (PROTOCOL.md 11). Decided before anything else is touched, so a
+        // deferred connect leaves running sessions alone.
+        var tlsConfig: TLSSessionConfig?
+        if case .wifi(let result) = target {
+            switch decideWiFi(result, userInitiated: userInitiated,
+                              cableTrusted: cableTrusted, approvedOnce: plaintextApprovedOnce) {
+            case .encrypted(let config): tlsConfig = config
+            case .plain: break
+            case .deferred: return
+            }
         }
 
         // Never create a second session for the same physical device — the
@@ -731,7 +791,7 @@ final class SenderController: ObservableObject {
                 transport = wiredTransport(udid: udid, port: portNum)
             }
         case .wifi(let result):
-            transport = .tcp(result.endpoint)
+            transport = .tcp(result.endpoint, tls: tlsConfig)
         }
 
         let name = label(for: target)
@@ -743,6 +803,8 @@ final class SenderController: ObservableObject {
         if case .wifi(let result) = target {
             session.wifiServiceName = serviceName(of: result)
         }
+        session.encrypted = tlsConfig != nil
+        attachSecurityHandlers(session)
         sender.onStatus = { [weak session] text in
             // Retry loops re-announce the same status every second (e.g. the
             // asleep wait) — only a change is worth the UI churn and the log line.
@@ -763,6 +825,9 @@ final class SenderController: ObservableObject {
             }
             if case .usb(let udid?) = session.target, let installID = info.id {
                 self.installIDByUDID[udid] = installID
+            }
+            if let name = session.wifiServiceName, let installID = info.id {
+                self.installIDByWifiName[name] = installID
             }
             self.dedupeSessions()
             // The learned identity may reveal that this WiFi session's device
@@ -809,8 +874,14 @@ final class SenderController: ObservableObject {
             Log.info("display identity for \(session.id) moved to offset \(totalOffset) — "
                 + "macOS saved hostile state for the old one")
         }
+        sender.onSecurity = { [weak session] secure in
+            session?.encrypted = secure
+        }
         sender.onTransportPath = { [weak session] wired in
             session?.wired = wired
+        }
+        sender.onDirectLink = { [weak session] direct in
+            session?.directCable = direct
         }
         sender.onPeerClosed = { [weak self, weak session] in
             // The receiver app quit — a deliberate goodbye, so no reconnect
@@ -871,7 +942,7 @@ final class SenderController: ObservableObject {
         connect(to: target, userInitiated: true)
     }
 
-    private func end(_ session: DeviceSession) {
+    func end(_ session: DeviceSession) {
         session.sender.stop()
         sessions.removeAll { $0.id == session.id }
     }
@@ -1066,6 +1137,7 @@ struct ContentView: View {
                             // often before lockdown resolved the real name.
                             SessionRow(title: entry.name, session: session,
                                        controller: controller)
+                                .contextMenu { securityMenu(for: entry) }
                         } else {
                             HStack(alignment: .firstTextBaseline) {
                                 Circle()
@@ -1076,6 +1148,12 @@ struct ContentView: View {
                                     Text(entry.transportLabel)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    if let note = entry.wifiTarget.flatMap({ controller.wifiNotes[$0.sessionID] }) {
+                                        Text(note)
+                                            .font(.caption)
+                                            .foregroundStyle(.orange)
+                                            .lineLimit(3)
+                                    }
                                 }
                                 Spacer()
                                 if let target = entry.preferredTarget {
@@ -1085,6 +1163,7 @@ struct ContentView: View {
                                     .controlSize(.small)
                                 }
                             }
+                            .contextMenu { securityMenu(for: entry) }
                         }
                     }
                 }
@@ -1230,6 +1309,23 @@ struct ContentView: View {
 
 /// One connected device: live status, throughput, reconnect + disconnect.
 @MainActor
+extension ContentView {
+    /// Pairing and consent controls for a device row (issue #16).
+    @ViewBuilder
+    func securityMenu(for entry: SenderController.DeviceEntry) -> some View {
+        if let id = controller.pairedReceiverID(for: entry) {
+            Button("Forget Pairing") {
+                controller.forgetPairing(receiverID: id)
+                // A "no longer accepts this Mac" note is resolved by this.
+                if let target = entry.wifiTarget { controller.note(target, nil) }
+            }
+        }
+        if controller.hasPlaintextApproval(entry) {
+            Button("Ask Before Connecting Unencrypted") { controller.revokePlaintextApproval(entry) }
+        }
+    }
+}
+
 struct SessionRow: View {
     let title: String
     @ObservedObject var session: DeviceSession
@@ -1259,6 +1355,14 @@ struct SessionRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                if let security = session.securityLabel {
+                    Label(security, systemImage: session.encrypted ? "lock.fill" : "lock.open")
+                        .font(.caption)
+                        .foregroundStyle(session.encrypted ? Color.secondary : Color.orange)
+                        .help(session.encrypted
+                              ? "Paired: this connection is encrypted with mutual TLS."
+                              : "This connection crosses the network unencrypted.")
+                }
             }
             Spacer()
             // A live session recovers on its own (liveness watchdog, redial,

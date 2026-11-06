@@ -11,6 +11,20 @@ packages:
     # 2.x is the current major (latest 2.9.x) and the first Sparkle line to
     # support SPM. `from:` allows compatible 2.x updates.
     from: "2.6.0"
+  # Pairing and the encrypted transport (issue #16, PROTOCOL.md 11).
+  # Self-signed X.509 identities for pinned mutual TLS (from #151).
+  SwiftCertificates:
+    url: https://github.com/apple/swift-certificates
+    from: "1.19.1"
+  # Imported directly by Shared/TrustStore.swift (DER.Serializer).
+  SwiftASN1:
+    url: https://github.com/apple/swift-asn1
+    from: "1.1.0"
+  # SRP-6a for code pairing: CryptoKit has no PAKE. Brings swift-crypto
+  # and big-num (BoringSSL bignums) with it.
+  SRP:
+    url: https://github.com/adam-fowler/swift-srp
+    from: "2.4.0"
 schemes:
   OpenSidecarMac:
     build:
@@ -49,6 +63,12 @@ targets:
       - Shared
     dependencies:
       - package: Sparkle
+      - package: SwiftCertificates
+        product: X509
+      - package: SwiftASN1
+        product: SwiftASN1
+      - package: SRP
+        product: SRP
     info:
       path: Mac/Info.plist
       properties:
@@ -58,7 +78,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         NSLocalNetworkUsageDescription: OpenDisplay connects to your iPad or iPhone over the local network in WiFi mode.
-        NSBonjourServices: ["_opensidecar._tcp"]
+        NSBonjourServices: ["_opensidecar._tcp", "_od-tls._tcp", "_od-pair._tcp"]
         LSApplicationCategoryType: public.app-category.utilities
         # --- Sparkle auto-update (issue #52) ---
         # The appcast feed is hosted on the landing-page site at the custom
@@ -113,6 +133,12 @@ targets:
       - Mac/CheckForUpdatesView.swift
     dependencies:
       - package: Sparkle
+      - package: SwiftCertificates
+        product: X509
+      - package: SwiftASN1
+        product: SwiftASN1
+      - package: SRP
+        product: SRP
     info:
       path: MacReceiver/Info.plist
       properties:
@@ -121,7 +147,7 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSLocalNetworkUsageDescription: OpenDisplay Receiver advertises itself on the local network so another Mac can connect and use this Mac as a display.
-        NSBonjourServices: ["_opensidecar._tcp"]
+        NSBonjourServices: ["_opensidecar._tcp", "_od-tls._tcp", "_od-pair._tcp"]
         NSAppleEventsUsageDescription: OpenDisplay Receiver shuts this Mac down when the connected Mac asks it to.
         LSApplicationCategoryType: public.app-category.utilities
         # Own Sparkle feed (separate DMG, same signing key); published by
@@ -163,10 +189,14 @@ targets:
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/Protocol.swift
+      - Shared/Pairing.swift
       - Shared/DirectCable.swift
       - Shared/LogSnapshot.swift
       - MacReceiver/FullscreenPreference.swift
       - iOS/ReceiverPanelGeometry.swift
+    dependencies:
+      - package: SRP
+        product: SRP
     settings:
       base:
         # A hostless test bundle: the sources under test are compiled straight
@@ -187,6 +217,13 @@ targets:
     sources:
       - iOS
       - Shared
+    dependencies:
+      - package: SwiftCertificates
+        product: X509
+      - package: SwiftASN1
+        product: SwiftASN1
+      - package: SRP
+        product: SRP
     info:
       path: iOS/Info.plist
       properties:
@@ -201,7 +238,7 @@ targets:
         UIRequiresFullScreen: true
         UIRequiresFullScreenIgnoredStartingWithVersion: "27"
         NSLocalNetworkUsageDescription: OpenDisplay advertises itself on the local network so your Mac can connect over WiFi.
-        NSBonjourServices: ["_opensidecar._tcp"]
+        NSBonjourServices: ["_opensidecar._tcp", "_od-tls._tcp", "_od-pair._tcp"]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

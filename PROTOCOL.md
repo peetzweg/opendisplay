@@ -60,8 +60,11 @@ over USB (dial a tunneled port), and one code path serves both transports.
   messages, and telemetry all share it, in both directions. The one
   optional exception is the UDP cursor side channel (section 6.3), which
   carries nothing a receiver cannot also get over TCP.
-* There is no TLS and no authentication at `pv` 3. The protocol is designed
-  for trusted local networks and direct cables. Implementations SHOULD
+* The connection on port 9000 has no TLS and no authentication. Receivers
+  that support it also serve the same protocol over **mutual TLS 1.3**
+  to senders they have paired with (section 11); a sender reaches a
+  receiver that cannot encrypt only after its user agreed to that, and
+  the direct cable stays plain. Implementations SHOULD
   disable Nagle's algorithm (TCP_NODELAY); input events are tiny packets and
   coalescing them reads as input lag.
 * A receiver serves **one sender at a time**. When a new inbound connection
@@ -859,7 +862,162 @@ Mechanics at a glance (the policy behind them lives in COMPATIBILITY.md):
 | 3 (additive) | `hello.videoCaps`, `displayMaxFrameRate`, and `streamConfig` (6.5); legacy peers remain implicit H.264 |
 | 3 (additive) | `hello.power` and `power` (6.6); direct cable only |
 | 3 (additive) | `hello.panel` (6.7); `pixelsWide/High/scale` deprecated, removed at the next bump |
+| 3 (additive) | Pairing and mutual TLS (section 11): TXT `sec`, `hello.sec`, `_od-tls._tcp` and `_od-pair._tcp`, `unpair`; no bump: everything rides new ports, and the plain port is unchanged |
 | 4 (reserved) | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
+
+## 11. Pairing and the encrypted transport
+
+Everything on port 9000 crosses the network in the clear. A receiver that
+supports this section also serves the identical protocol (sections 3 to 9,
+byte for byte inside the TLS stream) over mutual TLS 1.3 to senders it has
+**paired** with. Pairing happens once per sender/receiver install pair: the
+receiver shows a 6-digit code, the user types it on the sender, and each
+side pins the other's public key. Every later connection authenticates
+against those pins. Nothing in this section changes port 9000.
+
+### 11.1 Ports, discovery and capability
+
+With base port `P` (9000):
+
+| Port | Bonjour service (same instance name as `_opensidecar._tcp`) | Carries |
+|---|---|---|
+| `P + 2` TCP | `_od-tls._tcp` | The protocol over mutual TLS 1.3 (11.4) |
+| `P + 3` TCP | `_od-pair._tcp` | Pairing (11.3), plain TCP |
+
+(`P + 1` is the UDP cursor channel, 6.3.)
+
+* A receiver offers this section only while it holds a usable identity and
+  both listeners are up. It then advertises `sec=1` in its main TXT
+  record, publishes both services under its own service name (their TXT
+  carries `id`), and adds `"sec": {"tls": P+2, "pair": P+3}` to its
+  `hello`. Without an identity it offers none of these and stays a plain
+  receiver.
+* A sender dials the TLS and pairing services **by name** (the main
+  record only ever resolves to `P`), or `host:P+2` / `host:P+3` for a
+  literal address. Senders SHOULD treat a visible `_od-tls._tcp` service
+  as the capability signal: browse results often lack the main TXT.
+
+### 11.2 Identities and pins
+
+* Each install has a long-term **P-256** key and a self-signed X.509
+  certificate for it (ECDSA-SHA256, `CN` = install id, BasicConstraints
+  CA:false, critical). Certificates carry no trust: only the key is pinned.
+* A **pin** is the DER SubjectPublicKeyInfo of the peer's key (91 bytes
+  for an uncompressed P-256 point), stored under the peer's **install id**:
+  the receiver's `hello.id` / TXT `id`, and for senders the id they send in
+  `pairStart`.
+* Pins are compared as exact bytes, so both sides MUST encode the SPKI
+  canonically (uncompressed point, `id-ecPublicKey` + `prime256v1`).
+
+### 11.3 Pairing (`_od-pair._tcp`)
+
+Plain TCP, framed like section 3: `[UInt32 big-endian length][UTF-8 JSON
+object]`, at most 16 KiB per frame. Four messages, sender first:
+
+| `type` | Direction | Fields |
+|---|---|---|
+| `pairStart` | S -> R | `pv` (1), `id` (sender install id), `name` (display only), `A` |
+| `pairChallenge` | R -> S | `id` (receiver install id), `name`, `salt`, `B` |
+| `pairProof` | S -> R | `M1`, `spki` (base64), `mac` (base64) |
+| `pairDone` | R -> S | `M2`, `spki` (base64), `mac` (base64) |
+| `pairError` | R -> S | `reason`: `code`, `expired`, `locked` (+ `retryAfter` seconds), `malformed`, `identity`, `unavailable` |
+
+The code is proven with **SRP-6a** and never used as a key, so a recorded
+pairing gives nothing to brute-force offline. Parameters: the RFC 5054
+3072-bit group (`N`, `g = 5`), `H` = SHA-256, identity `I` =
+`"opendisplay-pair"`, password `P` = the six ASCII digits. `PAD(x)` is `x`
+big-endian, left-padded with zeros to the 384-byte length of `N`; `|` is
+concatenation; values travel as lowercase hex (`A`, `B`, `salt`, `M1`,
+`M2`).
+
+```
+k  = H(PAD(N) | PAD(g))
+x  = H(salt | H(I | ":" | P))            receiver: v = g^x mod N, fresh 16-byte salt
+A  = g^a mod N                            sender, a random
+B  = (k*v + g^b) mod N                    receiver, b random
+u  = H(PAD(A) | PAD(B))
+S  = (B - k*g^x)^(a + u*x) mod N          sender
+S  = (A * v^u)^b mod N                    receiver
+K  = H(PAD(S))
+M1 = H((H(PAD(N)) XOR H(PAD(g))) | H(I) | salt | PAD(A) | PAD(B) | K)
+M2 = H(PAD(A) | M1 | K)
+```
+
+Each side MUST reject a peer value `≡ 0 mod N` (`A` on the receiver, `B`
+on the sender). The long-term keys are then bound to the code:
+
+```
+IK  = HKDF-SHA256(ikm = K, salt = "OpenDisplay-Pair-v1", info = "identity", L = 32)
+mac = HMAC-SHA256(IK, LP(role) | LP(id) | LP(spki))
+```
+
+where `LP(x)` is `x` prefixed with its byte length as a big-endian UInt32,
+`role` is `"sender"` in `pairProof` and `"receiver"` in `pairDone`, and
+`id` is that side's install id.
+
+* **Receiver.** On `pairStart` it draws a uniform code, salt and `b`,
+  shows the code with the sender's `name`, and answers `pairChallenge`.
+  On `pairProof` it verifies `M1` (else `pairError code`) and the sender's
+  `mac`; only then it pins the sender's `spki` under the `pairStart.id`,
+  answers `pairDone`, and closes. One attempt at a time, fresh code per
+  attempt, codes expire after 120 s (`expired`). A wrong code SHOULD hide
+  the code at once and answer after a delay (1 s); after 5 wrong codes in
+  15 minutes pairing is refused for 5 minutes (`locked`).
+* **Sender.** It asks its user for the code once `pairChallenge` arrives
+  (so the code is on screen), answers `pairProof`, and on `pairDone`
+  verifies `M2` and the receiver's `mac` before pinning the receiver's
+  `spki` under `pairChallenge.id`. A sender that knows the receiver's id
+  (TXT, an earlier `hello`) MUST check that `pairChallenge.id` matches.
+
+### 11.4 The encrypted session (`_od-tls._tcp`)
+
+* TLS 1.3 only (min = max), both sides present their certificate, the
+  receiver requires one. Each side accepts the peer only if the peer
+  certificate's SPKI equals a pin: the receiver any of its paired senders,
+  the sender the one receiver it dialed. Chain validation is replaced by
+  pinning, not added to it.
+* Inside, sections 3 to 9 apply unchanged, with two differences: the
+  receiver never offers `cursorPort` (the cursor rides the TLS stream) and
+  ignores datagram flows while an encrypted session is live, and `power`
+  stays cable-only as in 6.6.
+* A **plain** connection from the network MUST NOT replace a live
+  encrypted session (section 1's newcomer rule does not apply to it). A
+  connection over USB loopback or the direct cable (6.6's test) still
+  does: the cable is physical trust.
+* A sender that holds a pin for a receiver MUST NOT fall back to port
+  9000 over the network. When the handshake keeps failing at the TLS
+  layer the pairing no longer holds on one side; the sender stops and
+  tells its user to forget and pair again.
+
+### 11.5 Unpair
+
+`{"type":"unpair","fromID":…,"toID":…}`, either direction, only on an
+encrypted session: the side whose user chose Forget sends it before
+closing. The peer drops `fromID`'s pin if `fromID` is the authenticated
+peer of this session and `toID` is its own id, and closes the session.
+
+### 11.6 Sender policy (non-normative for the wire, normative for the official apps)
+
+* Paired receiver: always 11.4.
+* Unpaired receiver that offers 11.1: pair first; never plain over the
+  network.
+* Receiver that cannot encrypt (no `sec`: older versions, today's Linux
+  and Android receivers): plain only after the user confirmed, for this
+  device, that the stream would cross the network unencrypted. Automatic
+  connects (launch reconnect, cable unplug failover) never send plain
+  without a remembered confirmation.
+* The direct cable and USB stay plain, without pairing or confirmation.
+
+### 11.7 Known gaps
+
+* The receiver serves plain port 9000 to any sender, as before; a sender
+  that cannot encrypt still works. Requiring encryption on the receiver
+  side is a future option.
+* Pairing is unauthenticated until the code is proven: anyone on the
+  network can make a receiver show a code (and so be noticed doing it),
+  but cannot complete pairing without reading it off the receiver.
+* A remembered confirmation for a receiver that cannot encrypt is keyed
+  by its advertised id, which is not authenticated.
 
 ---
 
@@ -918,3 +1076,4 @@ This file is versioned by git; the authoritative change log is
 | 2026-08-26 | Additive: `hello.cursorPort` and the UDP cursor side channel (section 6.3) |
 | 2026-09-30 | Additive: `hello.power` and `power`, direct cable only (section 6.6) |
 | 2026-10-01 | Additive: `hello.panel`, the sender decides the desktop (section 6.7); limits are in the current orientation (6.5); `pixelsWide/High/scale` deprecated |
+| 2026-11-04 | Additive: code pairing (SRP-6a) and pinned mutual TLS 1.3 on new ports (section 11, issue #16) |

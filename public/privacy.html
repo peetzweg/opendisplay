@@ -173,16 +173,21 @@
     </table>
     <p>Every permission is used solely for the function above, on your own machines.</p>
 
-    <h2>An honest caveat: WiFi transport is not yet encrypted</h2>
+    <h2>WiFi encryption, and where it does not apply</h2>
     <div class="note">
-      <p>USB streaming is point-to-point over your cable. WiFi streaming, however,
-      currently travels <strong>unencrypted across your local network</strong> —
-      someone with access to the same network could in principle observe the video
-      stream. On a trusted home or office network this is rarely a concern, but on
-      shared or public WiFi we recommend USB mode. The Linux sender always streams
-      over the network, so use it only on a network you trust. Encrypted WiFi transport with
-      device pairing is on the roadmap
-      (<a href="https://github.com/peetzweg/opendisplay/issues/16">issue&nbsp;#16</a>).
+      <p>USB and Thunderbolt streaming is point-to-point over your cable and is not
+      encrypted. Over WiFi, a Mac pairs once with an iPhone, iPad or Mac receiver
+      using a 6-digit code the receiver shows; from then on the two connect with
+      <strong>mutual TLS 1.3</strong>, each pinned to the other's key, so nobody else on
+      the network can watch the stream or pose as either device. The keys and the
+      list of paired devices stay in each device's Keychain and can be removed with
+      Forget.</p>
+      <p>Receivers that cannot encrypt yet (older app versions, and today's Linux
+      and Android receivers) still work over WiFi, but the Mac connects to them only
+      after you confirm that the stream will cross your network
+      <strong>unencrypted</strong>. The Linux sender does not encrypt yet either, so use it
+      only on a network you trust. Background:
+      <a href="https://github.com/peetzweg/opendisplay/issues/16">issue&nbsp;#16</a>.
       A privacy page that didn't tell you this wouldn't be worth linking to.</p>
     </div>
 

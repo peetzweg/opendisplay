@@ -92,6 +92,8 @@ struct ReceiverScreen: View {
                 } else {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
+                // Pairing code (issue #16): above everything, streaming or not.
+                PairingCodeOverlay(receiver: model.receiver)
             }
             // The window, not this view: a sheet, the keyboard or the
             // hidden status bar change the view's frame but not the panel.
@@ -373,6 +375,8 @@ struct SettingsView: View {
                                    value: "\(Int(receiver.videoSize.width))×\(Int(receiver.videoSize.height)) @ \(receiver.fps) fps")
                     }
                 }
+
+                PairedSendersSection(receiver: receiver)
 
                 Section {
                     // Isolated from the receiver: the Status section above

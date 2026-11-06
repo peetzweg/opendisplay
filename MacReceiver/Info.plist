@@ -27,6 +27,8 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_opensidecar._tcp</string>
+		<string>_od-tls._tcp</string>
+		<string>_od-pair._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenDisplay Receiver advertises itself on the local network so another Mac can connect and use this Mac as a display.</string>

@@ -13,6 +13,7 @@ struct ReceiverSections: View {
         // subview because nested ObservableObjects don't republish.
         if let receiver = controller.receiver {
             ReceiverStatusSection(receiver: receiver, controller: controller)
+            PairingPromptSection(receiver: receiver)
         }
 
         Section {
@@ -21,6 +22,10 @@ struct ReceiverSections: View {
             Text("Name")
         } footer: {
             Text("How this Mac appears in the other Mac's Devices list.")
+        }
+
+        if let receiver = controller.receiver {
+            PairedSendersSection(receiver: receiver)
         }
 
         Section {
@@ -38,6 +43,25 @@ struct ReceiverSections: View {
                   systemImage: "arrow.up.left.and.arrow.down.right")
         }
         .font(.subheadline)
+    }
+}
+
+/// The pairing code in the panel (issue #16); the video window shows the
+/// same card as an overlay when it is open.
+private struct PairingPromptSection: View {
+    @ObservedObject var receiver: StreamReceiver
+
+    var body: some View {
+        if let prompt = receiver.pairingPrompt {
+            Section {
+                PairingCodeCard(prompt: prompt)
+                    .frame(maxWidth: .infinity)
+            }
+        } else if let notice = receiver.pairedNotice {
+            Section {
+                Label(notice, systemImage: "checkmark.seal.fill")
+            }
+        }
     }
 }
 
