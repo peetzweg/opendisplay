@@ -10,12 +10,12 @@ updated: 2026-10-23
 
 OpenDisplay has its own [Linux sender (beta)](/docs/linux/), `od-sender`, for
 Wayland desktops: Hyprland, plus experimental Sway, KDE Plasma and GNOME
-backends. Start there on Wayland.
+backends, and an experimental X11 backend over Wi-Fi. Start there.
 
 Two things the official sender does **not** do yet are where the community
 projects below help:
 
-- **X11 sessions** (Linux Mint Cinnamon, Xfce, MATE, Ubuntu on Xorg, …):
+- **X11 over a USB cable** (Linux Mint Cinnamon, Xfce, MATE, Ubuntu on Xorg, …):
   use [opendisplay-x11](#opendisplay-x11-for-x11-desktops).
 - **A USB cable** instead of Wi-Fi: both projects below can use one.
 
@@ -74,8 +74,8 @@ fork of this repository with a Linux sender for **Wayland**.
 
 | | Official `od-sender` | opendisplay-x11 | opendisplay-linux |
 |---|---|---|---|
-| Session | Wayland | X11 | Wayland |
-| Desktops | Hyprland; Sway, KDE Plasma, GNOME experimental | Any X11 desktop | KDE Plasma, Hyprland |
+| Session | Wayland; X11 experimental | X11 | Wayland |
+| Desktops | Hyprland; Sway, KDE Plasma, GNOME, X11 experimental | Any X11 desktop | KDE Plasma, Hyprland |
 | Connection | Wi-Fi | USB cable | Wi-Fi, USB |
 | Receivers | iPhone, iPad, Android, Mac | iPad | iPhone, iPad |
 | Extra hardware | None | A free HDMI or DP++ port | None |
