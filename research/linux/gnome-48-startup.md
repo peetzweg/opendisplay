@@ -148,4 +148,10 @@ If it fails, distinguish these cases from logs while the session is alive:
 - New current mode/virtual display logged, but no iPad video: monitor creation
   succeeded; investigate subsequent capture/encode/transport separately.
 
-Real GNOME 48.7 + iPad validation has not been performed in this workspace.
+The reporter confirmed that the patched sender works with an iPad receiver
+over Wi-Fi on Debian 13 (Trixie), GNOME 48.7 / Wayland, PipeWire 1.4.2 and
+WirePlumber 0.5.8. This is a user-reported real-device result.
+
+Separate results for scale 1 versus scale 2, pointer input, reconnection,
+reconfiguration, and monitor/layout cleanup have not been reported; the steps
+above remain the procedure for checking those cases.
