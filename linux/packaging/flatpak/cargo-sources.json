@@ -1055,6 +1055,19 @@
   {
     "type": "archive",
     "archive-type": "tar-gzip",
+    "url": "https://static.crates.io/crates/gethostname/gethostname-1.1.0.crate",
+    "sha256": "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8",
+    "dest": "cargo/vendor/gethostname-1.1.0"
+  },
+  {
+    "type": "inline",
+    "contents": "{\"package\": \"1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8\", \"files\": {}}",
+    "dest": "cargo/vendor/gethostname-1.1.0",
+    "dest-filename": ".cargo-checksum.json"
+  },
+  {
+    "type": "archive",
+    "archive-type": "tar-gzip",
     "url": "https://static.crates.io/crates/getrandom/getrandom-0.3.4.crate",
     "sha256": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd",
     "dest": "cargo/vendor/getrandom-0.3.4"
@@ -3455,6 +3468,32 @@
     "type": "inline",
     "contents": "{\"package\": \"f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59\", \"files\": {}}",
     "dest": "cargo/vendor/wit-bindgen-0.46.0",
+    "dest-filename": ".cargo-checksum.json"
+  },
+  {
+    "type": "archive",
+    "archive-type": "tar-gzip",
+    "url": "https://static.crates.io/crates/x11rb/x11rb-0.13.2.crate",
+    "sha256": "9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414",
+    "dest": "cargo/vendor/x11rb-0.13.2"
+  },
+  {
+    "type": "inline",
+    "contents": "{\"package\": \"9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414\", \"files\": {}}",
+    "dest": "cargo/vendor/x11rb-0.13.2",
+    "dest-filename": ".cargo-checksum.json"
+  },
+  {
+    "type": "archive",
+    "archive-type": "tar-gzip",
+    "url": "https://static.crates.io/crates/x11rb-protocol/x11rb-protocol-0.13.2.crate",
+    "sha256": "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd",
+    "dest": "cargo/vendor/x11rb-protocol-0.13.2"
+  },
+  {
+    "type": "inline",
+    "contents": "{\"package\": \"ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd\", \"files\": {}}",
+    "dest": "cargo/vendor/x11rb-protocol-0.13.2",
     "dest-filename": ".cargo-checksum.json"
   },
   {

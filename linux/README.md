@@ -30,6 +30,7 @@ Tested on **Omarchy / Hyprland 0.56 on Apple silicon (Asahi Linux)**; x86_64
 is expected to work and needs testers. Sway, KDE Plasma and GNOME have their
 own backends, marked **experimental**: each passes an automated test on a
 headless copy of that desktop, but none has run on a real desktop session yet.
+X11 sessions have an experimental backend too.
 Reports are very welcome ([#299](https://github.com/peetzweg/opendisplay/issues/299)).
 
 | | Setup |
@@ -37,8 +38,9 @@ Reports are very welcome ([#299](https://github.com/peetzweg/opendisplay/issues/
 | **Tested** | Arch / Omarchy, Hyprland 0.56, aarch64 (Asahi Linux on an M1 Pro), CPU encoding. Receivers: iPhone (App Store), Mac receiver app (Intel iMac) |
 | **Expected to work** | Arch / Omarchy on x86_64. Any distro with Hyprland 0.55+. iPad and Android (Google Play beta) as receivers: Android streamed fine in a first session (Pixel 10a, 53 fps, 33 ms), but touch, scroll, rotation, lock and quit are not checked yet |
 | **Experimental** | **Sway 1.10+**, **KDE Plasma 6.8+** (6.7 and older with the desktop entry in place, see [KDE Plasma](#kde-plasma)), **GNOME 50+** (older GNOME may work, untested). Verified on headless desktops only |
+| **Experimental on X11** | **Any desktop on Xorg** with a free video connector (most Intel and AMD laptops). Tried on KDE Plasma 5.27, Intel Iris Xe, with an iPhone; see [X11](#x11) |
 | **Existing outputs only** | niri, COSMIC, river, labwc, Wayfire and similar: `od-sender run --output <name>` streams an output you created yourself, if the compositor offers the screen-capture and virtual-pointer protocols `od-sender doctor` lists |
-| **Not supported yet** | X11 sessions, Hyprland older than 0.55, Flatpak, SteamOS Gaming Mode, USB cable transport, HEVC, Apple Pencil pressure (mapped to a plain pointer), audio, mirror mode |
+| **Not supported yet** | Hyprland older than 0.55, Flatpak, SteamOS Gaming Mode, USB cable transport, HEVC, Apple Pencil pressure (mapped to a plain pointer), audio, mirror mode |
 
 On an unsupported desktop `od-sender` exits with a message that names what is
 missing.
@@ -145,7 +147,8 @@ a second, only when Bonjour found nothing; `tailscale = false` in the config
 file turns it off. `run --wait` does not try Tailscale: give it the address
 (`--to <tailscale-ip>:9000`).
 
-`od-sender` detects your desktop (Hyprland, Sway, KDE Plasma or GNOME) and
+`od-sender` detects your desktop (Hyprland, Sway, KDE Plasma, GNOME or an X11
+session) and
 creates the virtual display there, by default to the right of your current
 monitors; `--backend` overrides the choice. Once it is up, `run` prints one
 line such as `Extending onto iPhone: 852x393 logical at 3x (od-3f9a1c, right
@@ -162,7 +165,7 @@ gives up.
 Stop the sender with Ctrl+C, `SIGTERM` (what `systemctl --user stop` sends)
 or `SIGHUP` (closing its terminal): each removes the virtual display before
 exiting. After a crash or `kill -9` the virtual display stays behind on
-Hyprland and Sway; `od-sender clean` removes it, and the next `run` for the
+Hyprland, Sway and X11; `od-sender clean` removes it, and the next `run` for the
 same receiver reuses it. KDE Plasma and GNOME remove it themselves.
 
 Only one sender can drive a receiver at a time. A second `run` for the same
@@ -181,8 +184,8 @@ Useful `run` options:
 | `--encoder` | `auto` | `auto`, `v4l2m2m`, `x264` or `openh264` |
 | `--cursor` | `auto` | `auto`, `video` (always paint the cursor into the video) or `off`; `--no-cursor` is `off`. `auto` sends the cursor separately when the receiver and desktop support it, which today means never on Hyprland |
 | `--capture` | `auto` | Screen-capture protocol on Hyprland and Sway: `auto`, `ext` or `wlr`. `auto` uses `wlr` on Hyprland before 0.57, whose `ext` capture can crash when a display disappears |
-| `--workspace` | next free one | Show this workspace (name or number) on the virtual display, keeping your focus where it is. Hyprland and Sway; ignored with a warning on KDE Plasma and GNOME |
-| `--backend` | detected | `hyprland`, `wlroots` (Sway), `kde`, `gnome`, or `adopt` with `--output <name>` |
+| `--workspace` | next free one | Show this workspace (name or number) on the virtual display, keeping your focus where it is. Hyprland and Sway; ignored with a warning on KDE Plasma, GNOME and X11 |
+| `--backend` | detected | `hyprland`, `wlroots` (Sway), `kde`, `gnome`, `x11`, or `adopt` with `--output <name>` |
 
 `--instance <index|signature>` (any command) targets one of several running
 Hyprland instances, like `hyprctl -i`; `od-sender doctor` lists them.
@@ -290,6 +293,39 @@ screen-cast and remote-desktop interfaces, so there is no sharing dialog. To
 set the scale and position it applies a temporary display configuration that
 keeps all your other monitors exactly as they are, and GNOME restores your
 layout when the virtual display goes away. Not available from a Flatpak.
+
+### X11
+
+Any desktop running on Xorg (KDE Plasma 5, Cinnamon, Xfce, MATE, GNOME on
+Xorg, i3, …). `od-sender` picks the X11 backend when `XDG_SESSION_TYPE=x11`;
+`--backend x11` forces it.
+
+X11 cannot create a monitor out of nothing, so `od-sender` borrows an unused
+video connector: an HDMI or DisplayPort socket with nothing plugged in, and a
+display controller (CRTC) that no monitor is using. It gives that connector a
+mode named after the receiver (`od-xxxxxx`) and turns it on with RandR, so it
+behaves like a real monitor for your window manager and panels. `od-sender
+doctor` lists the connectors it can use. This works on most Intel and AMD
+GPUs; the proprietary NVIDIA driver usually does not allow it, and a machine
+with every connector in use has none to spare.
+
+- **Size**: X11 has no per-display scale, so the display is made in logical
+  pixels (an iPhone at 3x gets 390x844) and the receiver scales it up. Use
+  `--scale 2` or `--scale 1.5` for more room at a smaller size.
+- **Display settings**: KDE's display settings do not list the virtual
+  display (other desktops' may not either), because the connector still
+  reports nothing plugged in. It works as a monitor all the same; `xrandr`
+  shows it.
+- **Capture** reads the display's part of the screen with MIT-SHM, only when
+  something in it changed (XDamage), so an idle display costs almost nothing.
+  The cursor goes over the side channel, or is drawn into the video with
+  `--cursor video`.
+- **Scrolling** is sent as mouse-wheel clicks, since X11 has no smooth
+  scrolling for injected input.
+- `--output <name>` streams an output that is already on (a second monitor,
+  or one you set up with `xrandr`) instead of creating one.
+- After a crash the connector stays on; `od-sender clean` turns it off, and
+  the next `run` for the same receiver reuses it.
 
 ### Hyprland permissions
 

@@ -1,6 +1,6 @@
 [package]
 name = "od-sender"
-description = "OpenDisplay sender for Linux: extends a Wayland desktop onto an OpenDisplay receiver (PROTOCOL.md pv 3)."
+description = "OpenDisplay sender for Linux: extends a Wayland or X11 desktop onto an OpenDisplay receiver (PROTOCOL.md pv 3)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -40,6 +40,8 @@ pipewire = { workspace = true, optional = true }
 openh264 = { workspace = true }
 ffmpeg-next = { workspace = true }
 mdns-sd = { workspace = true }
+x11rb = { workspace = true }
+libc = { workspace = true }
 uuid = { workspace = true }
 zbus = { workspace = true, optional = true }
 # Already in the tree through zbus; bound the wait for a D-Bus signal.

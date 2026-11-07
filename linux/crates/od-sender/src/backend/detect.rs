@@ -29,6 +29,8 @@ pub struct Environment {
     pub session_type: Option<String>,
     pub current_desktop: Option<String>,
     pub kde_full_session: bool,
+    /// `DISPLAY`: an X server, which a Wayland session also has (Xwayland).
+    pub display: Option<String>,
 }
 
 impl Environment {
@@ -42,6 +44,7 @@ impl Environment {
             session_type: var("XDG_SESSION_TYPE"),
             current_desktop: var("XDG_CURRENT_DESKTOP"),
             kde_full_session: var("KDE_FULL_SESSION").is_some(),
+            display: var("DISPLAY"),
         }
     }
 }
@@ -70,7 +73,34 @@ pub enum Decision {
     Adopt {
         output: String,
     },
+    /// An X11 session: RandR, MIT-SHM, XTest (checked when the backend
+    /// starts). `output` is `--output`: stream that output, create nothing.
+    X11 {
+        display: String,
+        output: Option<String>,
+    },
     Unsupported(String),
+}
+
+impl Environment {
+    /// An X11 session, not Xwayland inside a Wayland one: the session type
+    /// says so, or there is an X display and no Wayland one.
+    fn x11_session(&self) -> bool {
+        self.display.is_some()
+            && (self.session_type.as_deref() == Some("x11")
+                || (self.wayland_display.is_none()
+                    && self.session_type.as_deref() != Some("wayland")))
+    }
+}
+
+fn x11_decision(env: &Environment, output: Option<String>) -> Decision {
+    match &env.display {
+        Some(d) => Decision::X11 {
+            display: d.clone(),
+            output,
+        },
+        None => Decision::Unsupported("--backend x11: DISPLAY is not set".into()),
+    }
 }
 
 /// The decision plus every probe that led to it, for `doctor`.
@@ -203,6 +233,13 @@ pub fn decide(
             }
         };
     match (req.backend, &req.output) {
+        (Some(BackendId::X11), output) => {
+            return done(steps, x11_decision(env, output.clone()));
+        }
+        (None, Some(output)) if env.x11_session() => {
+            steps.push(format!("--output {output}: an existing X11 output"));
+            return done(steps, x11_decision(env, Some(output.clone())));
+        }
         (Some(BackendId::Adopt) | None, Some(output)) => {
             steps.push(format!("--output {output}: adopt mode"));
             let d = adopt(output, &mut steps, &mut registry);
@@ -286,6 +323,17 @@ pub fn decide(
         return done(steps, d);
     }
 
+    // X11 before the desktop checks: GNOME and Plasma on Xorg set the same
+    // XDG_CURRENT_DESKTOP as on Wayland.
+    if env.x11_session() {
+        steps.push(format!(
+            "X11 session (XDG_SESSION_TYPE={}, DISPLAY={})",
+            env.session_type.as_deref().unwrap_or("unset"),
+            env.display.as_deref().unwrap_or("")
+        ));
+        return done(steps, x11_decision(env, None));
+    }
+
     // 4. A Wayland compositor that can capture and inject, but no IPC we know.
     if env.wayland_display.is_some() {
         if let Ok(s) = registry(&mut steps) {
@@ -327,19 +375,11 @@ pub fn decide(
     // 6. Portal (sandboxed and other desktops): lands with the portal backend.
 
     // 7. Nothing.
-    if env.session_type.as_deref() == Some("x11") {
-        return done(
-            steps,
-            Decision::Unsupported(
-                "od-sender needs a Wayland session (XDG_SESSION_TYPE=x11)".into(),
-            ),
-        );
-    }
     let desktop = env.current_desktop.as_deref().unwrap_or("unknown desktop");
     done(
         steps,
         Decision::Unsupported(hyprland_hint(format!(
-            "no supported compositor found ({desktop}). od-sender creates displays on Hyprland 0.55+, Sway 1.10+, KDE Plasma 6.8+ and GNOME 50+; on other Wayland compositors pass --output <name> to use an output you created. See {README_SETUPS}"
+            "no supported compositor found ({desktop}). od-sender creates displays on Hyprland 0.55+, Sway 1.10+, KDE Plasma 6.8+, GNOME 50+ and X11; on other Wayland compositors pass --output <name> to use an output you created. See {README_SETUPS}"
         ))),
     )
 }
@@ -422,6 +462,12 @@ pub fn instantiate(decision: Decision) -> Result<Box<dyn Backend>> {
         #[cfg(not(feature = "gnome"))]
         Decision::Gnome => Err(anyhow!(Unsupported("built without GNOME support".into()))),
         Decision::Adopt { output } => Ok(Box::new(AdoptBackend::new(output))),
+        Decision::X11 { display, output } => {
+            match super::x11::X11Backend::connect(Some(display.clone()), output) {
+                Ok(b) => Ok(Box::new(b)),
+                Err(e) => Err(anyhow!(Unsupported(format!("X11 ({display}): {e:#}")))),
+            }
+        }
         Decision::Unsupported(msg) => Err(anyhow!(Unsupported(msg))),
     }
 }
@@ -449,7 +495,7 @@ pub fn detect(req: &Request) -> Result<Box<dyn Backend>> {
                     backend.id()
                 );
             }
-            tracing::info!("capture: n/a (PipeWire)");
+            tracing::info!("capture: n/a ({})", backend.capture_label());
         }
     }
     Ok(backend)
@@ -834,12 +880,70 @@ mod tests {
         };
         let (w, _) = run(&plain, &forced, Some(kwin(6, 6)));
         assert_kde(&w);
+    }
 
+    fn x11(display: &str, output: Option<&str>) -> Decision {
+        Decision::X11 {
+            display: display.into(),
+            output: output.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn x11_sessions_pick_the_x11_backend() {
+        // Plasma and GNOME on Xorg name the same desktops as on Wayland.
+        for desktop in ["KDE", "GNOME", "XFCE"] {
+            let env = Environment {
+                session_type: Some("x11".into()),
+                display: Some(":0".into()),
+                current_desktop: Some(desktop.into()),
+                kde_full_session: desktop == "KDE",
+                ..Default::default()
+            };
+            let (w, calls) = run(&env, &Request::default(), None);
+            assert_eq!(w.decision, x11(":0", None), "{desktop}: {:?}", w.steps);
+            assert_eq!(calls, 0);
+        }
+        // No session type (startx): an X display and no Wayland one.
         let env = Environment {
-            session_type: Some("x11".into()),
+            display: Some(":1".into()),
             ..Default::default()
         };
-        let (w, _) = run(&env, &Request::default(), None);
-        assert!(unsupported(&w).contains("needs a Wayland session"));
+        assert_eq!(
+            run(&env, &Request::default(), None).0.decision,
+            x11(":1", None)
+        );
+        // --output streams that X11 output.
+        let env = Environment {
+            session_type: Some("x11".into()),
+            display: Some(":0".into()),
+            ..Default::default()
+        };
+        let req = Request {
+            output: Some("DP-1".into()),
+            ..Default::default()
+        };
+        assert_eq!(run(&env, &req, None).0.decision, x11(":0", Some("DP-1")));
+    }
+
+    #[test]
+    fn xwayland_is_not_an_x11_session() {
+        let env = Environment {
+            session_type: Some("wayland".into()),
+            wayland_display: Some("wayland-0".into()),
+            display: Some(":0".into()),
+            current_desktop: Some("GNOME".into()),
+            ..Default::default()
+        };
+        let (w, _) = run(&env, &Request::default(), Some(Snapshot::default()));
+        assert_gnome(&w);
+        // Forced, it is tried anyway; without DISPLAY it is refused.
+        let forced = Request {
+            backend: Some(BackendId::X11),
+            ..Default::default()
+        };
+        assert_eq!(run(&env, &forced, None).0.decision, x11(":0", None));
+        let (w, _) = run(&Environment::default(), &forced, None);
+        assert!(unsupported(&w).contains("DISPLAY is not set"));
     }
 }
