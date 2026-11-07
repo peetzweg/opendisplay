@@ -1,0 +1,49 @@
+{
+  "name": "iphone-native-mirror",
+  "version": "0.0.17",
+  "private": true,
+  "description": "Experimental native AirPlay to OpenDisplay bridge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/therealjosemaria/iphone-native-mirror.git"
+  },
+  "homepage": "https://github.com/therealjosemaria/iphone-native-mirror#readme",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "files": [
+    "CMakeLists.txt",
+    "native/receiver.c",
+    "native/audio-route.h",
+    "native/audio-route.c",
+    "native/audio-route-policy.c",
+    "native/show-error.m",
+    "native/test-display-monitor.c",
+    "native/test-feature-bits.c",
+    "src",
+    "scripts",
+    "test",
+    "Review.command",
+    "Install.command",
+    "vendor/uxplay/lib",
+    "vendor/uxplay/LICENSE",
+    "vendor/uxplay/PATCHES.md",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "native/setup.m",
+    "release"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "cmake -S . -B build && cmake --build build -j 4",
+    "test": "node --test test/*.test.js",
+    "test:virtual": "node scripts/virtual-test.js",
+    "test:video": "RUN_VIDEO_TESTS=1 node --test test/decoded-video.test.js",
+    "test:soak": "RUN_SOAK_TESTS=1 node --test test/soak.test.js",
+    "dev": "node src/bridge.js",
+    "postinstall": "node src/installer.js",
+    "check:release": "node scripts/check-release.js"
+  }
+}
