@@ -715,6 +715,79 @@ change for any of this: `streamConfig` announces the stream.
 In mirror sessions `panel` only bounds the stream; the desktop is the
 sender's own display.
 
+### 6.8 Raw video (`codec: "raw"`)
+
+An opt-in codec for a fast wired link (Thunderbolt Bridge, 10 Gbit/s): the
+sender skips its encoder and the receiver its decoder. A receiver offers
+`{"codec":"raw","maxFrameRate":N}` in `videoCaps`; `maxFrameRate` is how
+much the link can carry (5120x2880 NV12 is about 177 Mbit per frame, so 30
+fps is about 5.3 Gbit/s). A sender that does not know the codec ignores the
+entry and sends H.264 or HEVC. When it picks raw, `streamConfig.codec` is
+`"raw"`.
+
+Each frame is one length-prefixed payload (section 3) starting with the
+bytes `ODRW`, which is not `{`, so it is never mistaken for control JSON.
+Little-endian after the magic:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | `ODRW` |
+| 4 | 4 | width in pixels (even) |
+| 8 | 4 | height in pixels (even) |
+| 12 | 4 | pixel format, 0 = NV12 video range, BT.709 |
+| 16 | 4 | Y plane stride in bytes |
+| 20 | 4 | CbCr plane stride in bytes |
+| 24 | 8 | capture time, ms since the Unix epoch |
+| 32 | 8 | send time, ms since the Unix epoch |
+| 40 | `ystride*height` | Y plane |
+| then | `cstride*height/2` | interleaved CbCr plane |
+
+A sender may compress a whole frame as *strips*: `ODRZ`, little-endian after
+the magic.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | `ODRZ` |
+| 4 | 4 | width in pixels |
+| 8 | 4 | height in pixels |
+| 12 | 4 | strip height in luma rows (64 from the Mac sender, even) |
+| 16 | 4 | strip count: luma strips, then the matching CbCr strips (twice the number of luma strips) |
+| 20 | 8 | capture time, ms since the Unix epoch |
+| 28 | 8 | send time, ms since the Unix epoch |
+| 36 | 4 each | compressed size of every strip |
+| then | | the strips, concatenated |
+
+A luma strip is `strip` rows of `width` bytes; a CbCr strip is `strip/2` rows of
+`width` bytes (rows tightly packed). Each strip is raw LZ4 (Apple
+`COMPRESSION_LZ4`) of exactly that many bytes, or the bytes as they are when
+the compressed size equals the raw size. Strips are independent, so a
+receiver may decode them in parallel. A sender falls back to `ODRW` when
+compression would save under 10%.
+
+A sender may also send a *changed-tile* frame, which patches the receiver's last picture. It starts
+with `ODRD` and is likewise little-endian after the magic:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | `ODRD` |
+| 4 | 4 | width in pixels |
+| 8 | 4 | height in pixels |
+| 12 | 4 | tile size in pixels (the Mac sender uses 64) |
+| 16 | 4 | number of tiles that follow |
+| 20 | 8 | capture time, ms since the Unix epoch |
+| 28 | 8 | send time, ms since the Unix epoch |
+| 36 | | per tile: u32 index, then the tile's luma rows, then its CbCr rows |
+
+Tiles are numbered row by row from the top left; a tile is `min(tile, width -
+x)` bytes wide and `min(tile, height - y)` luma rows tall, with half as many
+CbCr rows (rows tightly packed, no stride). A delta applies to the picture
+the receiver holds after the previous frame, so a sender sends a whole frame
+first, after every new connection, after a size change, and whenever the
+receiver sends `kf` (it does when it gets a delta with no picture to patch).
+A sender skips a frame that changed nothing and sends a whole frame when
+most tiles changed. A receiver must announce the video size (so its window
+can open) before it has anywhere to draw.
+
 ## 7. Coordinate spaces and units
 
 The most common third-party bug is a unit mismatch, so here is every space

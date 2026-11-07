@@ -397,6 +397,7 @@ final class ReceiverVideoView: NSView {
     private weak var receiver: StreamReceiver?
     private let displayLayer: AVSampleBufferDisplayLayer
     private var videoSizeObserver: AnyCancellable?
+    private var sharpRenderer: SharpUpscaleRenderer?
 
     private let cursorLayer: CALayer = {
         let layer = CALayer()
@@ -420,7 +421,21 @@ final class ReceiverVideoView: NSView {
         layer?.backgroundColor = NSColor.black.cgColor
         // AVSBDL aspect-fits internally (videoGravity) — give it full bounds.
         displayLayer.frame = bounds
-        layer?.addSublayer(displayLayer)
+        if UserDefaults.standard.bool(forKey: "sharpUpscale") || UserDefaults.standard.bool(forKey: "rawVideo"),
+           let renderer = SharpUpscaleRenderer() {
+            Log.info("sharp upscale renderer active")
+            sharpRenderer = renderer
+            renderer.metalLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+            layer?.addSublayer(renderer.metalLayer)
+            receiver.onDecodedFrame = { [weak renderer] pixelBuffer, captureMs in
+                renderer?.render(pixelBuffer, captureMs: captureMs)
+            }
+            renderer.onPresented = { [weak receiver] presentedTime, captureMs in
+                receiver?.recordPresented(presentedTime: presentedTime, captureMs: captureMs)
+            }
+        } else {
+            layer?.addSublayer(displayLayer)
+        }
         layer?.addSublayer(cursorLayer)
 
         receiver.onCursor = { [weak self] x, y, visible in
@@ -465,6 +480,13 @@ final class ReceiverVideoView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         displayLayer.frame = bounds
+        if let sharpRenderer {
+            let scale = window?.backingScaleFactor ?? sharpRenderer.metalLayer.contentsScale
+            sharpRenderer.metalLayer.contentsScale = scale
+            sharpRenderer.metalLayer.frame = bounds
+            sharpRenderer.metalLayer.drawableSize = CGSize(width: bounds.width * scale,
+                                                           height: bounds.height * scale)
+        }
         updateCursorLayout()
         CATransaction.commit()
     }
