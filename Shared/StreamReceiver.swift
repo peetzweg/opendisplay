@@ -1296,7 +1296,13 @@ final class StreamReceiver: ObservableObject {
         }
         if let formatDesc {
             let dims = CMVideoFormatDescriptionGetDimensions(formatDesc)
-            Log.info("HEVC format description built: \(dims.width)x\(dims.height)")
+            func tag(_ key: CFString) -> String {
+                (CMFormatDescriptionGetExtension(formatDesc, extensionKey: key) as? String) ?? "-"
+            }
+            Log.info("HEVC format description built: \(dims.width)x\(dims.height) "
+                + "primaries=\(tag(kCMFormatDescriptionExtension_ColorPrimaries)) "
+                + "transfer=\(tag(kCMFormatDescriptionExtension_TransferFunction)) "
+                + "matrix=\(tag(kCMFormatDescriptionExtension_YCbCrMatrix))")
             DispatchQueue.main.async {
                 self.videoSize = CGSize(width: Int(dims.width), height: Int(dims.height))
             }

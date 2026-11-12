@@ -1321,6 +1321,16 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         config.pixelFormat = UserDefaults.standard.string(forKey: "pixfmt") == "bgra"
             ? kCVPixelFormatType_32BGRA
             : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        // Capture in Display P3 with the BT.709 YCbCr matrix, so the frames
+        // match the colour tags the encoder writes into the stream
+        // (setupEncoder). The virtual display is profiled as P3 too
+        // (VirtualDisplay), so nothing is clipped; a mirrored panel is
+        // converted. Untagged, the receiver had to guess, and a P3 receiver
+        // showed every colour shifted.
+        config.colorSpaceName = CGColorSpace.displayP3
+        if config.pixelFormat != kCVPixelFormatType_32BGRA {
+            config.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
+        }
         // One buffer is held permanently (keyframe replay) and one sits in
         // the encoder for ~13ms — headroom prevents SCK starvation drops.
         config.queueDepth = 8
@@ -2784,6 +2794,17 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 3600 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 60 as CFNumber)
         VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
+        // Tag the stream as Display P3 (P3 D65 primaries, sRGB transfer,
+        // BT.709 matrix) to match the capture. The tags land in the SPS VUI,
+        // so the receiver's format description carries them and its display
+        // layer colour-manages to the receiving panel. sRGB transfer, not
+        // BT.709: the BT.709 transfer tag lifts shadows on desktop content.
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ColorPrimaries,
+                             value: kCVImageBufferColorPrimaries_P3_D65)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_TransferFunction,
+                             value: kCVImageBufferTransferFunction_sRGB)
+        VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_YCbCrMatrix,
+                             value: kCVImageBufferYCbCrMatrix_ITU_R_709_2)
         baseBitrate = configuration.bitrate
         #if DEBUG
         // -bitrate <Mbps>: dev override for the wired-bitrate A/B (#322 step 1).
@@ -3019,6 +3040,18 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary
             needsKeyframe = false
         }
+        // ScreenCaptureKit labels its frames BT.709 primaries and transfer
+        // whatever colour space it was asked for, but the pixels are in the
+        // requested space (Display P3, sRGB curve). Left alone, VideoToolbox
+        // "converts" from that label to the session's tags and lifts every
+        // value (grey 128 arrived as 140). Relabel the frame with what it
+        // really holds, which equals the session tags, so nothing is converted.
+        CVBufferSetAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey,
+                              kCVImageBufferColorPrimaries_P3_D65, .shouldPropagate)
+        CVBufferSetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey,
+                              kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
+        CVBufferSetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey,
+                              kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
         let submitStatus = VTCompressionSessionEncodeFrame(
             encoder,
             imageBuffer: pixelBuffer,

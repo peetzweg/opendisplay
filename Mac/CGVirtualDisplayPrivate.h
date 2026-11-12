@@ -63,6 +63,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) unsigned int serialNum;
 @property(nonatomic) unsigned int productID;
 @property(nonatomic) unsigned int vendorID;
+// CIE 1931 xy chromaticities of the display's primaries and white point;
+// they become the virtual display's colour profile.
+@property(nonatomic) CGPoint redPrimary;
+@property(nonatomic) CGPoint greenPrimary;
+@property(nonatomic) CGPoint bluePrimary;
+@property(nonatomic) CGPoint whitePoint;
 @property(copy, nonatomic) void (^terminationHandler)(id, CGVirtualDisplay*);
 
 - (instancetype)init;
