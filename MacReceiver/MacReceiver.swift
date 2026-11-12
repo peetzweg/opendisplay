@@ -199,7 +199,9 @@ final class ReceiverController: ObservableObject {
     private func announcePanel(to receiver: StreamReceiver) {
         guard let screen = NSScreen.screens.first else { return }
         let legacyScale = max(screen.backingScaleFactor, 2)
-        let inset = screen.safeAreaInsets.top
+        // In notch-area mode the borderless video window covers the strip
+        // too, so the whole panel is announced.
+        let inset = NotchAreaPreference.enabled ? 0 : screen.safeAreaInsets.top
         let height = screen.frame.height - inset
         let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
             as? CGDirectDisplayID
@@ -275,6 +277,10 @@ final class ReceiverController: ObservableObject {
         guard let receiver, streaming || window != nil else { return }
         windowCloseTimer?.cancel()
         windowCloseTimer = nil
+        if NotchAreaPreference.enabled {
+            showEdgeToEdgeWindow(receiver: receiver)
+            return
+        }
         var created = false
         if window == nil {
             let w = NSWindow(contentRect: initialContentRect(video: receiver.videoSize),
@@ -302,6 +308,55 @@ final class ReceiverController: ObservableObject {
         }
     }
 
+    /// Toggle notch-area mode: re-announce the panel (the sender rebuilds its
+    /// display at the new height) and rebuild the video window in the new style.
+    func setUseNotchArea(_ enabled: Bool) {
+        guard enabled != NotchAreaPreference.enabled else { return }
+        NotchAreaPreference.enabled = enabled
+        guard let receiver else { return }
+        announcePanel(to: receiver)
+        let wasShowing = window != nil
+        closeWindow()
+        if wasShowing, streaming { showWindow() }
+    }
+
+    /// Notch-area mode: a borderless window over the whole primary screen,
+    /// with menu bar and Dock hidden while this app is frontmost. Native fullscreen
+    /// stops below the notch strip; this does not. Esc closes the window
+    /// (the stream keeps running; Show Window brings it back).
+    private func showEdgeToEdgeWindow(receiver: StreamReceiver) {
+        guard let screen = NSScreen.screens.first else { return }
+        if window == nil {
+            let w = EdgeToEdgeWindow(contentRect: screen.frame, styleMask: [.borderless],
+                                     backing: .buffered, defer: false)
+            w.title = "OpenDisplay"
+            w.contentView = ReceiverVideoView(receiver: receiver)
+            w.isReleasedWhenClosed = false
+            w.backgroundColor = .black
+            // Normal level, like Ghostty's non-native fullscreen: the hidden
+            // menu bar and Dock apply only while this app is frontmost, so
+            // switching apps brings both back and puts other windows in front.
+            window = w
+            windowObservers = [
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.willCloseNotification, object: w, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.stopObservingWindow()
+                        self.window = nil
+                        NSApp.presentationOptions = []
+                    }
+                },
+            ]
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        // hideMenuBar requires hideDock; both apply while this app is active.
+        NSApp.presentationOptions = [.hideDock, .hideMenuBar]
+        window?.setFrame(screen.frame, display: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
     /// The stream stopped. A sender moving the session to a better transport
     /// can drop the old link a moment before the new one is adopted, so wait
     /// briefly before taking the window down: rebuilding it would replay the
@@ -322,6 +377,7 @@ final class ReceiverController: ObservableObject {
         stopObservingWindow()
         window?.close()
         window = nil
+        NSApp.presentationOptions = []
     }
 
     /// Remember the user's green-button choice for every future window. A
@@ -384,6 +440,20 @@ final class ReceiverController: ObservableObject {
             ProcessInfo.processInfo.endActivity(activity)
             sleepActivity = nil
         }
+    }
+}
+
+/// Borderless windows refuse key status by default; this one takes it so
+/// Esc reaches it, and is never constrained below the menu bar.
+final class EdgeToEdgeWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+    override func cancelOperation(_ sender: Any?) { close() }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { close() } else { super.keyDown(with: event) }
     }
 }
 
