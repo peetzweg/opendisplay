@@ -1324,8 +1324,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // Capture in Display P3 with the BT.709 YCbCr matrix, so the frames
         // match the colour tags the encoder writes into the stream
         // (setupEncoder). The virtual display is profiled as P3 too
-        // (VirtualDisplay), so nothing is clipped; a mirrored panel is
-        // converted. Untagged, the receiver had to guess, and a P3 receiver
+        // (VirtualDisplay), preserving P3 content before capture; a mirrored
+        // panel is converted. Untagged, the receiver had to guess, and a P3 receiver
         // showed every colour shifted.
         config.colorSpaceName = CGColorSpace.displayP3
         if config.pixelFormat != kCVPixelFormatType_32BGRA {
@@ -3040,12 +3040,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary
             needsKeyframe = false
         }
-        // ScreenCaptureKit labels its frames BT.709 primaries and transfer
-        // whatever colour space it was asked for, but the pixels are in the
-        // requested space (Display P3, sRGB curve). Left alone, VideoToolbox
-        // "converts" from that label to the session's tags and lifts every
-        // value (grey 128 arrived as 140). Relabel the frame with what it
-        // really holds, which equals the session tags, so nothing is converted.
+        // In the macOS 27.2.1 probe, ScreenCaptureKit's 420v buffers carried
+        // BT.709 primaries/transfer despite the Display P3 request. Relabelling
+        // before encoding preserved the known P3 chart; without it, grey 128
+        // arrived as 140. The BGRA probe also passed with these attachments.
+        // Match the requested pixel space and session tags before VideoToolbox
+        // can convert according to those inconsistent source labels.
+        // Reproduce with research/display-p3-validation.
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey,
                               kCVImageBufferColorPrimaries_P3_D65, .shouldPropagate)
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey,
