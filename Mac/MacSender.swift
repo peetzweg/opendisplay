@@ -1412,6 +1412,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // UDP callbacks run there); tearing it down from the main actor races
         // them.
         queue.async { [weak self] in
+            self?.inputInjector?.discardCursorRestore()
             self?.closeCursorChannel()
             self?.stopUpgradeProbing()
             self?.captureRecoveryWork?.cancel()
@@ -2504,6 +2505,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func handleControl(_ payload: Data) {
+        guard !stopped else { return }
         lastReceived = Date()
         guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let type = obj["type"] as? String else {

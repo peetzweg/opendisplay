@@ -25,6 +25,7 @@ private enum SystemClickMetrics {
 final class InputInjector {
 
     private let displayID: CGDirectDisplayID
+    private let cursorRestoreID = UUID()
     private var isDown = false
     private var penDown = false
     // A real event source (vs nil) plus non-zero clickState on down/up: menu
@@ -60,6 +61,14 @@ final class InputInjector {
 
     init(displayID: CGDirectDisplayID) {
         self.displayID = displayID
+    }
+
+    deinit {
+        discardCursorRestore()
+    }
+
+    func discardCursorRestore() {
+        CursorRestore.shared.disconnect(cursorRestoreID)
     }
 
     static func ensureAccessibilityPermission() -> Bool {
@@ -107,9 +116,13 @@ final class InputInjector {
             return
         }
 
+        // Even a move without a down (touch slop / two-finger scroll targeting)
+        // moves the pointer. Save before the first such event, not just on down.
+        CursorRestore.shared.touch(from: cursorRestoreID, phase: phase)
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                   mouseCursorPosition: point, mouseButton: .left) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+        event.setIntegerValueField(.eventSourceUserData, value: CursorRestore.injectedEventTag)
         event.post(tap: .cghidEventTap)
     }
 
@@ -194,6 +207,7 @@ final class InputInjector {
         ev.setIntegerValueField(.tabletProximityEventCapabilityMask, value: capabilityMask)
         ev.setIntegerValueField(.tabletProximityEventEnterProximity, value: entering ? 1 : 0)
         ev.flags = .maskNonCoalesced
+        ev.setIntegerValueField(.eventSourceUserData, value: CursorRestore.injectedEventTag)
         ev.post(tap: .cghidEventTap)
     }
 
@@ -234,6 +248,7 @@ final class InputInjector {
             break
         }
         ev.flags = .maskNonCoalesced
+        ev.setIntegerValueField(.eventSourceUserData, value: CursorRestore.injectedEventTag)
         ev.post(tap: .cghidEventTap)
     }
 
