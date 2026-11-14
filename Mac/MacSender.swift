@@ -1760,6 +1760,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             currentPathUsesWiFi = path.usesInterfaceType(.wifi)
             let names = path.availableInterfaces.map(\.name).joined(separator: ",")
             Log.info("connection path to \(endpointName): \(names) wired=\(wired) direct=\(currentPathDirectLink)")
+            // A Bonjour dial that lands on loopback went to a proxy on this
+            // Mac, not to the device (only a receiver on this same Mac, a
+            // dev setup, also looks like this).
+            if case .tcp(let endpoint) = transport, case .service = endpoint,
+               path.usesInterfaceType(.loopback) {
+                Log.info("connection to \(endpointName) goes through a proxy on this Mac, "
+                    + "which usually can't reach the device; bypass the local network in the proxy app")
+            }
             Task { @MainActor in self.onTransportPath?(wired) }
         }
         // -forceUpgradeProbe YES: dev knob — loopback runs never look like
@@ -1865,6 +1873,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             tcp.noDelay = true
             let params = NWParameters(tls: nil, tcp: tcp)
             params.prohibitedInterfaceTypes = [.wifi, .cellular]
+            params.preferNoProxies = true   // as in connectTCP
             let probe = NWConnection(host: host, port: 9000, using: params)
             upgradeProbes.append(probe)
             probe.stateUpdateHandler = { [weak self] state in
@@ -1993,6 +2002,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // pre-dial was tried and only ever hung until its timeout, adding 2s
         // to every connect. becomeReady reports which path won.
         let params = NWParameters(tls: nil, tcp: options)
+        // The receiver is on the local network, never behind a proxy. A
+        // system proxy (Clash, Surge and the like set one) otherwise takes
+        // the dial: it connects to the proxy on loopback, the proxy can't
+        // reach the device, and the session resets every few seconds.
+        params.preferNoProxies = true
         let conn = NWConnection(to: endpoint, using: params)
         connection = conn
         // A dial to a withdrawn Bonjour service (receiver asleep or app
