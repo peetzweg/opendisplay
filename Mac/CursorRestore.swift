@@ -87,9 +87,12 @@ final class CursorRestore {
         }
         // Hardware events come from WindowServer (PID 0). Ignore our injected
         // finger/Pencil events and synthetic events from other applications.
+        // A mouse reports subtype 0 (default); a built-in or Magic Trackpad
+        // reports 3 (touch). Tablet subtypes (1, 2) are not mouse/trackpad.
+        let subtype = event.getIntegerValueField(.mouseEventSubtype)
         guard event.getIntegerValueField(.eventSourceUserData) != Self.injectedEventTag,
               event.getIntegerValueField(.eventSourceUnixProcessID) == 0,
-              event.getIntegerValueField(.mouseEventSubtype) == 0 else { return false }
+              subtype == 0 || subtype == 3 else { return false }
         lock.lock()
         defer { lock.unlock() }
         guard monitoring, state.savedPosition != nil else { return false }
