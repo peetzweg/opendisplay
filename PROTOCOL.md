@@ -690,6 +690,11 @@ swaps every pair).
 * `pointsWide`, `pointsHigh` (int, optional, both or neither): the desktop
   size the receiver itself currently runs (a Mac's "looks like" display
   setting). Absent means the receiver has no such setting.
+* `millimetersWide`, `millimetersHigh` (number, optional, both or
+  neither): the physical size of the area `pixelsWide/High` describe, in
+  millimetres. Send them only when the platform knows the panel's real
+  density (Android `DisplayMetrics.xdpi/ydpi`, macOS `CGDisplayScreenSize`);
+  never guess. Absent means unknown. Additive at `pv` 3, no bump.
 
 A receiver that runs in a window smaller than its screen (iPad Split View
 or Stage Manager, one half of a foldable's split) reports that window's
@@ -704,6 +709,9 @@ A sender uses `panel` only when `pixelsWide/High` are integers of at least
 absent or both integers of at least 2. Otherwise it ignores the whole
 object (never part of it) and falls back to the deprecated fields. A
 malformed `panel` MUST NOT fail the `hello`.
+The physical size is advisory and the one exception: a sender ignores
+`millimetersWide/High` alone, keeping the rest of `panel`, unless both are
+finite numbers above 0.
 
 What the official sender builds from it (non-normative): a 2x desktop for
 `scale` 1.5 and above, else 1x; of `points` when present, else half the
@@ -711,6 +719,11 @@ pixels at 2x, else the pixels at 1x. A default desktop larger than the best
 stream is shrunk to that stream so capture is 1:1 (6.5); every stream,
 mirror included, is bounded by `pixelsWide/High`. A receiver needs no
 change for any of this: `streamConfig` announces the stream.
+
+The official sender declares the physical size of its virtual display
+from `millimetersWide/High` when they are plausible for the pixels, else
+from a per-device estimate, then scales it (same shape) into what macOS
+honours: at least 180 mm wide and 208 x 96 mm of area (non-normative).
 
 In mirror sessions `panel` only bounds the stream; the desktop is the
 sender's own display.
@@ -731,6 +744,7 @@ sender).
 | `hello.panel.pixelsWide/High` | physical panel | pixels | current orientation |
 | `hello.panel.pointsWide/High` | receiver's own desktop | points | current orientation |
 | `hello.panel.scale` | none | real backing scale, may be fractional | n/a |
+| `hello.panel.millimetersWide/High` | physical panel | millimetres | current orientation |
 | `touch.x/y`, `pencil.x/y`, `proximity.x/y` | video | normalized 0..1 | top-left, x right, y down |
 | `scroll.dx/dy` | video | **pixels** (not normalized) | natural-scrolling sign |
 | `cursor.x/y` | video | normalized 0..1 | top-left |
@@ -859,6 +873,7 @@ Mechanics at a glance (the policy behind them lives in COMPATIBILITY.md):
 | 3 (additive) | `hello.videoCaps`, `displayMaxFrameRate`, and `streamConfig` (6.5); legacy peers remain implicit H.264 |
 | 3 (additive) | `hello.power` and `power` (6.6); direct cable only |
 | 3 (additive) | `hello.panel` (6.7); `pixelsWide/High/scale` deprecated, removed at the next bump |
+| 3 (additive) | `hello.panel.millimetersWide/High` (6.7); optional physical size |
 | 4 (reserved) | Typed frame header replacing the section 4 demux heuristic (two-phase migration) |
 
 ---
@@ -918,3 +933,4 @@ This file is versioned by git; the authoritative change log is
 | 2026-08-26 | Additive: `hello.cursorPort` and the UDP cursor side channel (section 6.3) |
 | 2026-09-30 | Additive: `hello.power` and `power`, direct cable only (section 6.6) |
 | 2026-10-01 | Additive: `hello.panel`, the sender decides the desktop (section 6.7); limits are in the current orientation (6.5); `pixelsWide/High/scale` deprecated |
+| 2026-11-14 | Additive: `hello.panel.millimetersWide/High`, the panel's physical size (section 6.7) |

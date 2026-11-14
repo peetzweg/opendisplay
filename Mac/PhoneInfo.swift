@@ -37,6 +37,14 @@ struct PhoneInfo: Decodable {
     /// uses the legacy facts and says so once.
     var hasInvalidPanel: Bool { panel != nil && panel?.facts == nil }
 
+    /// The physical size of the panel `facts` describe, in millimetres,
+    /// current orientation (PROTOCOL.md 6.7). Only from a valid `panel`: the
+    /// size describes its pixels, never the legacy trio.
+    var reportedMillimeters: CGSize? {
+        guard panel?.facts != nil else { return nil }
+        return panel?.millimeters
+    }
+
     var legacyFacts: PanelFacts {
         PanelFacts(pixelsWide: pixelsWide, pixelsHigh: pixelsHigh, scale: 2,
                    pointsWide: nil, pointsHigh: nil)
@@ -51,18 +59,23 @@ struct PanelInfo: Decodable, Equatable {
     let scale: Double?
     let pointsWide: Int?
     let pointsHigh: Int?
+    let millimetersWide: Double?
+    let millimetersHigh: Double?
 
     private enum CodingKeys: String, CodingKey {
-        case pixelsWide, pixelsHigh, scale, pointsWide, pointsHigh
+        case pixelsWide, pixelsHigh, scale, pointsWide, pointsHigh, millimetersWide, millimetersHigh
     }
 
     init(pixelsWide: Int?, pixelsHigh: Int?, scale: Double?,
-         pointsWide: Int? = nil, pointsHigh: Int? = nil) {
+         pointsWide: Int? = nil, pointsHigh: Int? = nil,
+         millimetersWide: Double? = nil, millimetersHigh: Double? = nil) {
         self.pixelsWide = pixelsWide
         self.pixelsHigh = pixelsHigh
         self.scale = scale
         self.pointsWide = pointsWide
         self.pointsHigh = pointsHigh
+        self.millimetersWide = millimetersWide
+        self.millimetersHigh = millimetersHigh
     }
 
     init(from decoder: Decoder) throws {
@@ -72,6 +85,19 @@ struct PanelInfo: Decodable, Equatable {
         scale = (try? c?.decodeIfPresent(Double.self, forKey: .scale)) ?? nil
         pointsWide = (try? c?.decodeIfPresent(Int.self, forKey: .pointsWide)) ?? nil
         pointsHigh = (try? c?.decodeIfPresent(Int.self, forKey: .pointsHigh)) ?? nil
+        millimetersWide = (try? c?.decodeIfPresent(Double.self, forKey: .millimetersWide)) ?? nil
+        millimetersHigh = (try? c?.decodeIfPresent(Double.self, forKey: .millimetersHigh)) ?? nil
+    }
+
+    /// The physical size, or nil. Optional and advisory: a malformed size
+    /// drops only itself, never the rest of the panel. Both or neither,
+    /// finite and positive; whether it is plausible for the pixels is the
+    /// sender's call (`PhysicalDisplaySize.isPlausible`).
+    var millimeters: CGSize? {
+        guard let millimetersWide, let millimetersHigh,
+              millimetersWide.isFinite, millimetersHigh.isFinite,
+              millimetersWide > 0, millimetersHigh > 0 else { return nil }
+        return CGSize(width: millimetersWide, height: millimetersHigh)
     }
 
     /// Validated facts, or nil. Never partially applied: physical pixels of

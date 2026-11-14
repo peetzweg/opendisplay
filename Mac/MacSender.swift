@@ -682,7 +682,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let bootstrapCanvas = canvasPlan.bootstrap
         let pointsWide = bootstrapCanvas.pointsWide
         let pointsHigh = bootstrapCanvas.pointsHigh
-        let mm = VirtualCanvasSizing.physicalSizeInMillimeters(for: canvas)
+        // Fixed at creation: a later rotation reuses this display (and size).
+        let physical = PhysicalDisplaySize.declared(
+            reported: info.reportedMillimeters, facts: facts, device: info.device,
+            creation: bootstrapCanvas)
+        let mm = physical.size
+        Log.info("declared size \(Int(mm.width))x\(Int(mm.height)) mm (\(physical.source.rawValue)"
+            + (info.reportedMillimeters.map { " \(Int($0.width))x\(Int($0.height)) mm" } ?? "") + ")")
 
         // USB sessions can start before lockdown resolves the device name —
         // fall back to the kind from the hello rather than the generic label.
