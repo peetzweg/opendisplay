@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.30.3](https://github.com/peetzweg/opendisplay/compare/v1.30.2...v1.30.3) (2026-11-14)
+
+
+### Bug Fixes
+
+* **mac:** declare a physical size macOS 26.1 accepts for the virtual display ([#480](https://github.com/peetzweg/opendisplay/issues/480)) ([91b8783](https://github.com/peetzweg/opendisplay/commit/91b87838a8a10309b9378595a6deb31dddaff711))
+* **mac:** dial receivers without the system proxy ([#483](https://github.com/peetzweg/opendisplay/issues/483)) ([ac3b3cb](https://github.com/peetzweg/opendisplay/commit/ac3b3cbfee848807a1a2219b30003b2f612aafb6))
+
 ## [1.30.2](https://github.com/peetzweg/opendisplay/compare/v1.30.1...v1.30.2) (2026-11-06)
 
 
