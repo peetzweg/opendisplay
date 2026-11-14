@@ -153,6 +153,8 @@ targets:
       - MacTests
       - Mac/DisplayArrangement.swift
       - Mac/OriginRestore.swift
+      - Mac/CursorRestoreState.swift
+      - Mac/CursorRestore.swift
       - Mac/StreamConfiguration.swift
       - Mac/VirtualCanvasSizing.swift
       - Mac/PhoneInfo.swift

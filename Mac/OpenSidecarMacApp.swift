@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        CursorRestore.shared.refresh()
         // Hand the updater to the control window, which is built outside the
         // SwiftUI App scene (NSHostingView), so it can offer the same button.
         MainWindow.updater = updater
@@ -998,6 +999,7 @@ final class PermissionMonitor: ObservableObject {
     func refresh() {
         screenRecording = CGPreflightScreenCaptureAccess()
         accessibility = AXIsProcessTrusted()
+        CursorRestore.shared.refresh()
     }
 
     /// Fire the system permission dialog on demand. macOS only shows each
@@ -1022,6 +1024,7 @@ final class PermissionMonitor: ObservableObject {
 
 struct ContentView: View {
     @ObservedObject var controller: SenderController
+    @AppStorage(CursorRestore.preferenceKey) private var restoreMouseAfterTouch = false
     @StateObject private var permissions = PermissionMonitor()
     // Optional so the view still compiles/previews without an updater (e.g.
     // if Sparkle ever fails to start); the button just disables itself then.
@@ -1120,6 +1123,10 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Toggle("Restore mouse position after touch", isOn: $restoreMouseAfterTouch)
+                    .help("Return to the mouse’s previous position when you move or click the mouse or trackpad after touching a receiver. Waits until a touch drag ends.")
+                    .onChange(of: restoreMouseAfterTouch) { CursorRestore.shared.refresh() }
 
                 LabeledContent("Display layout") {
                     Button("Arrange Displays…") {
