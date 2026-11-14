@@ -40,6 +40,17 @@ enum VirtualCanvasSizing {
                                              requested.pixelsHigh))
     }
 
+    /// Rough physical size declared for the virtual display, so macOS picks a
+    /// sane default UI scale. It must not be smaller than about 200 cm²:
+    /// macOS 26.1 never brings a virtual display online when its declared
+    /// area is under roughly 160 cm² and its descriptor reserves more than
+    /// about 2,000 pixels per axis, which `reservedPixelsPerAxis` always does.
+    static func physicalSizeInMillimeters(for canvas: VirtualCanvasSize) -> CGSize {
+        canvas.pointsWide >= canvas.pointsHigh
+            ? CGSize(width: 208, height: 96)
+            : CGSize(width: 96, height: 208)
+    }
+
     static func requested(pixelsWide: Int, pixelsHigh: Int, scale: Int = 2) -> VirtualCanvasSize? {
         let scale = scale < 2 ? 1 : 2
         guard pixelsWide >= 2 * scale, pixelsHigh >= 2 * scale else { return nil }

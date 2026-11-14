@@ -682,10 +682,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let bootstrapCanvas = canvasPlan.bootstrap
         let pointsWide = bootstrapCanvas.pointsWide
         let pointsHigh = bootstrapCanvas.pointsHigh
-        // Rough physical size so macOS picks a sane default UI scale.
-        let mm = canvas.pointsWide >= canvas.pointsHigh
-            ? CGSize(width: 147, height: 68)
-            : CGSize(width: 68, height: 147)
+        let mm = VirtualCanvasSizing.physicalSizeInMillimeters(for: canvas)
 
         // USB sessions can start before lockdown resolves the device name —
         // fall back to the kind from the hello rather than the generic label.
