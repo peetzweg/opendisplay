@@ -13,7 +13,7 @@
 # file, so the AUR repository only needs PKGBUILD and .SRCINFO.
 
 pkgname=opendisplay-receiver
-pkgver=1.30.2
+pkgver=1.30.3
 pkgrel=1
 pkgdesc="OpenDisplay receiver for Linux: use this screen as an extra display for a Mac or Linux desktop"
 arch=('x86_64' 'aarch64')
@@ -43,7 +43,7 @@ options=('!lto')  # cargo profile handles LTO
 # tag's leading v.
 _tag="v${pkgver}"
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/peetzweg/opendisplay/archive/refs/tags/${_tag}.tar.gz")
-sha256sums=('cb01d7e01a260e17fe4a9d6e442cd9b6f1260317957c94f11e78bf502301fd35')
+sha256sums=('ba824da2f534315b3ab2ca6ec936a231a020573e6cdfd8f6b8352afeb9eb977f')
 
 prepare() {
   cd "opendisplay-${pkgver}/linux"
