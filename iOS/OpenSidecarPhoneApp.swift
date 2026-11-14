@@ -49,6 +49,7 @@ struct ReceiverScreen: View {
     // Shown until either the user dismisses it or the device connects once.
     @AppStorage("hasConnectedBefore") private var hasConnectedBefore = false
     @AppStorage("onboardingDismissed") private var onboardingDismissed = false
+    @AppStorage("keepScreenOn") private var keepScreenOn = false
 
     // Streaming = connected and the video format is known.
     private var isStreaming: Bool {
@@ -159,14 +160,21 @@ struct ReceiverScreen: View {
             model.appWillTerminate()
         }
         .onChange(of: model.receiver.connected) { isConnected in
+            // Keep the screen awake only while connected to a Mac,
+            // allowing the device to auto-lock when the stream stops.
+            UIApplication.shared.isIdleTimerDisabled = isConnected && keepScreenOn
+
             // The first valid connection retires the onboarding hint for good.
             if isConnected {
                 hasConnectedBefore = true
                 showOnboarding = false
             }
         }
+        .onChange(of: keepScreenOn) { newValue in
+            // Toggling the setting while connected takes effect at once.
+            UIApplication.shared.isIdleTimerDisabled = model.receiver.connected && newValue
+        }
         .onAppear {
-            UIApplication.shared.isIdleTimerDisabled = true
             model.start()
             // Show the first-run hint unless the device has connected before
             // or the user already dismissed it.
@@ -338,6 +346,9 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    // Shares the same UserDefaults key as ReceiverScreen: toggling here
+    // takes effect immediately while connected.
+    @AppStorage("keepScreenOn") private var keepScreenOn = false
     // Set once the user tapped "Rate on the App Store": the row is an
     // invitation, not a permanent fixture.
     @AppStorage("rateAppTapped") private var rateAppTapped = false
@@ -394,6 +405,14 @@ struct SettingsView: View {
                     Text("Analytics")
                 } footer: {
                     Text("The overlay shows FPS, bitrate, frame timing, stalls, and latency graphs at the bottom of the screen while streaming. The experimental Metal renderer decodes and presents frames manually — it adds decode and true on-glass latency metrics to the overlay, but in our measurements the system video layer displays frames faster. Leave it off unless you're debugging.")
+                }
+
+                Section {
+                    Toggle("Keep screen on while connected", isOn: $keepScreenOn)
+                } header: {
+                    Text("Display")
+                } footer: {
+                    Text("Keep the screen awake while connected to your Mac. When turned off, the device follows your system Auto-Lock settings.")
                 }
 
                 Section {
