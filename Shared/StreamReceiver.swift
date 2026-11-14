@@ -1601,6 +1601,10 @@ struct PanelAnnouncement: Equatable, CustomStringConvertible {
     /// The desktop size a Mac receiver currently runs; nil elsewhere.
     var pointsWide: Int? = nil
     var pointsHigh: Int? = nil
+    /// Physical size of these pixels, where the platform knows it (the Mac
+    /// receiver); nil on iOS, which has no public API for it.
+    var millimetersWide: Double? = nil
+    var millimetersHigh: Double? = nil
 
     var json: [String: Any] {
         var panel: [String: Any] = ["pixelsWide": pixelsWide, "pixelsHigh": pixelsHigh,
@@ -1609,11 +1613,16 @@ struct PanelAnnouncement: Equatable, CustomStringConvertible {
             panel["pointsWide"] = pointsWide
             panel["pointsHigh"] = pointsHigh
         }
+        if let millimetersWide, let millimetersHigh {
+            panel["millimetersWide"] = millimetersWide
+            panel["millimetersHigh"] = millimetersHigh
+        }
         return panel
     }
 
     var description: String {
         "\(pixelsWide)x\(pixelsHigh) @\(scale)"
             + (pointsWide.map { " points \($0)x\(pointsHigh ?? 0)" } ?? "")
+            + (millimetersWide.map { " \($0)x\(millimetersHigh ?? 0) mm" } ?? "")
     }
 }

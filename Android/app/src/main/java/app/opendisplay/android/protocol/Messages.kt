@@ -13,8 +13,35 @@ object WireProtocol {
     const val SERVICE_TYPE = "_opensidecar._tcp"
 }
 
-/** Panel facts in the current orientation (PROTOCOL.md 6.7). */
-data class Panel(val pixelsWide: Int, val pixelsHigh: Int, val scale: Double)
+/**
+ * Panel facts in the current orientation (PROTOCOL.md 6.7). The physical
+ * size is optional: only when the display reports a believable density.
+ */
+data class Panel(
+    val pixelsWide: Int,
+    val pixelsHigh: Int,
+    val scale: Double,
+    val millimetersWide: Double? = null,
+    val millimetersHigh: Double? = null,
+)
+
+/** `panel.millimetersWide/High` from the display's measured density. */
+object PanelMillimeters {
+    /**
+     * The physical size of [pixelsWide] x [pixelsHigh] at [xdpi] x [ydpi], to
+     * 0.1 mm, or null when the densities look bogus: some devices report a
+     * placeholder (0, 160, or another device's value), so each axis must be
+     * within 0.5x..2x of [densityDpi], the bucket the device was built for.
+     */
+    fun of(pixelsWide: Int, pixelsHigh: Int, xdpi: Float, ydpi: Float, densityDpi: Int): Pair<Double, Double>? {
+        if (pixelsWide <= 0 || pixelsHigh <= 0 || densityDpi <= 0) return null
+        val range = densityDpi * 0.5..densityDpi * 2.0
+        if (!xdpi.isFinite() || !ydpi.isFinite()) return null
+        if (xdpi.toDouble() !in range || ydpi.toDouble() !in range) return null
+        fun tenth(mm: Double) = Math.round(mm * 10) / 10.0
+        return tenth(pixelsWide / xdpi.toDouble() * 25.4) to tenth(pixelsHigh / ydpi.toDouble() * 25.4)
+    }
+}
 
 /** One `hello.videoCaps` entry (PROTOCOL.md 6.5). */
 data class VideoCap(
@@ -51,6 +78,10 @@ object Messages {
             put("pixelsWide", panel.pixelsWide)
             put("pixelsHigh", panel.pixelsHigh)
             put("scale", panel.scale)
+            if (panel.millimetersWide != null && panel.millimetersHigh != null) {
+                put("millimetersWide", panel.millimetersWide)
+                put("millimetersHigh", panel.millimetersHigh)
+            }
         })
         put("device", device)
         put("id", installId)

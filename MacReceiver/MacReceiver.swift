@@ -220,10 +220,17 @@ final class ReceiverController: ObservableObject {
         let nativeHigh = portrait ? long : short
         let strip = screen.frame.height > 0
             ? Int((inset * CGFloat(nativeHigh) / screen.frame.height).rounded()) : 0
+        let mm = displayID.flatMap {
+            PanelMillimeters.of(pixelsWide: nativeWide, pixelsHigh: nativeHigh - strip,
+                                nativeWide: nativeWide, nativeHigh: nativeHigh,
+                                screen: CGDisplayScreenSize($0))
+        }
         let panel = PanelAnnouncement(pixelsWide: nativeWide, pixelsHigh: nativeHigh - strip,
                                       scale: Double(screen.backingScaleFactor),
                                       pointsWide: Int(screen.frame.width),
-                                      pointsHigh: Int(height))
+                                      pointsHigh: Int(height),
+                                      millimetersWide: mm?.wide,
+                                      millimetersHigh: mm?.high)
 
         func oriented(_ size: PanelSize) -> PanelSize {
             portrait ? PanelSize(width: size.height, height: size.width) : size

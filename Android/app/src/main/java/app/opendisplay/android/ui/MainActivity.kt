@@ -39,6 +39,7 @@ import app.opendisplay.android.protocol.AnnexB
 import app.opendisplay.android.protocol.Codec
 import app.opendisplay.android.protocol.Messages
 import app.opendisplay.android.protocol.Panel
+import app.opendisplay.android.protocol.PanelMillimeters
 import app.opendisplay.android.protocol.PenInput
 import app.opendisplay.android.protocol.TouchGestures
 import app.opendisplay.android.protocol.VideoCap
@@ -422,13 +423,16 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
             w = size.x
             h = size.y
         }
-        val next = Panel(w, h, (metrics.density * 1000).roundToInt() / 1000.0)
+        // The physical size of these pixels, so the sender can declare the
+        // virtual display's real size (6.7); omitted when xdpi/ydpi are bogus.
+        val mm = PanelMillimeters.of(w, h, metrics.xdpi, metrics.ydpi, metrics.densityDpi)
+        val next = Panel(w, h, (metrics.density * 1000).roundToInt() / 1000.0, mm?.first, mm?.second)
         deviceKind = DeviceIdentity.deviceKind(this)
         displayMaxFrameRate = maxRefreshRate()
         if (next == panel) return
         panel = next
         videoCaps = DecoderCaps.videoCaps(w, h)
-        Log.i(TAG, "panel ${w}x$h @${next.scale}, caps $videoCaps")
+        Log.i(TAG, "panel ${w}x$h @${next.scale}" + (mm?.let { " ${it.first}x${it.second} mm" } ?: "") + ", caps $videoCaps")
         // 6.1: re-send hello on the live connection whenever the panel
         // changes. Settle first: locking rotates to the lock screen's
         // orientation just before onStop, and that hello would make the

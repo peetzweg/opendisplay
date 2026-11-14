@@ -166,6 +166,7 @@ targets:
       - Shared/DirectCable.swift
       - Shared/LogSnapshot.swift
       - MacReceiver/FullscreenPreference.swift
+      - MacReceiver/PanelMillimeters.swift
       - iOS/ReceiverPanelGeometry.swift
     settings:
       base:

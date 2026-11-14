@@ -178,6 +178,39 @@ class HelloTest {
     }
 
     @Test
+    fun carriesPhysicalSizeOnlyWhenKnown() {
+        val caps = listOf(VideoCap(Codec.H264))
+        val known = Messages.hello(Panel(1080, 2424, 2.625, 65.3, 146.6), "ID", "Android phone", 60,
+            caps, cursorPort = null).getJSONObject("panel")
+        assertEquals(65.3, known.getDouble("millimetersWide"), 0.0)
+        assertEquals(146.6, known.getDouble("millimetersHigh"), 0.0)
+        val unknown = Messages.hello(Panel(1080, 2424, 2.625), "ID", "Android phone", 60,
+            caps, cursorPort = null).getJSONObject("panel")
+        assertFalse(unknown.has("millimetersWide"))
+        assertFalse(unknown.has("millimetersHigh"))
+    }
+
+    @Test
+    fun physicalSizeFromMeasuredDensity() {
+        // Pixel 8: 1080x2400 at ~428 ppi, density bucket 420.
+        val mm = PanelMillimeters.of(1080, 2400, 428.6f, 427.4f, 420)!!
+        assertEquals(64.0, mm.first, 0.0)
+        assertEquals(142.6, mm.second, 0.0)
+        // The 15.6" 1920x1080 panel from #479: 141 ppi, bucket 220 (1.375).
+        val tablet = PanelMillimeters.of(1920, 1080, 141.2f, 141.2f, 220)!!
+        assertEquals(345.4, tablet.first, 0.0)
+    }
+
+    @Test
+    fun bogusDensityOmitsThePhysicalSize() {
+        assertEquals(null, PanelMillimeters.of(1080, 2400, 0f, 0f, 420))
+        assertEquals(null, PanelMillimeters.of(1080, 2400, 160f, 160f, 420)) // placeholder
+        assertEquals(null, PanelMillimeters.of(1080, 2400, 428f, 1000f, 420))
+        assertEquals(null, PanelMillimeters.of(1080, 2400, Float.NaN, 428f, 420))
+        assertEquals(null, PanelMillimeters.of(0, 2400, 428f, 428f, 420))
+    }
+
+    @Test
     fun omitsCursorPortWhenNotListening() {
         val hello = Messages.hello(Panel(800, 1280, 1.5), "ID", "Android tablet", 60,
             listOf(VideoCap(Codec.H264)), cursorPort = null)
