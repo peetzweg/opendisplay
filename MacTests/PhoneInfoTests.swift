@@ -58,4 +58,33 @@ final class PhoneInfoTests: XCTestCase {
             XCTAssertEqual(info.facts, info.legacyFacts, panel)
         }
     }
+
+    func testPanelMillimetersAreRead() throws {
+        let info = try hello("{\(legacy),\"panel\":{\"pixelsWide\":5120,\"pixelsHigh\":2880,"
+            + "\"scale\":2,\"millimetersWide\":596.7,\"millimetersHigh\":335.6}}")
+        XCTAssertEqual(info.reportedMillimeters, CGSize(width: 596.7, height: 335.6))
+        XCTAssertFalse(info.hasInvalidPanel)
+    }
+
+    func testMalformedMillimetersDropOnlyThemselves() throws {
+        let malformed = [
+            #""millimetersWide":596.7"#,
+            #""millimetersWide":0,"millimetersHigh":335.6"#,
+            #""millimetersWide":-1,"millimetersHigh":335.6"#,
+            #""millimetersWide":"596","millimetersHigh":335.6"#,
+        ]
+        for mm in malformed {
+            let info = try hello("{\(legacy),\"panel\":{\"pixelsWide\":5120,\"pixelsHigh\":2880,"
+                + "\"scale\":2,\(mm)}}")
+            XCTAssertNil(info.reportedMillimeters, mm)
+            XCTAssertFalse(info.hasInvalidPanel, mm)
+            XCTAssertEqual(info.facts.pixels, PixelSize(width: 5120, height: 2880), mm)
+        }
+    }
+
+    func testMillimetersOfAnInvalidPanelAreIgnored() throws {
+        let info = try hello("{\(legacy),\"panel\":{\"pixelsWide\":1,\"pixelsHigh\":2880,"
+            + "\"scale\":2,\"millimetersWide\":596.7,\"millimetersHigh\":335.6}}")
+        XCTAssertNil(info.reportedMillimeters)
+    }
 }
