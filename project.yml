@@ -58,7 +58,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         NSLocalNetworkUsageDescription: OpenDisplay connects to your iPad or iPhone over the local network in WiFi mode.
-        NSBonjourServices: ["_opensidecar._tcp"]
+        NSBonjourServices: ["_opensidecar._tcp", "_googlecast._tcp"]
         LSApplicationCategoryType: public.app-category.utilities
         # --- Sparkle auto-update (issue #52) ---
         # The appcast feed is hosted on the landing-page site at the custom
@@ -151,6 +151,11 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - MacTests
+      - Mac/Cast/CastDiscovery.swift
+      - Mac/Cast/CastProtocol.swift
+      - Mac/Cast/CastCrypto.swift
+      - Mac/Cast/CastRTP.swift
+      - Mac/Cast/CastSender.swift
       - Mac/DisplayArrangement.swift
       - Mac/OriginRestore.swift
       - Mac/StreamConfiguration.swift
