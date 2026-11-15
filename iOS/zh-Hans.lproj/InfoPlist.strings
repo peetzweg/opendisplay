@@ -1,0 +1,3 @@
+/* Info.plist strings, iOS/iPadOS receiver — Simplified Chinese. */
+
+"NSLocalNetworkUsageDescription" = "OpenDisplay 会在本地网络上广播自己，让同一 WiFi 下的 Mac 能够连接。";

@@ -1,0 +1,70 @@
+/* OpenDisplay iPhone / iPad receiver — Simplified Chinese.
+   English literals stay in the source and act as the keys, so a missing entry
+   falls back to English instead of showing a raw key. */
+
+/* MARK: Main screen */
+
+"Starting…" = "正在启动…";
+"Listener failed: %@" = "监听失败：%@";
+"Listener failed — restarting…" = "监听失败——正在重试…";
+"Receiving %d×%d" = "正在接收 %d×%d";
+"Settings & Help" = "设置与帮助";
+"Tip: shake the %@ to open settings anytime" = "提示：摇一摇 %@ 可随时打开设置";
+"Rotate the %@ for a vertical second monitor." = "把 %@ 转成竖向，就能当竖屏副屏。";
+
+/* MARK: First run */
+
+"Welcome" = "欢迎";
+"One more app to go" = "还差一个 App";
+"OpenDisplay turns this %@ into a second screen for your Mac. It needs the **OpenDisplay Mac app** running on a Mac connected by the same USB cable or on the same WiFi network." = "OpenDisplay 能把这台 %@ 变成 Mac 的第二块屏幕。它需要一台 Mac 运行 **OpenDisplay Mac 版**，并且用同一根 USB 线或同一个 WiFi 网络连起来。";
+"Get the Mac app" = "获取 Mac 版";
+"You can find this link again anytime in Settings — shake the %@ to open it." = "这个链接随时可以在设置里找到——摇一摇 %@ 即可打开。";
+"Close" = "关闭";
+
+/* MARK: How to connect */
+
+"How to connect" = "怎么连接";
+"USB: plug in the cable and open OpenDisplay on your computer. It connects through the wire on its own (lowest latency)." = "USB：插上线，并在电脑上打开 OpenDisplay。它会自己通过这条线连上（延迟最低）。";
+"WiFi: both devices on the same network, then pick this %@ in OpenDisplay on your computer." = "WiFi：两台设备连同一个网络，然后在电脑上的 OpenDisplay 里选中这台 %@。";
+"Touch: tap to click, drag to drag, two-finger pan to scroll." = "触摸：点一下就是单击，拖动就是拖拽，双指滑动是滚动。";
+"OpenDisplay needs the Mac app running on a Mac on the same cable or WiFi network. Download it here if you haven't yet." = "OpenDisplay 需要一台 Mac 运行 Mac 版，并且用同一根线或同一个 WiFi 网络连起来。还没装就点这里下载。";
+
+/* MARK: Settings */
+
+"Name" = "名称";
+"Device name" = "设备名称";
+"Shown in the WiFi list of OpenDisplay on your computer. iOS hides this %@'s real name from apps, so set it here once." = "显示在电脑上 OpenDisplay 的 WiFi 列表里。iOS 不允许 App 读取这台 %@ 的真实名称，所以在这里设一次。";
+"Status" = "状态";
+"Permissions" = "权限";
+"Open iOS Settings for OpenDisplay" = "打开 OpenDisplay 的 iOS 设置";
+"WiFi mode needs Local Network access. If your computer can't find this %@, enable it under Settings → Privacy & Security → Local Network → OpenDisplay. USB mode works without it." = "WiFi 模式需要本地网络权限。如果电脑找不到这台 %@，请到「设置 → 隐私与安全性 → 本地网络 → OpenDisplay」里打开它。USB 模式不需要这个权限。";
+"Analytics" = "数据叠加";
+"Performance overlay" = "性能叠加";
+"Metal renderer (experimental)" = "Metal 渲染器（实验性）";
+"The overlay shows FPS, bitrate, frame timing, stalls, and latency graphs at the bottom of the screen while streaming. The experimental Metal renderer decodes and presents frames manually — it adds decode and true on-glass latency metrics to the overlay, but in our measurements the system video layer displays frames faster. Leave it off unless you're debugging." = "投屏时屏幕底部会叠加显示帧率、码率、帧间隔、卡顿和延迟曲线。实验性的 Metal 渲染器改为手动解码与呈现——它能让叠加层多出解码耗时和真实上屏延迟，但实测中系统视频层呈现更快。除非在排查问题，否则别开。";
+"Diagnostics" = "诊断";
+"Connection log" = "连接日志";
+"What this %@ saw while connecting: sessions, restarts, decoder trouble. No screen content and nothing leaves the %@ unless you share it. Attach it to a GitHub issue if a connection won't come up." = "记录这台 %@ 连接时看到的东西：会话、重启、解码器异常。里面没有画面内容，除非你主动分享，否则不会离开这台 %@。如果连不上，可以附到 GitHub issue 里。";
+"The log could not be read." = "日志读不出来。";
+"Restart OpenDisplay and try again." = "重启 OpenDisplay 再试一次。";
+"Done" = "完成";
+
+/* MARK: About / updates */
+
+"About" = "关于";
+"Update available" = "有可用更新";
+"Update required" = "需要更新";
+"Update on the App Store" = "在 App Store 中更新";
+"Update" = "更新";
+"Later" = "以后";
+"Rate OpenDisplay on the App Store" = "在 App Store 给 OpenDisplay 评分";
+"Rate on the App Store" = "在 App Store 评分";
+"Support OpenDisplay on Ko-fi" = "在 Ko-fi 上支持 OpenDisplay";
+"GitHub: peetzweg/opendisplay" = "GitHub：peetzweg/opendisplay";
+"OpenDisplay.app" = "OpenDisplay.app";
+"OpenDisplay" = "OpenDisplay";
+
+/* MARK: Performance overlay */
+
+"FPS" = "帧率";
+"%lld" = "%lld";

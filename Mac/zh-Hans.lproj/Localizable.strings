@@ -1,0 +1,102 @@
+/* OpenDisplay Mac sender — Simplified Chinese (zh-Hans).
+
+   The English literal in the source is the key, so a missing entry falls back
+   to English rather than showing a raw key. Format specifiers must keep their
+   exact order and count: %@ is a string, %lld an Int, %d an Int32. */
+
+/* MARK: Control panel */
+
+"OpenDisplay" = "OpenDisplay";
+"Your iPads, iPhones and Macs as extra displays" = "把你的 iPad、iPhone 和 Mac 变成扩展显示器";
+"Devices" = "设备";
+"No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network." = "没有找到设备——用 USB 线连一台，或在同一个 WiFi 网络里的设备上打开 OpenDisplay。";
+"Connect" = "连接";
+"Disconnect" = "断开";
+"Disconnect All" = "全部断开";
+"Retry" = "重试";
+"Start this connection over" = "重新建立这条连接";
+
+/* MARK: Capture mode and quality */
+
+"Mode" = "模式";
+"Extend" = "扩展";
+"Mirror" = "镜像";
+"Quality" = "画质";
+"Best" = "最佳";
+"Balanced" = "均衡";
+"Fast" = "流畅";
+"Highest safe detail for this sender and display." = "这台发送端和这块屏幕上最安全的最高清晰度。";
+"Lower capture resolution for less latency and bandwidth." = "降低采集分辨率，换取更低延迟和带宽。";
+"Lowest latency and bandwidth, with a softer image. Good for WiFi." = "最低延迟和带宽，画面偏软。适合 WiFi。";
+
+/* MARK: Presentation and display arrangement */
+
+"Show app in" = "App 显示在";
+"Menu bar" = "菜单栏";
+"Dock" = "程序坞";
+"Background only" = "仅后台";
+"No menu bar or Dock icon — streaming keeps running. Open the OpenDisplay app again (Spotlight/Finder) to show this window." = "没有菜单栏或程序坞图标——投屏仍在运行。再次打开 OpenDisplay（聚焦搜索或访达）就能显示这个窗口。";
+"Display layout" = "显示器排列";
+"Arrange Displays…" = "排列显示器…";
+"Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device." = "打开「系统设置 → 显示器」，在那里用「排列…」把扩展显示器摆到相对 Mac 屏幕的位置。每台设备都会作为一块显示器出现，名字就是设备名。";
+
+/* MARK: Permissions */
+
+"Permissions" = "权限";
+"Screen Recording" = "屏幕录制";
+"Required to capture the display." = "采集画面所必需。";
+"Accessibility" = "辅助功能";
+"Required for touch input from the device." = "从设备注入触摸事件所必需。";
+"Local Network" = "本地网络";
+"Grant…" = "授权…";
+"Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under %@ in System Settings — flip the toggle there." = "向 macOS 申请这项权限。如果系统弹窗之前被关掉过，这一步会把 App 登记到「设置 → %@」里，去那里把开关打开。";
+"Open Settings" = "打开设置";
+"Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there." = "WiFi 模式需要。如果设备列表里没有设备，请在这台 Mac 和那台设备上分别到「隐私与安全性 → 本地网络」里允许 OpenDisplay，并让那台设备上的 OpenDisplay 保持打开。";
+"Off for OpenDisplay on this Mac, so WiFi mode finds no devices. Allow OpenDisplay under Privacy & Security → Local Network." = "这台 Mac 上的 OpenDisplay 被关掉了本地网络，所以 WiFi 模式找不到设备。请到「隐私与安全性 → 本地网络」里允许 OpenDisplay。";
+
+/* MARK: Session row */
+
+"Idle" = "空闲";
+"1 device connected" = "1 台设备已连接";
+"%lld devices connected" = "%lld 台设备已连接";
+"Shut Down" = "关闭";
+"Shut down %@" = "关闭 %@";
+"Shut down %@ now?" = "现在关闭 %@？";
+"Apps on it with unsaved changes can still stop the shutdown." = "上面有未保存改动的 App 仍可阻止这次关机。";
+"Display size" = "显示尺寸";
+"Display size of %@" = "%@ 的显示尺寸";
+"%@ · %@" = "%@ · %@";
+
+/* MARK: Status line */
+
+"Starting…" = "正在启动…";
+"Preparing virtual display…" = "正在准备虚拟显示器…";
+"Display blocked by saved macOS state — trying a fresh identity…" = "显示器被 macOS 记住的旧状态挡住了——正在换一个新身份重试…";
+"Screen Recording permission needed — see Permissions below" = "需要屏幕录制权限——见下方「权限」";
+"Extending — grant Accessibility for touch input" = "正在扩展——请授权辅助功能以使用触摸输入";
+"Extending to %@ (%lld×%lld)" = "正在扩展到 %@（%lld×%lld）";
+"Mirroring to %@ (%lld×%lld)" = "正在镜像到 %@（%lld×%lld）";
+"Connected to %@" = "已连接到 %@";
+"Connection lost — retrying for %llds…" = "连接已断开——正在重试 %lld 秒…";
+"%@ is silent — keeping the display (app in background or brief stall)" = "%@ 没有响应——保留显示器（App 在后台或短暂卡顿）";
+"Receiving %d×%d" = "正在接收 %d×%d";
+"Listener failed: %@" = "监听失败：%@";
+"Listener failed — restarting…" = "监听失败——正在重试…";
+"Capture stopped: %@" = "画面采集已停止：%@";
+"Capture could not be restarted" = "无法重新启动画面采集";
+"Stream reconfiguration failed: %@" = "重新配置投屏失败：%@";
+
+/* MARK: Errors */
+
+"The display reported an invalid video size." = "显示器报告的画质尺寸无效。";
+"The receiver does not support the selected video codec." = "接收端不支持所选的视频编码。";
+"The receiver did not advertise a usable video configuration." = "接收端没有声明可用的视频配置。";
+
+/* MARK: Footer, logs, updates */
+
+"Logs" = "日志";
+"Reveal the OpenDisplay log files in Finder" = "在访达中显示 OpenDisplay 的日志文件";
+"Quit" = "退出";
+"Check for Updates…" = "检查更新…";
+"FPS" = "帧率";
+"%lld" = "%lld";

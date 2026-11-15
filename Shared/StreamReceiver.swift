@@ -66,7 +66,7 @@ enum PeerUpdateSignal: Equatable {
 
 final class StreamReceiver: ObservableObject {
 
-    @Published var status = "Starting…"
+    @Published var status = String(localized: "Starting…")
     @Published var fps = 0
     @Published var connected = false
     @Published var videoSize = CGSize.zero   // for touch coordinate mapping
@@ -600,7 +600,7 @@ final class StreamReceiver: ObservableObject {
             params.serviceClass = .interactiveVideo
             listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
         } catch {
-            setStatus("Listener failed: \(error.localizedDescription)")
+            setStatus(String(localized: "Listener failed: \(error.localizedDescription)"))
             return
         }
         // Advertise on the local network so the Mac can discover us for WiFi
@@ -670,7 +670,7 @@ final class StreamReceiver: ObservableObject {
             case .failed(let error):
                 Log.info("listener failed: \(error) — restarting in 1s")
                 self.listenerHealthy = false
-                self.setStatus("Listener failed — restarting…")
+                self.setStatus(String(localized: "Listener failed — restarting…"))
                 self.queue.asyncAfter(deadline: .now() + 1) { self.restartListener() }
             case .cancelled:
                 self.listenerHealthy = false
@@ -1264,7 +1264,7 @@ final class StreamReceiver: ObservableObject {
                     DispatchQueue.main.async {
                         self.videoSize = CGSize(width: Int(dims.width), height: Int(dims.height))
                     }
-                    setStatus("Receiving \(dims.width)×\(dims.height)")
+                    setStatus(String(localized: "Receiving \(dims.width)×\(dims.height)"))
                 } else {
                     Log.info("format description FAILED: \(status)")
                 }
@@ -1300,7 +1300,7 @@ final class StreamReceiver: ObservableObject {
             DispatchQueue.main.async {
                 self.videoSize = CGSize(width: Int(dims.width), height: Int(dims.height))
             }
-            setStatus("Receiving \(dims.width)×\(dims.height)")
+            setStatus(String(localized: "Receiving \(dims.width)×\(dims.height)"))
         }
     }
 
