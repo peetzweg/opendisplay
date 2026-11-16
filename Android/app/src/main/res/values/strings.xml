@@ -32,6 +32,9 @@
     <string name="row_stream">Stream</string>
     <string name="section_name">Name</string>
     <string name="name_footer">Shown in the WiFi list of OpenDisplay on your computer.</string>
+    <string name="section_touch">Touch</string>
+    <string name="one_finger_scroll">Scroll with one finger</string>
+    <string name="one_finger_scroll_footer">Drag one finger to scroll, like a laptop touchscreen. A tap still clicks; hold for a moment before dragging to move a window or select text. Two fingers always scroll.</string>
     <string name="section_analytics">Analytics</string>
     <string name="performance_overlay">Performance overlay</string>
     <string name="analytics_footer">The overlay shows FPS, bitrate, decode time and latency at the bottom of the screen while streaming.</string>

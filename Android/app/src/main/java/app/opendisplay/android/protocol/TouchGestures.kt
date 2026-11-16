@@ -13,6 +13,10 @@ import kotlin.math.hypot
  *   sat under the first finger.
  * - Two fingers scroll: the cursor is put on the gesture once, up front, then
  *   centroid deltas go out in video pixels with natural-scrolling sign.
+ * - With [oneFingerScroll] on (a setting, off by default) one finger scrolls
+ *   too, like a laptop touchscreen: a drag past the slop before the longer
+ *   [scrollModeHoldMs] hold scrolls instead of pressing. A tap still clicks,
+ *   and holding still for [scrollModeHoldMs] before moving still drags.
  *
  * Pure logic: the view feeds positions, a [Scheduler] runs the hold timer.
  */
@@ -21,6 +25,7 @@ class TouchGestures(
     private val scheduler: Scheduler,
     private val dragSlopPx: Float,
     private val holdDelayMs: Long = 120,
+    private val scrollModeHoldMs: Long = 350,
 ) {
     interface Output {
         fun touch(phase: String, x: Double, y: Double)
@@ -44,21 +49,28 @@ class TouchGestures(
     private var lastNorm: Point? = null
 
     private var twoFinger = false
+    private var oneFingerScrolling = false
     private var lastCentroid: Point? = null
+
+    /** Read at each [down], so flipping the setting mid-gesture never changes that gesture. */
+    var oneFingerScroll = false
 
     fun down(p: Point) {
         twoFinger = false
+        oneFingerScrolling = false
         lastCentroid = null
         discardPendingDown()
         pendingDown = p
         lastNorm = p
-        holdTimer = scheduler.schedule(holdDelayMs) { commitPendingDown() }
+        val delay = if (oneFingerScroll) scrollModeHoldMs else holdDelayMs
+        holdTimer = scheduler.schedule(delay) { commitPendingDown() }
     }
 
     /** A further finger landed; [centroid] of all fingers down now. */
     fun pointerDown(pointerCount: Int, centroid: Point) {
         if (downSent) lastNorm?.let { output.touch("cancelled", it.nx, it.ny) }
         discardPendingDown()
+        oneFingerScrolling = false
         if (pointerCount == 2 && !twoFinger) {
             twoFinger = true
             // macOS scrolls whatever sits under the cursor; put it on the
@@ -80,12 +92,11 @@ class TouchGestures(
     fun move(pointerCount: Int, primary: Point, centroid: Point, videoScale: Float) {
         if (twoFinger) {
             if (pointerCount < 2) return
-            val last = lastCentroid
-            lastCentroid = centroid
-            if (last == null || videoScale <= 0f) return
-            val dx = (centroid.px - last.px) / videoScale
-            val dy = (centroid.py - last.py) / videoScale
-            if (dx != 0f || dy != 0f) output.scroll(dx.toDouble(), dy.toDouble())
+            scrollBy(centroid, videoScale)
+            return
+        }
+        if (oneFingerScrolling) {
+            scrollBy(primary, videoScale)
             return
         }
         lastNorm = primary
@@ -98,12 +109,25 @@ class TouchGestures(
                 output.touch("moved", primary.nx, primary.ny)
                 return
             }
+            if (oneFingerScroll) {
+                // Past the slop with no press yet: this finger scrolls. Nothing was
+                // posted, so no button can stick; the cursor already follows the finger.
+                discardPendingDown()
+                oneFingerScrolling = true
+                lastCentroid = primary
+                return
+            }
             commitPendingDown()
         }
         if (downSent) output.touch("moved", primary.nx, primary.ny)
     }
 
     fun up(p: Point) {
+        if (oneFingerScrolling) {
+            oneFingerScrolling = false
+            lastCentroid = null
+            return
+        }
         if (twoFinger) {
             twoFinger = false
             lastCentroid = null
@@ -120,7 +144,18 @@ class TouchGestures(
         if (downSent) lastNorm?.let { output.touch("cancelled", it.nx, it.ny) }
         discardPendingDown()
         twoFinger = false
+        oneFingerScrolling = false
         lastCentroid = null
+    }
+
+    /** Scroll by the movement since [lastCentroid], then move it to [to]. */
+    private fun scrollBy(to: Point, videoScale: Float) {
+        val last = lastCentroid
+        lastCentroid = to
+        if (last == null || videoScale <= 0f) return
+        val dx = (to.px - last.px) / videoScale
+        val dy = (to.py - last.py) / videoScale
+        if (dx != 0f || dy != 0f) output.scroll(dx.toDouble(), dy.toDouble())
     }
 
     /** Emit the withheld `began` where the finger first landed. */
