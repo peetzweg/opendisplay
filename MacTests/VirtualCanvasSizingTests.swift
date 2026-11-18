@@ -37,7 +37,17 @@ final class VirtualCanvasSizingTests: XCTestCase {
         XCTAssertEqual(VirtualCanvasSizing.physicalSizeInMillimeters(for: landscape),
                        CGSize(width: 208, height: 96))
         XCTAssertEqual(VirtualCanvasSizing.physicalSizeInMillimeters(for: portrait),
-                       CGSize(width: 96, height: 208))
+                       CGSize(width: 175, height: 380))
+    }
+
+    func testPortraitWidthIsHonouredAndReadsAsRetina() {
+        // macOS 27 ignores a declared width under ~166 mm and starts the
+        // display at 1x below ~147 ppi of declared width. The narrowest 2x
+        // desktop is 526 points (1,052 pixels) wide.
+        let narrowest = VirtualCanvasSize(pointsWide: 526, pointsHigh: 1_138)
+        let width = VirtualCanvasSizing.physicalSizeInMillimeters(for: narrowest).width
+        XCTAssertGreaterThanOrEqual(width, 170)
+        XCTAssertGreaterThanOrEqual(Double(narrowest.pixelsWide) / (width / 25.4), 150)
     }
 
     func testPhysicalSizeStaysAboveTheAreaMacOSRejects() {
