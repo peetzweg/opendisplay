@@ -46,6 +46,7 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - Mac
+      - Mac/BrightnessKeyInterceptor.swift
       - Shared
     dependencies:
       - package: Sparkle
@@ -107,6 +108,8 @@ targets:
     deploymentTarget: "12.0"
     sources:
       - MacReceiver
+      - MacReceiver/MacBrightnessController.swift
+      - MacReceiver/MacBrightnessHUDPresenter.swift
       - Shared
       - Mac/Log.swift
       - Mac/LogPolicies.swift

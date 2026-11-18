@@ -60,12 +60,8 @@ final class MacBrightnessHUDPresenter {
 
     /// Removes the HUD from its superview and releases the hosting view.
     /// Call this when the parent view or window is being torn down.
-    func remove() {
+    deinit {
         hostingView?.removeFromSuperview()
         hostingView = nil
-    }
-
-    deinit {
-        remove()
     }
 }
