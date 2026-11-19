@@ -15,6 +15,11 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_AIRPLAY_AUDIO_RECEIVER, true)
         set(v) = prefs.edit().putBoolean(KEY_AIRPLAY_AUDIO_RECEIVER, v).apply()
 
+    /** Opt-in: Android 5/6 vendor OMX decoder workarounds. Off by default. */
+    var legacyVideoCompat: Boolean
+        get() = prefs.getBoolean(KEY_LEGACY_VIDEO_COMPAT, false)
+        set(v) = prefs.edit().putBoolean(KEY_LEGACY_VIDEO_COMPAT, v).apply()
+
     var hasConnectedBefore: Boolean
         get() = prefs.getBoolean("hasConnectedBefore", false)
         set(v) = prefs.edit().putBoolean("hasConnectedBefore", v).apply()
@@ -27,5 +32,6 @@ class AppPrefs(context: Context) {
         const val FILE = "settings"
         const val KEY_SHOW_ANALYTICS = "showAnalytics"
         const val KEY_AIRPLAY_AUDIO_RECEIVER = "airplayAudioReceiver"
+        const val KEY_LEGACY_VIDEO_COMPAT = "legacyVideoCompat"
     }
 }

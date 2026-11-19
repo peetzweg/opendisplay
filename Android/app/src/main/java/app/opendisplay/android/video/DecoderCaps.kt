@@ -16,7 +16,19 @@ object DecoderCaps {
     /** Parity with the iOS receiver: offer 60 even on 90/120 Hz panels. */
     private const val TARGET_FPS = 60
 
-    fun videoCaps(panelWide: Int, panelHigh: Int): List<VideoCap> {
+    /** Opt-in compatibility envelope for Android 5/6 vendor OMX decoders. */
+    const val LEGACY_TARGET_FPS = 15
+    const val LEGACY_ALIGNMENT = 16
+
+    fun videoCaps(panelWide: Int, panelHigh: Int, compat: Boolean = false): List<VideoCap> {
+        if (compat) {
+            // H.264 only, aligned raster, modest frame rate. These are the
+            // settings the software decoder handles reliably on old devices.
+            return listOf(VideoCap(Codec.H264,
+                floorTo(panelWide, LEGACY_ALIGNMENT),
+                floorTo(panelHigh, LEGACY_ALIGNMENT),
+                LEGACY_TARGET_FPS))
+        }
         val caps = mutableListOf<VideoCap>()
         envelope(Codec.H264, panelWide, panelHigh, requireHardware = false)?.let { caps.add(it) }
             ?: caps.add(VideoCap(Codec.H264, maxFrameRate = TARGET_FPS)) // every receiver offers H.264
@@ -24,6 +36,17 @@ object DecoderCaps {
         envelope(Codec.HEVC, panelWide, panelHigh, requireHardware = true)?.let { caps.add(it) }
         return caps
     }
+
+    fun floorTo(value: Int, step: Int): Int = value / step * step
+
+    fun ceilTo(value: Int, step: Int): Int = (value + step - 1) / step * step
+
+    /** Name of a software decoder for [mime], or null when none is listed. */
+    fun softwareDecoderName(mime: String): String? =
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { info ->
+            !info.isEncoder && !isHardware(info) &&
+                info.supportedTypes.any { it.equals(mime, ignoreCase = true) }
+        }?.name
 
     private fun envelope(codec: Codec, wide: Int, high: Int, requireHardware: Boolean): VideoCap? {
         val info = decoderFor(codec.mime, requireHardware) ?: return null

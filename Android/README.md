@@ -44,6 +44,12 @@ immersive insets) are used when present.
   foreground service that accepts audio from iPhone/Mac without exposing
   screen mirroring, photos or AirPlay video.
 
+- Video compatibility: an opt-in "Legacy decoder compatibility" switch uses
+  the software H.264 decoder, 16-pixel aligned frames and a 15 fps cap for old
+  vendor OMX decoders. It is off by default, so Android 7+ keeps the normal
+  hardware path. Enable it only if the picture shows diagonal stripes or
+  colour blocks on Android 5/6.
+
 Not yet: sender-side ADB discovery.
 
 ## Build and install

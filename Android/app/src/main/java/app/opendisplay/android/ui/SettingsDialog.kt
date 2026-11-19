@@ -34,6 +34,7 @@ class SettingsDialog : DialogFragment() {
         fun onNameChanged(name: String?)
         fun onOverlayChanged(enabled: Boolean)
         fun onAirPlayReceiverChanged(enabled: Boolean)
+        fun onLegacyVideoCompatChanged(enabled: Boolean)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -109,6 +110,20 @@ class SettingsDialog : DialogFragment() {
                     isIconSpaceReserved = false
                     setOnPreferenceChangeListener { _, value ->
                         ui.post { host.onAirPlayReceiverChanged(value as Boolean) }
+                        true
+                    }
+                })
+            }
+
+            screen.category(R.string.section_compatibility) {
+                addPreference(SwitchPreferenceCompat(ctx).apply {
+                    key = AppPrefs.KEY_LEGACY_VIDEO_COMPAT
+                    title = getString(R.string.legacy_video_compat)
+                    summary = getString(R.string.legacy_video_compat_summary)
+                    setDefaultValue(false)
+                    isIconSpaceReserved = false
+                    setOnPreferenceChangeListener { _, value ->
+                        ui.post { host.onLegacyVideoCompatChanged(value as Boolean) }
                         true
                     }
                 })

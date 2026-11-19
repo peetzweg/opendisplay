@@ -129,7 +129,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         setContentView(root)
         enterImmersive()
 
-        decoder = VideoDecoder(this).also { it.start() }
+        decoder = VideoDecoder(this, prefs.legacyVideoCompat).also { it.start() }
         server = ReceiverServer(this, ::buildHello)
         advertiser = Advertiser(this)
         val slop = 10 * resources.displayMetrics.density
@@ -244,6 +244,15 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     override fun onOverlayChanged(enabled: Boolean) = refreshIdle()
 
     override fun onAirPlayReceiverChanged(enabled: Boolean) = syncAirPlayAudioReceiver(enabled)
+
+    override fun onLegacyVideoCompatChanged(enabled: Boolean) {
+        prefs.legacyVideoCompat = enabled
+        decoder.setCompatMode(enabled)
+        videoCaps = DecoderCaps.videoCaps(panel.pixelsWide, panel.pixelsHigh, enabled)
+        Log.i(TAG, "legacy video compatibility ${if (enabled) "enabled" else "disabled"}; caps $videoCaps")
+        main.removeCallbacks(resendHello)
+        if (connected) main.postDelayed(resendHello, 250)
+    }
 
     /** AirPlay audio runs as a foreground service and is independent of the screen-cast session. */
     private fun syncAirPlayAudioReceiver(enabled: Boolean = prefs.airplayAudioReceiver) {
@@ -452,7 +461,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         displayMaxFrameRate = maxRefreshRate()
         if (next == panel) return
         panel = next
-        videoCaps = DecoderCaps.videoCaps(w, h)
+        videoCaps = DecoderCaps.videoCaps(w, h, prefs.legacyVideoCompat)
         Log.i(TAG, "panel ${w}x$h @${next.scale}, caps $videoCaps")
         // 6.1: re-send hello on the live connection whenever the panel
         // changes. Settle first: locking rotates to the lock screen's
