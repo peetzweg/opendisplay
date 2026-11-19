@@ -1,0 +1,197 @@
+diff --git a/lib/airplay_video.c b/lib/airplay_video.c
+index 19505b2..fa32679 100644
+--- a/lib/airplay_video.c
++++ b/lib/airplay_video.c
+@@ -64,3 +64,15 @@
+     int num_uri;
+ };
+ 
++static char *_raw_copy_playlist(const char *s) {
++    size_t len = strlen(s);
++    char *copy = (char *) malloc(len + 1);
++    if (!copy) {
++        printf("Memory allocation failure (playlist_copy)\n");
++        exit(1);
++    }
++    memcpy(copy, s, len);
++    copy[len] = '\0';
++    return copy;
++}
++
+@@ -393,7 +405,7 @@
+     *slices = count + 2;
+ 
+     int copies = 0;
+-    for (int i = 1; i < count; i++) {
++    for (int i = 1; i <= count; i++) {
+         if (!strcmp(languages[i].code, languages[1].code)) {
+             copies++;
+         }
+@@ -428,7 +440,7 @@
+ 
+     assert(airplay_video);
+     printf("%d available languages:\n\n", language_count);
+-    int i_default = -1;
++    int i_default = 1;
+     
+     const char *language_name = get_language_name(airplay_video);
+     for (int i = 1; i <= language_count; i ++) {
+@@ -632,9 +644,11 @@
+     for (int i = 0; i < num ; i++) {
+         if (strcmp(media_data_store[i].uri, media_data_store[num].uri) == 0) {
+-            assert(strcmp(media_data_store[i].playlist, media_playlist) == 0);
+-            media_data_store[num].num = i;
+-            free (media_playlist);
+-            return 1;
++            if (strcmp(media_data_store[i].playlist, media_playlist) == 0) {
++                media_data_store[num].num = i;
++                free (media_playlist);
++                return 1;
++            }
++            break;
+         }
+     }
+     media_item_t *media_item = &media_data_store[num];
+@@ -791,4 +805,18 @@
+     return new_master;
+ }
+ 
++static char *_quoted_field(const char *hay, const char *key, size_t *len) {
++    const char *begin = strstr(hay, key);
++    if (begin) begin = strchr(begin, '"');
++    if (!begin) return NULL;
++    begin++;
++    const char *end = strchr(begin, '"');
++    if (!end) return NULL;
++    *len = end - begin;
++    char *val = (char *) calloc(*len + 1, sizeof(char));
++    assert(val);
++    memcpy(val, begin, *len);
++    return val;
++}
++
+ char *adjust_yt_condensed_playlist(const char *media_playlist) {
+@@ -799,49 +827,21 @@
+ 
+-    const char *base_uri_begin;
+-    const char *params_begin;
+-    const char *prefix_begin;
+-    size_t base_uri_len;
+-    size_t params_len;
+-    size_t prefix_len;
++    size_t base_uri_len = 0;
++    size_t params_len = 0;
++    size_t prefix_len = 0;
+     const char* ptr = strstr(media_playlist, "#EXTM3U\n");
++    if (!ptr) return _raw_copy_playlist(media_playlist);
+ 
+     ptr += strlen("#EXTM3U\n");
+-    assert(ptr);
+     if (strncmp(ptr, "#YT-EXT-CONDENSED-URL", strlen("#YT-EXT-CONDENSED-URL"))) {
+-        size_t len = strlen(media_playlist);
+-        char * playlist_copy = (char *) malloc(len + 1);
+-        if (!playlist_copy) {
+-            printf("Memory allocation failure (playlist_copy)\n");
+-            exit(1);
+-        }
+-        memcpy(playlist_copy, media_playlist, len);
+-        playlist_copy[len] = '\0';
+-        return playlist_copy;
+-    }
+-    ptr = strstr(ptr, "BASE-URI=");
+-    base_uri_begin = strchr(ptr, '"');
+-    base_uri_begin++;
+-    ptr = strchr(base_uri_begin, '"');
+-    base_uri_len = ptr - base_uri_begin;
+-    char *base_uri = (char *) calloc(base_uri_len + 1, sizeof(char));
+-    assert(base_uri);
+-    memcpy(base_uri, base_uri_begin, base_uri_len);  //must free
+-
+-    ptr = strstr(ptr, "PARAMS=");
+-    params_begin = strchr(ptr, '"');
+-    params_begin++;
+-    ptr = strchr(params_begin,'"');
+-    params_len = ptr - params_begin;
+-    char *params = (char *) calloc(params_len + 1, sizeof(char));
+-    assert(params);
+-    memcpy(params, params_begin, params_len);  //must free
+-
+-    ptr = strstr(ptr, "PREFIX=");
+-    prefix_begin = strchr(ptr, '"');
+-    prefix_begin++;
+-    ptr = strchr(prefix_begin,'"');
+-    prefix_len = ptr - prefix_begin;
+-    char *prefix = (char *) calloc(prefix_len + 1, sizeof(char));
+-    assert(prefix);
+-    memcpy(prefix, prefix_begin, prefix_len);  //must free
++        return _raw_copy_playlist(media_playlist);
++    }
++    char *base_uri = _quoted_field(ptr, "BASE-URI=", &base_uri_len);
++    char *params = _quoted_field(ptr, "PARAMS=", &params_len);
++    char *prefix = _quoted_field(ptr, "PREFIX=", &prefix_len);
++    if (!base_uri || !params || !prefix) {
++        free(base_uri);
++        free(params);
++        free(prefix);
++        return _raw_copy_playlist(media_playlist);
++    }
+ 
+@@ -886,8 +886,7 @@
+     }
+ 
+     size_t old_size = strlen(media_playlist);
+-    size_t new_len = old_size;
+-    new_len += count * (base_uri_len + params_len);
++    size_t new_len = old_size + (size_t) count * (base_uri_len + params_len + 2 * nparams + 2);
+ 
+     int byte_count = 0;
+     char * new_playlist = (char *) malloc(new_len + 1);
+@@ -900,4 +899,4 @@
+     char *new_pos = new_playlist;
+     ptr = old_pos;
+     ptr = strstr(old_pos, "#EXTINF:");
+-    size_t len = ptr - old_pos;
++    size_t len = (ptr ? ptr : old_pos + strlen(old_pos)) - old_pos;
+@@ -911,3 +910,4 @@
+         const char *end = NULL;
+         const char *start = strstr(ptr, prefix);
++        if (!start) break;
+         len = start - ptr;
+@@ -945,6 +945,7 @@
+             byte_count++;
+             new_pos++;
+ 
++            if (!end) end = old_pos + strlen(old_pos);
+             len = end - old_pos;
+             end++;
+ 
+@@ -965,7 +966,8 @@
+     new_pos += len;
+     old_pos += len;
+ 
+-    assert(byte_count == (int) new_len);
++    new_playlist[byte_count] = '\0';
++    assert(byte_count <= (int) new_len);
+ 
+     free (prefix);
+     free (base_uri);
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index 7984be8..aa985bf 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -468,7 +468,6 @@
+ 
+     raop_t *raop = conn->raop;
+     airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
+-    assert(airplay_video);
+     bool data_is_plist = false;
+     plist_t req_root_node = NULL;
+     uint64_t uint_val = 0;
+@@ -476,6 +475,7 @@
+     int fcup_response_statuscode = 0;
+     char *type = NULL;
+     bool logger_debug = (logger_get_level(raop->logger) >= LOGGER_DEBUG);
++    if (!airplay_video) goto post_action_error;
+ 
+     const char* session_id = http_request_get_header(request, "X-Apple-Session-ID");
+     if (!session_id) {

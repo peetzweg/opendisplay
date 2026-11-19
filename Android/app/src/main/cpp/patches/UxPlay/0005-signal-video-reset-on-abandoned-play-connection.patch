@@ -1,0 +1,79 @@
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index 96c9ec1..4d431c4 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -152,6 +152,7 @@
+     raop_t *raop = conn->raop;
+     logger_log(raop->logger, LOGGER_INFO, "client HTTP request POST stop");
+ 
++    raop->video_play_conn = NULL;
+     raop->callbacks.on_video_stop(raop->callbacks.cls);
+ }
+ 
+@@ -978,6 +979,8 @@
+         goto play_error;
+     }
+ 
++    raop->video_play_conn = (void *) conn;
++
+     free(playback_location);
+ 
+     if (req_root_node) {
+diff --git a/lib/raop.c b/lib/raop.c
+index 7098fae..86db001 100644
+--- a/lib/raop.c
++++ b/lib/raop.c
+@@ -89,3 +89,4 @@
+     bool hls_support;
+     bool hls_pending;
++    void *video_play_conn;
+   
+@@ -549,6 +550,13 @@
+     raop_t *raop = conn->raop;
+     logger_log(raop->logger, LOGGER_DEBUG, "Destroying connection");
+ 
++    if (raop->video_play_conn == ptr) {
++        raop->video_play_conn = NULL;
++        if (raop->callbacks.video_reset) {
++            raop->callbacks.video_reset(raop->callbacks.cls, RESET_TYPE_HLS_CONN_CLOSED);
++        }
++    }
++
+     if (raop->callbacks.conn_destroy) {
+         raop->callbacks.conn_destroy(raop->callbacks.cls);
+     }
+@@ -638,6 +646,7 @@
+ 
+     raop->hls_support = false;
+     raop->hls_pending = false;
++    raop->video_play_conn = NULL;
+     
+     raop->nonce = NULL;
+ 
+@@ -854,6 +863,7 @@
+ }
+ 
+ void raop_remove_hls_connections(raop_t * raop) {
++    raop->video_play_conn = NULL;
+     httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_HLS);
+     httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_PTTH);
+     httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_AIRPLAY);
+@@ -880,3 +890,4 @@
+     assert (id >= 0);
+     raop_destroy_airplay_video(raop, id);
+     raop->current_video = -1;
++    raop->video_play_conn = NULL;
+diff --git a/lib/raop.h b/lib/raop.h
+index d654d0f..bed2ded 100644
+--- a/lib/raop.h
++++ b/lib/raop.h
+@@ -65,7 +65,8 @@
+     RESET_TYPE_HLS_SHUTDOWN,
+     RESET_TYPE_HLS_EOS,
+     RESET_TYPE_ON_VIDEO_PLAY,
+-    RESET_TYPE_RTP_TO_HLS_TEARDOWN
++    RESET_TYPE_RTP_TO_HLS_TEARDOWN,
++    RESET_TYPE_HLS_CONN_CLOSED
+ } reset_type_t;
+ 
+ struct raop_callbacks_s {

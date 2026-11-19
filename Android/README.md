@@ -39,21 +39,105 @@ immersive insets) are used when present.
   fingers ignored while the pen is down. Senders below pv 3 get the pen as
   `touch`. Covered by unit tests; not yet tried with real pen hardware.
 
+- AirPlay audio: the app also advertises a RAOP audio-only receiver. Settings
+  has an "Allow AirPlay audio" switch, enabled by default; it controls a
+  foreground service that accepts audio from iPhone/Mac without exposing
+  screen mirroring, photos or AirPlay video.
+
 Not yet: sender-side ADB discovery.
 
 ## Build and install
 
-Needs JDK 17 and the Android SDK (platform 35).
+Needs JDK 17, Android SDK platform 36, and NDK 27.0.12077973 for the embedded
+AirPlay audio engine.
+
+The separately licensed native source trees are not committed; they are
+downloaded before CMake configuration. See
+[Third-party dependency download](#third-party-dependency-download) below.
 
 ```sh
-cd Android
 ./gradlew assembleDebug                 # app/build/outputs/apk/debug/app-debug.apk
 ./gradlew installDebug                  # onto the connected device
 ./gradlew testDebugUnitTest lintDebug   # JVM tests + lint (catches API > minSdk)
 ```
 
+To compile only the Kotlin/UI parts when the NDK is not installed, add
+`-PskipAirplayNative=true`; such a build does not contain the native AirPlay
+engine and the audio receiver will safely no-op and will not download the
+third-party trees.
+
 The debug build installs as `com.peetzweg.opendisplay.debug` ("OpenDisplay
 Dev") next to a release build.
+
+## Third-party dependency download
+
+The native AirPlay engine is built from pinned upstream commits. Those source
+trees are licensed separately and are **not stored in this repository**. Only
+our patches, the bootstrap script and the licence notices are committed. The
+exact commits, licences and the OpenSSL tarball hash are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Automatic download
+
+A normal native build downloads everything automatically before CMake runs:
+
+```sh
+./gradlew assembleDebug
+```
+
+You can trigger just the download step without compiling:
+
+```sh
+./gradlew prepareAirplayThirdParty
+```
+
+The task is incremental: an existing complete tree is detected and preserved,
+so it does not re-download on every build.
+
+### Manual download
+
+If you prefer to run the bootstrap directly, or need to pass a proxy:
+
+```sh
+python3 tools/bootstrap-airplay-third-party.py
+python3 tools/bootstrap-airplay-third-party.py --proxy http://host:port
+python3 tools/bootstrap-airplay-third-party.py --force
+```
+
+- `--force` removes and replaces the downloaded trees.
+- `HTTP_PROXY` and `HTTPS_PROXY` environment variables are also honoured.
+- Through Gradle, use `-PairplayBootstrapProxy=http://host:port` or
+  `-PforceAirplayBootstrap=true`.
+
+The bootstrap downloads UxPlay, FFmpeg, libplist, openssl-cmake and the OpenSSL
+3.4.4 tarball into `app/src/main/cpp/third_party`, verifies the OpenSSL SHA-256,
+applies the patches in `app/src/main/cpp/patches/UxPlay`, and writes a marker
+file when finished. It needs at least 256 MiB of free space; a full native
+build needs substantially more.
+
+After a successful run, these paths exist:
+
+```text
+app/src/main/cpp/third_party/UxPlay
+app/src/main/cpp/third_party/ffmpeg
+app/src/main/cpp/third_party/libplist
+app/src/main/cpp/third_party/openssl-cmake/openssl-3.4.4.tar.gz
+app/src/main/cpp/third_party/.airplay-bootstrap
+```
+
+If an older checkout still tracks those trees in Git, remove them from the
+index once (the files stay on disk and are recreated on a fresh clone):
+
+```sh
+git rm -r --cached \
+  app/src/main/cpp/third_party/UxPlay \
+  app/src/main/cpp/third_party/ffmpeg \
+  app/src/main/cpp/third_party/libplist \
+  app/src/main/cpp/third_party/openssl-cmake
+```
+
+Do not commit the downloaded trees, `.downloads/`, `.staging/`, the marker
+file, or `app/.cxx/`. They are already covered by `.gitignore` for new clones.
 
 ## Connecting
 
@@ -82,15 +166,35 @@ Mac sender with `-testPattern YES`, HEVC 2424x1080 at 60 fps:
 
 End-to-end is capture on the Mac to decoder output on the phone.
 
+## Android 5/6 (legacy OMX decoders)
+
+On API 21-23 (e.g. CyanogenMod 13 / Android 6.0.1) vendor OMX decoders size
+their output buffers from the raster in the MediaFormat. H.264 codes a
+16-aligned raster and crops it in the SPS, so the non-16-aligned panel rasters
+this app negotiates used to come out as diagonal stripes and colour blocks
+(花屏). `LegacyCodecs` gates the workarounds for those platforms: H.264 only,
+16-pixel (or coarser) aligned rasters, a 15 fps cap (a 60 fps desktop stream
+overwhelms these decoders and triggers a keyframe storm), rate-limited keyframe
+requests, and the old output-buffer handshake. Where the vendor decoder cannot
+handle the sender's H.264 High-profile stream (e.g. TI DUCATI1 on the Galaxy
+Tab 2), the platform's software H.264 decoder is used instead: it produces a
+clean picture at the reduced frame rate. API 24+ is unchanged. The debug log
+prints `legacy:` when this path is active.
+
 ## Code map
 
 ```
 protocol/  framing, demux, Annex B, H.264 SPS size, clock sync, hello,
            cursor sequence, touch gestures (pure Kotlin, unit tested)
 net/       ReceiverServer (TCP 9000), CursorChannel (UDP 9001), Advertiser (NSD)
-video/     VideoDecoder (MediaCodec), DecoderCaps (videoCaps), StreamStats
+video/     VideoDecoder (MediaCodec), DecoderCaps (videoCaps), LegacyCodecs, StreamStats
 ui/        MainActivity, VideoFrame (aspect fit), CursorView, DeviceIdentity
+airplay/   RAOP audio-only receiver service, BootReceiver, NSD advertiser,
+           audio renderer and JNI bridge
+cpp/       native UxPlay/FFmpeg/OpenSSL/Oboe engine for the AirPlay receiver
+tools/android/  scripted ffmpeg sender and mock receiver for testing without a Mac
+tools/bootstrap-airplay-third-party.py  pinned downstream source bootstrap
 ```
 
-`tools/android/` has a scripted ffmpeg sender and a mock receiver for
-testing without a Mac.
+The repository keeps only our small patches, the bootstrap script and licence
+notices. The large upstream source trees are downloaded at build time.

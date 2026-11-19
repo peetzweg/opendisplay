@@ -33,6 +33,7 @@ class SettingsDialog : DialogFragment() {
         val uiKind: String
         fun onNameChanged(name: String?)
         fun onOverlayChanged(enabled: Boolean)
+        fun onAirPlayReceiverChanged(enabled: Boolean)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,6 +98,20 @@ class SettingsDialog : DialogFragment() {
                 addPreference(info(R.string.row_listening, getString(R.string.row_listening_value)))
                 connection = info(R.string.row_connection, null).also { addPreference(it) }
                 stream = info(R.string.row_stream, null).also { addPreference(it) }
+            }
+
+            screen.category(R.string.section_airplay) {
+                addPreference(SwitchPreferenceCompat(ctx).apply {
+                    key = AppPrefs.KEY_AIRPLAY_AUDIO_RECEIVER
+                    title = getString(R.string.airplay_audio_receiver)
+                    summary = getString(R.string.airplay_audio_receiver_summary)
+                    setDefaultValue(true)
+                    isIconSpaceReserved = false
+                    setOnPreferenceChangeListener { _, value ->
+                        ui.post { host.onAirPlayReceiverChanged(value as Boolean) }
+                        true
+                    }
+                })
             }
 
             screen.category(R.string.section_name) {

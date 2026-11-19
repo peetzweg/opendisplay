@@ -1,0 +1,13 @@
+diff --git a/lib/raop.c b/lib/raop.c
+index 86db001..07564e1 100644
+--- a/lib/raop.c
++++ b/lib/raop.c
+@@ -273,7 +273,7 @@
+             if (httpd_count_connection_type(raop->httpd, CONNECTION_TYPE_RAOP)) {
+                 char ipaddr[40] = { '\0' };
+                 utils_ipaddress_to_string(conn->remotelen, conn->remote, conn->zone_id, ipaddr, (int) (sizeof(ipaddr)));
+-                if (httpd_nohold(raop->httpd)) {
++                if (httpd_nohold(raop->httpd) && !ble) {
+                     logger_log(raop->logger, LOGGER_INFO, "*****\"nohold\" feature: switch to new connection request from %s", ipaddr);		  
+                     httpd_remove_known_connections(raop->httpd);
+                     if (raop->callbacks.video_reset) {

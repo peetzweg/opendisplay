@@ -1,0 +1,168 @@
+diff --git a/lib/airplay_video.c b/lib/airplay_video.c
+index fa32679..87c98aa 100644
+--- a/lib/airplay_video.c
++++ b/lib/airplay_video.c
+@@ -22,6 +22,7 @@
+ #include <string.h>
+ #include <stdbool.h>
+ #include <assert.h>
++#include <pthread.h>
+ 
+ #include "raop.h"
+ #include "airplay_video.h"
+@@ -62,6 +63,7 @@
+     char *master_playlist;
+     media_item_t *media_data_store;
+     int num_uri;
++    pthread_mutex_t media_data_store_lock;
+ };
+ 
+ static char *_raw_copy_playlist(const char *s) {
+@@ -110,6 +112,7 @@
+     airplay_video->media_data_store = NULL;
+     airplay_video->master_playlist = NULL;
+     airplay_video->num_uri = 0;
++    pthread_mutex_init(&airplay_video->media_data_store_lock, NULL);
+     airplay_video->next_uri = 0;
+     return airplay_video;
+ }
+@@ -138,9 +141,12 @@
+     if (airplay_video->language_code) {
+        free(airplay_video->language_code);
+     }
++    pthread_mutex_lock(&airplay_video->media_data_store_lock);
+     if (airplay_video->media_data_store) {
+         destroy_media_data_store(airplay_video);
+     }
++    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
++    pthread_mutex_destroy(&airplay_video->media_data_store_lock);
+     if (airplay_video->master_playlist){
+         free (airplay_video->master_playlist);
+     }
+@@ -306,10 +312,12 @@
+ }
+ 
+ void store_master_playlist(airplay_video_t *airplay_video, char *master_playlist) {
++    pthread_mutex_lock(&airplay_video->media_data_store_lock);
+     if (airplay_video->master_playlist) {
+         free (airplay_video->master_playlist);
+     }
+     airplay_video->master_playlist = master_playlist;
++    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+ }
+ 
+ typedef struct language_s {
+@@ -536,6 +544,9 @@
+ }
+ 
+ char *get_master_playlist(airplay_video_t *airplay_video) {
+-    return  airplay_video->master_playlist;
++    pthread_mutex_lock(&airplay_video->media_data_store_lock);
++    char *copy = airplay_video->master_playlist ? _raw_copy_playlist(airplay_video->master_playlist) : NULL;
++    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
++    return copy;
+ }
+ 
+@@ -562,6 +573,7 @@
+ }
+ 
+ void create_media_data_store(airplay_video_t * airplay_video, char ** uri_list, int num_uri) {  
++    pthread_mutex_lock(&airplay_video->media_data_store_lock);
+     destroy_media_data_store(airplay_video);
+     media_item_t *media_data_store = calloc(num_uri, sizeof(media_item_t));
+     if (!media_data_store) {
+@@ -581,6 +593,7 @@
+     }
+     airplay_video->media_data_store = media_data_store;
+     airplay_video->num_uri = num_uri;
++    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+ }
+ 
+ 
+@@ -634,9 +647,12 @@
+ }
+ 
+ int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist, int *count, float *duration, bool *endlist, int num) {
++    pthread_mutex_lock(&airplay_video->media_data_store_lock);
+     media_item_t *media_data_store = airplay_video->media_data_store;
+     if ( num < 0 ||  num >= airplay_video->num_uri) {
++        pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+         return -1;
+     } else if (media_data_store[num].playlist) {
++        pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+         return -2;
+     }
+@@ -646,6 +662,7 @@
+             if (strcmp(media_data_store[i].playlist, media_playlist) == 0) {
+                 media_data_store[num].num = i;
+                 free (media_playlist);
++                pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+                 return 1;
+             }
+             break;
+@@ -657,21 +674,31 @@
+     media_item->duration = *duration;
+     media_item->endlist = *endlist;
+     parse_media_playlist(media_item);
++    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+     return 0;
+ }
+ 
+ char * get_media_playlist(airplay_video_t *airplay_video, int *count, float *duration, const char *uri) {
++    pthread_mutex_lock(&airplay_video->media_data_store_lock);
+     media_item_t *media_data_store = airplay_video->media_data_store;
+     if (media_data_store == NULL) {
++        pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+         return NULL;
+     }
+     for (int i = 0; i < airplay_video->num_uri; i++) {
+         if (strstr(media_data_store[i].uri, uri)) {
+-            *count = media_data_store[media_data_store[i].num].count;
+-            *duration = media_data_store[media_data_store[i].num].duration;
+-            return media_data_store[media_data_store[i].num].playlist;
++            const char *playlist = media_data_store[media_data_store[i].num].playlist;
++            char *copy = NULL;
++            if (playlist) {
++                *count = media_data_store[media_data_store[i].num].count;
++                *duration = media_data_store[media_data_store[i].num].duration;
++                copy = _raw_copy_playlist(playlist);
++            }
++            pthread_mutex_unlock(&airplay_video->media_data_store_lock);
++            return copy;
+         }
+     }
++    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+     return NULL;
+ }
+ 
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index aa985bf..417cc2b 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -970,16 +970,8 @@
+     if (!strcmp(url, "/master.m3u8")){
+         char * master_playlist  = get_master_playlist(airplay_video);
+         if (master_playlist) {
+-            size_t len = strlen(master_playlist);
+-            char * data = (char *) malloc(len + 1);
+-            if (!data) {
+-                printf("Memory allocation failed (data)\n");
+-                exit(1);
+-            }
+-            memcpy(data, master_playlist, len);
+-            data[len] = '\0';
+-            *response_data = data;
+-            *response_datalen = (int ) len;
++            *response_data = master_playlist;
++            *response_datalen = (int) strlen(master_playlist);
+         } else {
+             logger_log(raop->logger, LOGGER_ERR,"requested master playlist %s not found", url); 
+         }
+@@ -990,6 +982,7 @@
+         char *media_playlist = get_media_playlist(airplay_video, &chunks, &duration, url);
+         if (media_playlist) {
+             char *data  = adjust_yt_condensed_playlist(media_playlist);
++            free(media_playlist);
+             *response_data = data;
+             *response_datalen = strlen(data);
+             logger_log(raop->logger, LOGGER_INFO,

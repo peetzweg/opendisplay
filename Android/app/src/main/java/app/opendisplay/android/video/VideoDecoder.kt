@@ -2,6 +2,7 @@ package app.opendisplay.android.video
 
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.os.SystemClock
@@ -167,7 +168,11 @@ class VideoDecoder(private val callbacks: Callbacks) {
      * Returns true when [work] itself was dropped.
      */
     private fun skipBacklog(work: Work.Frame): Boolean {
-        val limit = if (decoderLive) MAX_BACKLOG else MAX_STARTUP_BACKLOG
+        // Old OMX decoders conceal missing reference frames badly (coloured
+        // blocks), so allow a deeper queue there instead of cutting to a new
+        // keyframe as eagerly as on modern decoders.
+        val limit = if (!decoderLive) MAX_STARTUP_BACKLOG
+        else MAX_BACKLOG * LegacyCodecs.backlogMultiplier(Build.VERSION.SDK_INT)
         val pending = queue.filterIsInstance<Work.Frame>()
         if (pending.size <= limit) return false
         val lastKey = pending.indexOfLast { isKeyframe(it.unit) }
@@ -224,6 +229,8 @@ class VideoDecoder(private val callbacks: Callbacks) {
             awaitingKeyframe = false
         }
         if (slices.isEmpty()) return
+        // Keep the original csd-only setup. Feeding SPS/PPS in-band made old
+        // OMX components lose their decoder state; they are already in csd-0/1.
         queueInput(AnnexB.join(slices), keyframe, work)
     }
 
@@ -257,7 +264,11 @@ class VideoDecoder(private val callbacks: Callbacks) {
             val pts = work.receivedNanos / 1000
             inFlight[pts] = work.receivedNanos to work.unit.captureMs
             if (inFlight.size > 256) inFlight.clear()
-            val flags = if (keyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+            // BUFFER_FLAG_KEY_FRAME is an encoder-side flag. Some pre-Nougat
+            // OMX decoders misread it on an input buffer; they find the IDR in
+            // the Annex B stream anyway.
+            val flags = if (keyframe && LegacyCodecs.markSyncFrame(Build.VERSION.SDK_INT))
+                MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
             codec.queueInputBuffer(index, 0, data.size, pts, flags)
         } catch (e: IllegalStateException) {
             fail("queue input", e)
@@ -267,7 +278,21 @@ class VideoDecoder(private val callbacks: Callbacks) {
     private fun inputBuffer(codec: MediaCodec, index: Int): ByteBuffer = codec.getInputBuffer(index)!!
 
     private fun configure(surface: Surface): Boolean {
-        val (width, height) = configureSize()
+        val created = try {
+            takeSpare() ?: createDecoder()
+        } catch (e: Exception) {
+            callbacks.onDecoderError("No ${codec.wire.uppercase()} decoder: ${e.message}")
+            return false
+        }
+        val sdkInt = Build.VERSION.SDK_INT
+        val legacy = LegacyCodecs.isLegacy(sdkInt)
+        val (visibleWidth, visibleHeight) = configureSize()
+        val (widthAlignment, heightAlignment) = codecAlignments(created)
+        // Pre-Nougat OMX derives its output stride from KEY_WIDTH/KEY_HEIGHT.
+        // Give it a macroblock-aligned raster; the visible size still comes
+        // from the SPS, and from the decoder's crop keys once frames flow.
+        val (width, height) = LegacyCodecs.configureSize(
+            visibleWidth, visibleHeight, sdkInt, widthAlignment, heightAlignment)
         val format = MediaFormat.createVideoFormat(codec.mime, width, height)
         when (codec) {
             Codec.H264 -> {
@@ -283,37 +308,36 @@ class VideoDecoder(private val callbacks: Callbacks) {
         }
         // Size the input buffers for a keyframe of the largest raster.
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height, minInputSize))
-        if (Build.VERSION.SDK_INT >= 23) {
-            format.setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
-        }
-        // Vendor low-latency switches; unknown keys are ignored by the codec.
-        format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
-        format.setInteger("vendor.qti-ext-dec-picture-order.enable", 1)
-        format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
-        format.setInteger("vendor.low-latency.enable", 1)
-
-        val created = try {
-            takeSpare() ?: MediaCodec.createDecoderByType(codec.mime)
-        } catch (e: Exception) {
-            callbacks.onDecoderError("No ${codec.wire.uppercase()} decoder: ${e.message}")
-            return false
-        }
-        if (Build.VERSION.SDK_INT >= 30) {
-            val supportsLowLatency = try {
-                created.codecInfo.getCapabilitiesForType(codec.mime)
-                    .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
-            } catch (_: Exception) {
-                false
+        // Realtime priority and vendor low-latency switches make old OMX
+        // components skip error concealment and emit incomplete reference
+        // frames as colour blocks. Modern decoders keep the tuning.
+        if (!legacy) {
+            if (sdkInt >= 23) {
+                format.setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
             }
-            if (supportsLowLatency) format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            // Vendor low-latency switches; unknown keys are ignored by the codec.
+            format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
+            format.setInteger("vendor.qti-ext-dec-picture-order.enable", 1)
+            format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
+            format.setInteger("vendor.low-latency.enable", 1)
+            if (sdkInt >= 30) {
+                val supportsLowLatency = try {
+                    created.codecInfo.getCapabilitiesForType(codec.mime)
+                        .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
+                } catch (_: Exception) {
+                    false
+                }
+                if (supportsLowLatency) format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            }
         }
         return try {
             created.configure(format, surface, null, 0)
             created.start()
             decoder = created
             codecName = created.name
-            output = OutputDrain(created).also { it.start() }
-            Log.i(TAG, "decoder ${created.name} configured: ${codec.wire} ${width}x$height")
+            output = OutputDrain(created, visibleWidth, visibleHeight).also { it.start() }
+            Log.i(TAG, "decoder ${created.name} configured: ${codec.wire} ${width}x$height" +
+                if (legacy) " (legacy: visible ${visibleWidth}x$visibleHeight, csd-only parameter sets)" else "")
             true
         } catch (e: Exception) {
             created.release()
@@ -321,6 +345,36 @@ class VideoDecoder(private val callbacks: Callbacks) {
             Log.w(TAG, "configure failed", e)
             false
         }
+    }
+
+    /**
+     * TI's DUCATI1 decoder on CM13 corrupts H.264 High-profile streams: the
+     * smooth-gradient macroblocks come out as pink/green blocks while detailed
+     * areas look fine. The Mac sender always encodes High profile, so on old
+     * platforms use the platform's software H.264 decoder instead. At the
+     * reduced legacy frame rate it keeps up and produces a clean picture.
+     */
+    private fun createDecoder(): MediaCodec {
+        if (LegacyCodecs.isLegacy(Build.VERSION.SDK_INT)) {
+            val name = try {
+                MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { info ->
+                    !info.isEncoder && info.name.startsWith("OMX.google.", ignoreCase = true) &&
+                        info.supportedTypes.any { it.equals(codec.mime, ignoreCase = true) }
+                }?.name
+            } catch (_: Exception) {
+                null
+            }
+            if (name != null) return MediaCodec.createByCodecName(name)
+        }
+        return MediaCodec.createDecoderByType(codec.mime)
+    }
+
+    /** The decoder's own buffer alignment, when it reports one. */
+    private fun codecAlignments(mc: MediaCodec): Pair<Int, Int> = try {
+        val video = mc.codecInfo.getCapabilitiesForType(codec.mime).videoCapabilities
+        if (video == null) 1 to 1 else video.widthAlignment to video.heightAlignment
+    } catch (_: Exception) {
+        1 to 1
     }
 
     /** streamConfig is authoritative for the codec; the SPS for the picture. */
@@ -339,7 +393,7 @@ class VideoDecoder(private val callbacks: Callbacks) {
         if (spare?.codecInfo?.supportedTypes?.any { it.equals(codec.mime, true) } == true) return
         spare?.release()
         spare = try {
-            MediaCodec.createDecoderByType(codec.mime)
+            createDecoder()
         } catch (e: Exception) {
             null
         }
@@ -380,6 +434,10 @@ class VideoDecoder(private val callbacks: Callbacks) {
 
     private fun requestKeyframe(force: Boolean = false) {
         val now = SystemClock.elapsedRealtime()
+        // A real recovery (teardown, lost decoder, surface change) must not be
+        // delayed. Only the ordinary "input buffer full" nags are rate limited:
+        // an overloaded decoder otherwise asks for an IDR every few hundred
+        // milliseconds, and the sender's bigger IDRs make it worse.
         if (!force && now - lastKeyframeRequest < KEYFRAME_REQUEST_INTERVAL_MS) return
         lastKeyframeRequest = now
         callbacks.requestKeyframe()
@@ -388,7 +446,11 @@ class VideoDecoder(private val callbacks: Callbacks) {
     // endregion
 
     /** Renders decoded pictures the moment they come out. */
-    private inner class OutputDrain(private val codec: MediaCodec) {
+    private inner class OutputDrain(
+        private val codec: MediaCodec,
+        private val visibleWidth: Int,
+        private val visibleHeight: Int,
+    ) {
         @Volatile private var running = true
         private val thread = Thread(::loop, "od-decode-out").apply { isDaemon = true }
 
@@ -399,6 +461,7 @@ class VideoDecoder(private val callbacks: Callbacks) {
             thread.join(500)
         }
 
+        @Suppress("DEPRECATION") // INFO_OUTPUT_BUFFERS_CHANGED is only emitted by old OMX codecs
         private fun loop() {
             val info = MediaCodec.BufferInfo()
             while (running) {
@@ -421,8 +484,17 @@ class VideoDecoder(private val callbacks: Callbacks) {
                         if (meta != null) callbacks.onFrameRendered(meta.first, meta.second)
                     }
                     index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> reportSize(codec.outputFormat)
+                    // Pre-LOLLIPOP-style OMX components expect the client to
+                    // pick up the new output buffer array before draining on.
+                    index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> refreshOutputBuffers()
+                    index == MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
                 }
             }
+        }
+
+        @Suppress("DEPRECATION")
+        private fun refreshOutputBuffers() {
+            codec.outputBuffers
         }
 
         /** Nothing drains this codec any more: have the input thread rebuild it. */
@@ -441,6 +513,15 @@ class VideoDecoder(private val callbacks: Callbacks) {
             if (format.containsKey("crop-bottom") && format.containsKey("crop-top")) {
                 height = format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1
             }
+            // On legacy decoders the configured raster was rounded up only to
+            // size their buffers. If the component reports no crop rectangle,
+            // the SPS's visible size is the truth for layout and input mapping.
+            if (LegacyCodecs.isLegacy(Build.VERSION.SDK_INT) && visibleWidth > 0 && visibleHeight > 0 &&
+                !format.containsKey("crop-left") && !format.containsKey("crop-right") &&
+                !format.containsKey("crop-top") && !format.containsKey("crop-bottom")) {
+                width = visibleWidth
+                height = visibleHeight
+            }
             Log.i(TAG, "decoder output ${width}x$height")
             callbacks.onVideoSize(width, height)
         }
@@ -452,6 +533,6 @@ class VideoDecoder(private val callbacks: Callbacks) {
         const val MAX_STARTUP_BACKLOG = 90
         const val INPUT_TIMEOUT_US = 20_000L
         val OUTPUT_TIMEOUT_US = TimeUnit.MILLISECONDS.toMicros(10)
-        const val KEYFRAME_REQUEST_INTERVAL_MS = 300L
+        const val KEYFRAME_REQUEST_INTERVAL_MS = 1000L
     }
 }

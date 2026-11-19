@@ -46,6 +46,7 @@ import app.opendisplay.android.protocol.WireProtocol
 import app.opendisplay.android.video.DecoderCaps
 import app.opendisplay.android.video.StreamStats
 import app.opendisplay.android.video.VideoDecoder
+import app.opendisplay.android.airplay.service.AirPlayReceiverService
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -55,6 +56,8 @@ import kotlin.math.roundToInt
  */
 class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.Callbacks, SettingsDialog.Host {
     private val main = Handler(Looper.getMainLooper())
+    // AirPlay mDNS must wait until Advertiser has claimed the single NSD slot.
+    private var airPlayStartPending = true
 
     private lateinit var root: FrameLayout
     private lateinit var videoFrame: VideoFrame
@@ -240,10 +243,32 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     override fun onOverlayChanged(enabled: Boolean) = refreshIdle()
 
+    override fun onAirPlayReceiverChanged(enabled: Boolean) = syncAirPlayAudioReceiver(enabled)
+
+    /** AirPlay audio runs as a foreground service and is independent of the screen-cast session. */
+    private fun syncAirPlayAudioReceiver(enabled: Boolean = prefs.airplayAudioReceiver) {
+        if (enabled) AirPlayReceiverService.start(this) else AirPlayReceiverService.stop(this)
+    }
+
     override fun onStart() {
         super.onStart()
         server.start()
+        // Both this advertiser and the AirPlay service use NsdManager, which
+        // only accepts one registration at a time on some OEM builds. Start
+        // AirPlay only after _opensidecar._tcp has claimed its slot.
+        advertiser.onRegistered = {
+            if (airPlayStartPending) {
+                airPlayStartPending = false
+                syncAirPlayAudioReceiver()
+            }
+        }
         advertiser.register(DeviceIdentity.serviceName(this), installId)
+        main.postDelayed({
+            if (airPlayStartPending) {
+                airPlayStartPending = false
+                syncAirPlayAudioReceiver()
+            }
+        }, AIRPLAY_START_FALLBACK_MS)
         refreshIdle()
         // Launched by the attach intent, or attached while we were away.
         takeAccessory()
@@ -717,6 +742,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     companion object {
         private const val TAG = "OpenDisplay"
+        private const val AIRPLAY_START_FALLBACK_MS = 3_000L
         private const val ACTION_USB_PERMISSION = "app.opendisplay.android.USB_PERMISSION"
 
         /**

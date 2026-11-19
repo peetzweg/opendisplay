@@ -9,6 +9,7 @@
     <string name="hint_open_mac">Open OpenDisplay on your computer</string>
     <string name="hint_pick_wifi">Pick this %1$s under WiFi in OpenDisplay on your computer</string>
     <string name="hint_keep_open">Keep this app open. Streaming starts automatically.</string>
+    <string name="hint_airplay_audio">For AirPlay audio, pick this %1$s in the audio output menu on your iPhone or Mac.</string>
     <string name="settings_and_help">Settings &amp; Help</string>
     <string name="shake_tip">Tip: shake the %1$s to open settings anytime</string>
 
@@ -32,6 +33,9 @@
     <string name="row_stream">Stream</string>
     <string name="section_name">Name</string>
     <string name="name_footer">Shown in the WiFi list of OpenDisplay on your computer.</string>
+    <string name="section_airplay">AirPlay Audio</string>
+    <string name="airplay_audio_receiver">Allow AirPlay audio</string>
+    <string name="airplay_audio_receiver_summary">Let an iPhone or Mac send audio to this device. Enabled by default; screen mirroring is not included.</string>
     <string name="section_analytics">Analytics</string>
     <string name="performance_overlay">Performance overlay</string>
     <string name="analytics_footer">The overlay shows FPS, bitrate, decode time and latency at the bottom of the screen while streaming.</string>
@@ -50,4 +54,9 @@
     <string name="link_website">OpenDisplay.app</string>
     <string name="link_github">GitHub: peetzweg/opendisplay</string>
     <string name="link_kofi">Support OpenDisplay on Ko-fi</string>
+
+    <!-- AirPlay audio receiver foreground notification. -->
+    <string name="airplay_notification_channel">AirPlay audio receiver</string>
+    <string name="airplay_notification_title">AirPlay audio ready</string>
+    <string name="airplay_notification_text">Waiting for an iPhone or Mac to send audio</string>
 </resources>

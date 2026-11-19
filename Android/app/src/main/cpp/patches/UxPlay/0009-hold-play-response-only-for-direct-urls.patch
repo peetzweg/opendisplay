@@ -1,0 +1,24 @@
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index 4d431c4..586f61e 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -974,6 +974,7 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
+         raop->callbacks.on_video_play(raop->callbacks.cls,
+                                       get_playback_location(airplay_video),
+                                       start_position_seconds);
++        raop->callbacks.on_video_wait_ready(raop->callbacks.cls);
+     } else {
+         logger_log(raop->logger, LOGGER_ERR, "Content-Location has unsupported form:\n%s\n", playback_location);
+         goto play_error;
+diff --git a/lib/raop.h b/lib/raop.h
+index bed2ded..ac7b69c 100644
+--- a/lib/raop.h
++++ b/lib/raop.h
+@@ -106,6 +106,7 @@ struct raop_callbacks_s {
+     int   (*video_set_codec)(void *cls, video_codec_t codec);
+     /* for HLS video player controls */
+     void  (*on_video_play) (void *cls, const char *location, const float start_position);
++    void  (*on_video_wait_ready) (void *cls);
+     void  (*on_video_scrub) (void *cls, const float position);
+     void  (*on_video_rate) (void *cls, const float rate);
+     void  (*on_video_stop) (void *cls);
