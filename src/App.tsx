@@ -273,7 +273,7 @@ export default function App() {
                 <p className="dl-sub">The receiver app for your iPhone and iPad.</p>
                 <AppStoreButton />
                 <p className="sub">
-                  Want early builds? <span className="no-break"><a id="testflight" href="https://testflight.apple.com/join/3NYaY11c">Join the TestFlight beta</a></span>, or <span className="no-break"><a href="https://github.com/peetzweg/opendisplay#quick-start">compile from source ↗</a></span>.
+                  Want the latest code? <span className="no-break"><a href="https://github.com/peetzweg/opendisplay#quick-start">Compile from source ↗</a></span>.
                 </p>
               </div>
               <div className="download-option">
