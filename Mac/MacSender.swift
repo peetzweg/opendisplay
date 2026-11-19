@@ -360,7 +360,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     #endif
     /// Bitrate the encoder was configured with; refinement restores it.
     private var baseBitrate = 0
-
+    /// Tracks cursor shake gestures to compute the dynamic scale factor
+    private let scaleTracker = CursorScaleTracker()
+    
     init(transport: SenderTransport, name: String, mode: CaptureMode,
          quality: StreamQuality = .best, displaySerial: UInt32 = 0x0001,
          identityOffset: UInt32 = 0, awaitingWake: Bool = false) {
@@ -2464,7 +2466,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         guard displaySize.width > 0, displaySize.height > 0 else { return }
         let image = cursor.image
         guard let tiff = image.tiffRepresentation else { return }
-        let hash = tiff.hashValue ^ Int(displaySize.width) &* 31
+        
+        let scale = scaleTracker.update()
+        // Quantize scale to whole steps (1..4) to avoid flooding frames; the client handles smooth animation
+        let scaleBucket = Int(scale.rounded())
+        let hash = tiff.hashValue ^ Int(displaySize.width) &* 31 ^ scaleBucket &* 17
         guard hash != lastCursorPNGHash else { return }
         guard let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]),
@@ -2476,8 +2482,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // sprite without knowing capture scale or HiDPI factor.
         let msg = String(format:
             "{\"type\":\"cursorImg\",\"nw\":%.5f,\"nh\":%.5f,\"ax\":%.3f,\"ay\":%.3f,\"png\":\"%@\"}",
-            size.width / displaySize.width,
-            size.height / displaySize.height,
+            size.width * scale / displaySize.width,
+            size.height * scale / displaySize.height,
             size.width > 0 ? hot.x / size.width : 0,
             size.height > 0 ? hot.y / size.height : 0,
             png.base64EncodedString())
