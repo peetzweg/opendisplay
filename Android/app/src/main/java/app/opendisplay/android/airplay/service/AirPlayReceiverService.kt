@@ -27,9 +27,10 @@ import java.util.UUID
 import kotlin.math.log10
 
 /**
- * Audio-only AirPlay receiver. It advertises RAOP over DNS-SD and feeds the
- * incoming ALAC/AAC stream directly into the native Oboe output. No video,
- * mirroring, photo or HLS capability is advertised.
+ * RAOP audio sink for AirPlay senders. It accepts ALAC/AAC audio and metadata
+ * and feeds decoded PCM into Oboe. AirPlay video, mirroring, photos and HLS
+ * are intentionally not implemented here and are cleared from advertised
+ * service bits.
  */
 class AirPlayReceiverService : Service() {
 
@@ -103,8 +104,8 @@ class AirPlayReceiverService : Service() {
             serverHandle = handle
             audioRenderer.attachEngine(handle)
 
-            // Audio-only service profile. Keep the audio/metadata bits, clear
-            // screen mirroring, photos, HLS and video codec negotiation bits.
+            // RAOP audio sink profile. Keep audio/metadata bits; clear AirPlay
+            // screen mirroring, video, photo and HLS bits.
             NativeBridge.nativeSetCodecs(handle, true, true)
             NativeBridge.nativeSetFeature(handle, NativeBridge.FT_AUDIO, true)
             NativeBridge.nativeSetFeature(handle, NativeBridge.FT_MIRROR, false)

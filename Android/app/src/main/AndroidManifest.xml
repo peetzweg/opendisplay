@@ -45,7 +45,7 @@
                 android:resource="@xml/accessory_filter" />
         </activity>
 
-        <!-- AirPlay audio-only receiver. Not exported: the in-app switch owns it. -->
+        <!-- RAOP audio sink for AirPlay audio output. Not exported: the in-app switch owns it. -->
         <service
             android:name=".airplay.service.AirPlayReceiverService"
             android:exported="false"

@@ -39,10 +39,12 @@ immersive insets) are used when present.
   fingers ignored while the pen is down. Senders below pv 3 get the pen as
   `touch`. Covered by unit tests; not yet tried with real pen hardware.
 
-- AirPlay audio: the app also advertises a RAOP audio-only receiver. Settings
-  has an "Allow AirPlay audio" switch, enabled by default; it controls a
-  foreground service that accepts audio from iPhone/Mac without exposing
-  screen mirroring, photos or AirPlay video.
+- AirPlay audio output: the app can act as an RAOP audio sink for AirPlay
+  senders such as iPhone/Mac. Settings has an "Allow AirPlay audio" switch,
+  enabled by default; it controls a foreground service that accepts ALAC/AAC
+  audio and metadata. AirPlay mirroring, AirPlay video, photos and HLS are
+  not implemented here, and the existing OpenDisplay screen-cast path is
+  separate.
 
 - Video compatibility: an opt-in "Legacy decoder compatibility" switch uses
   the software H.264 decoder, 16-pixel aligned frames and a 15 fps cap for old
@@ -189,7 +191,7 @@ protocol/  framing, demux, Annex B, H.264 SPS size, clock sync, hello,
 net/       ReceiverServer (TCP 9000), CursorChannel (UDP 9001), Advertiser (NSD)
 video/     VideoDecoder (MediaCodec), DecoderCaps (videoCaps), StreamStats
 ui/        MainActivity, VideoFrame (aspect fit), CursorView, DeviceIdentity
-airplay/   RAOP audio-only receiver service, BootReceiver, NSD advertiser,
+airplay/   RAOP audio sink for AirPlay audio, BootReceiver, NSD advertiser,
            audio renderer and JNI bridge
 cpp/       native UxPlay/FFmpeg/OpenSSL/Oboe engine for the AirPlay receiver
 tools/android/  scripted ffmpeg sender and mock receiver for testing without a Mac

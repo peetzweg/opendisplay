@@ -35,7 +35,7 @@
     <string name="name_footer">Shown in the WiFi list of OpenDisplay on your computer.</string>
     <string name="section_airplay">AirPlay Audio</string>
     <string name="airplay_audio_receiver">Allow AirPlay audio</string>
-    <string name="airplay_audio_receiver_summary">Let an iPhone or Mac send audio to this device. Enabled by default; screen mirroring is not included.</string>
+    <string name="airplay_audio_receiver_summary">Let an iPhone or Mac send AirPlay audio to this device over RAOP. Enabled by default; AirPlay video and mirroring are not implemented.</string>
     <string name="section_compatibility">Video compatibility</string>
     <string name="legacy_video_compat">Legacy decoder compatibility</string>
     <string name="legacy_video_compat_summary">Use the software H.264 decoder and 16-pixel aligned frames. Only enable this on Android 5/6 devices that show diagonal stripes or colour blocks.</string>
