@@ -1,0 +1,47 @@
+/* OpenDisplay Mac receiver — Simplified Chinese (zh-Hans).
+
+   The English literal in the source is the key, so a missing entry falls back
+   to English rather than showing a raw key. Format specifiers must keep their
+   exact order and count: %@ is a string, %lld an Int, %d an Int32. */
+
+"OpenDisplay Receiver" = "OpenDisplay Receiver";
+"This Mac as an extra display for another Mac" = "把这台 Mac 变成另一台 Mac 的扩展显示器";
+
+/* MARK: Waiting state */
+
+"Waiting for a computer…" = "等待电脑…";
+"Waiting for a Mac to connect" = "等待 Mac 连接";
+"Receiving from a Mac" = "正在接收另一台 Mac 的画面";
+"Connected" = "已连接";
+"Stream" = "投屏";
+"%lld×%lld @ %lld fps" = "%lld×%lld @ %lld fps";
+
+/* MARK: How to connect */
+
+"How to connect" = "怎么连接";
+"Install and open OpenDisplay on the Mac whose screen you want to extend." = "在想被扩展的那台 Mac 上安装并打开 OpenDisplay。";
+"With both Macs on the same network, this Mac appears in its Devices list — click Connect there." = "两台 Mac 在同一个网络里时，这台 Mac 会出现在它的设备列表里——在那里点「连接」。";
+"The stream opens in a window here — use the green traffic light for full screen." = "画面会在这个窗口里打开——点绿灯进入全屏。";
+
+/* MARK: Settings */
+
+"Name" = "名称";
+"How this Mac appears in the other Mac's Devices list." = "这台 Mac 在另一台 Mac 的设备列表里显示的名字。";
+"This Mac as a display" = "把这台 Mac 当显示器";
+"Performance overlay" = "性能叠加";
+"FPS, bitrate, frame timing, and latency graphs at the bottom of the video window while streaming — the same HUD the iPhone app has." = "投屏时在视频窗口底部叠加显示帧率、码率、帧间隔和延迟曲线——和 iPhone 版一样的 HUD。";
+"Show Window" = "显示窗口";
+"Bring the video window back if you closed it — the stream keeps running either way." = "如果关掉了视频窗口就把它叫回来——不管有没有关，投屏都在继续。";
+
+/* MARK: Status line and footer */
+
+"Starting…" = "正在启动…";
+"Receiving %d×%d" = "正在接收 %d×%d";
+"Listener failed: %@" = "监听失败：%@";
+"Listener failed — restarting…" = "监听失败——正在重试…";
+"Logs" = "日志";
+"Reveal the OpenDisplay Receiver log files in Finder" = "在访达中显示 OpenDisplay Receiver 的日志文件";
+"Quit" = "退出";
+"Check for Updates…" = "检查更新…";
+"FPS" = "帧率";
+"%lld" = "%lld";

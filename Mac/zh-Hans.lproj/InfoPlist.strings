@@ -1,0 +1,3 @@
+/* Info.plist strings, Mac sender — Simplified Chinese. */
+
+"NSLocalNetworkUsageDescription" = "OpenDisplay 需要访问本地网络，才能在 WiFi 模式下连接到你的 iPad 或 iPhone。";
