@@ -139,6 +139,15 @@ git rm -r --cached \
 Do not commit the downloaded trees, `.downloads/`, `.staging/`, the marker
 file, or `app/.cxx/`. They are already covered by `.gitignore` for new clones.
 
+## Licensing
+
+The repository is GPL-3.0. The Android audio receiver links UxPlay (GPL-3.0),
+FFmpeg under its LGPL-2.1-or-later option, libplist under LGPL-2.1-or-later,
+openssl-cmake (MIT), OpenSSL 3.4.4 (Apache-2.0) and Oboe (Apache-2.0). These
+licence choices are compatible with GPLv3. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for exact revisions, licence
+notes and source availability details.
+
 ## Connecting
 
 **Wi-Fi:** open the app on the Android device and pick it in the Mac app.
