@@ -13,6 +13,22 @@ object WireProtocol {
     const val SERVICE_TYPE = "_opensidecar._tcp"
 }
 
+/**
+ * Input features a sender announces in `welcome.input` (PROTOCOL.md 6.2,
+ * Shared/Protocol.swift `InputFeature`). A receiver uses one only when the
+ * sender lists it, so an older sender keeps the touch stream it understands.
+ */
+object InputFeature {
+    /** `touch` may carry `button: "right"`. */
+    const val BUTTON = "button"
+    /** `scroll` may carry `phase`. */
+    const val SCROLL_PHASE = "scrollPhase"
+    /** `magnify` messages (pinch). */
+    const val MAGNIFY = "magnify"
+    /** `gesture` messages for the actions in `welcome.actions`. */
+    const val GESTURE = "gesture"
+}
+
 /** Panel facts in the current orientation (PROTOCOL.md 6.7). */
 data class Panel(val pixelsWide: Int, val pixelsHigh: Int, val scale: Double)
 
@@ -72,13 +88,15 @@ object Messages {
 
     fun ping(t: Double): JSONObject = JSONObject().put("type", "ping").put("t", t)
 
-    fun touch(phase: String, x: Double, y: Double, t: Double?): JSONObject =
+    /** [button] is `"right"` for a secondary press, else omitted (left). */
+    fun touch(phase: String, x: Double, y: Double, t: Double?, button: String? = null): JSONObject =
         JSONObject().apply {
             put("type", "touch")
             put("phase", phase)
             put("x", x)
             put("y", y)
             t?.let { put("t", it) }
+            button?.let { put("button", it) }
         }
 
     /** pv 3 stylus (6.1). Barrel roll is not measured: `rotation` is always 0. */
@@ -97,12 +115,28 @@ object Messages {
     fun proximity(entering: Boolean, x: Double, y: Double): JSONObject =
         JSONObject().put("type", "proximity").put("entering", entering).put("x", x).put("y", y)
 
-    fun scroll(dx: Double, dy: Double): JSONObject =
-        JSONObject().put("type", "scroll").put("dx", dx).put("dy", dy)
+    /** [phase] makes it a trackpad-style scroll (6.1); omitted, a plain delta. */
+    fun scroll(dx: Double, dy: Double, phase: String? = null): JSONObject =
+        JSONObject().put("type", "scroll").put("dx", dx).put("dy", dy).apply {
+            phase?.let { put("phase", it) }
+        }
+
+    /** Pinch: [m] is the relative scale change since the previous message. */
+    fun magnify(phase: String, m: Double): JSONObject =
+        JSONObject().put("type", "magnify").put("phase", phase).put("m", m)
+
+    fun gesture(action: String): JSONObject =
+        JSONObject().put("type", "gesture").put("action", action)
 
     fun simple(type: String): JSONObject = JSONObject().put("type", type)
 
     fun bytes(obj: JSONObject): ByteArray = obj.toString().toByteArray(Charsets.UTF_8)
+}
+
+/** The strings in a JSON array, skipping anything else; null reads as empty. */
+fun JSONArray?.strings(): List<String> {
+    if (this == null) return emptyList()
+    return (0 until length()).mapNotNull { optString(it, "").ifEmpty { null } }
 }
 
 /**
