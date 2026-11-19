@@ -205,15 +205,6 @@ static void _video_reset(void *cls, reset_type_t t) {
     if (t == RESET_TYPE_HLS_SHUTDOWN || t == RESET_TYPE_HLS_EOS) {
         _video_stop(cls);
     }
-    if (t == RESET_TYPE_HLS_CONN_CLOSED) {
-        /* abandoned only if paused and ready: rate alone is also 0 while buffering */
-        pthread_mutex_lock(&ctx->playback_info_lock);
-        int paused = ctx->playback_ready && ctx->playback_rate <= 0.0f;
-        pthread_mutex_unlock(&ctx->playback_info_lock);
-        if (paused) {
-            _video_stop(cls);
-        }
-    }
     if (t == RESET_TYPE_HLS_SHUTDOWN && ctx->raop) {
         raop_remove_hls_connections(ctx->raop);
     }
@@ -315,20 +306,6 @@ static void _video_play(void *cls, const char *location, const float start_posit
     (*env)->DeleteLocalRef(env, jloc);
 }
 
-/* self-driven senders (macOS) latch their scrubber timeline at /play; hold the response
-   until the player reports ready so that read must carry the real duration */
-static void _video_wait_ready(void *cls) {
-    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 10; // hold for max 10s
-    pthread_mutex_lock(&ctx->playback_info_lock);
-    while (!ctx->play_ready) {
-        if (pthread_cond_timedwait(&ctx->play_ready_cond, &ctx->playback_info_lock, &ts) == ETIMEDOUT) break;
-    }
-    pthread_mutex_unlock(&ctx->playback_info_lock);
-}
-
 static void _video_scrub(void *cls, const float position) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
@@ -415,7 +392,6 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->display_pin = _display_pin;
     cbs->video_set_codec = _video_set_codec;
     cbs->on_video_play = _video_play;
-    cbs->on_video_wait_ready = _video_wait_ready;
     cbs->on_video_scrub = _video_scrub;
     cbs->on_video_rate = _video_rate;
     cbs->on_video_stop = _video_stop;
