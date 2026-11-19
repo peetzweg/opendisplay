@@ -1,6 +1,9 @@
 /*
  * Implements raop_callbacks_t by forwarding to Java/Kotlin via JNI.
- * All callbacks fire from RAOP's internal pthreads, so we AttachCurrentThread.
+ * All callbacks fire from RAOP's internal pthreads, so we AttachCurrentThread
+ * and must DetachCurrentThread before those pthreads exit. ART aborts the
+ * whole process if a native thread exits while still attached, so every
+ * callback uses a scope guard that detaches on all return paths.
  */
 
 #include <stdlib.h>
@@ -15,20 +18,48 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-static JNIEnv *_get_env(android_callback_ctx_t *ctx) {
-    JNIEnv *env = NULL;
-    int status = (*ctx->jvm)->GetEnv(ctx->jvm, (void **)&env, JNI_VERSION_1_6);
-    if (status == JNI_EDETACHED) {
-        (*ctx->jvm)->AttachCurrentThread(ctx->jvm, &env, NULL);
+typedef struct {
+    JNIEnv *env;
+    JavaVM *vm;
+    int attached;
+} jni_thread_scope_t;
+
+static void _jni_thread_scope_cleanup(jni_thread_scope_t *scope) {
+    if (scope->attached && scope->vm) {
+        (*scope->vm)->DetachCurrentThread(scope->vm);
     }
+}
+
+static jni_thread_scope_t _jni_thread_scope(android_callback_ctx_t *ctx) {
+    jni_thread_scope_t scope = { NULL, NULL, 0 };
+    JNIEnv *env = NULL;
+    jint status;
+
+    scope.vm = ctx ? ctx->jvm : NULL;
+    if (!scope.vm) return scope;
+
+    status = (*scope.vm)->GetEnv(scope.vm, (void **)&env, JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        if ((*scope.vm)->AttachCurrentThread(scope.vm, &env, NULL) != JNI_OK) {
+            return scope;
+        }
+        scope.attached = 1;
+    }
+    scope.env = env;
+
     /* Clear any pending exception from a previous callback on this thread,
        otherwise JNI calls like NewByteArray will fatally abort. */
     if (env && (*env)->ExceptionCheck(env)) {
         (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);
     }
-    return env;
+    return scope;
 }
+
+#define JNI_SCOPE(ctx) \
+    __attribute__((cleanup(_jni_thread_scope_cleanup))) \
+    jni_thread_scope_t _jni_scope = _jni_thread_scope(ctx); \
+    JNIEnv *env = _jni_scope.env
 
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj) {
     (*env)->GetJavaVM(env, &ctx->jvm);
@@ -111,7 +142,7 @@ static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data
 
 static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env || !data->data || data->data_len <= 0) return;
     /* raop_rtp_mirror marks undecryptable packets by setting byte 0 (start code) to 1 */
     if (data->data[0]) {
@@ -137,28 +168,28 @@ static void _conn_init(void *cls) {
         ctx->playback_ready = 0;
     }
     pthread_mutex_unlock(&ctx->playback_info_lock);
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_conn_init);
 }
 
 static void _conn_destroy(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_conn_destroy);
 }
 
 static void _conn_reset(void *cls, int reason) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_conn_reset, (jint)reason);
 }
 
 static void _audio_set_volume(void *cls, float volume) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_client_volume, (jfloat)volume);
 }
@@ -166,7 +197,7 @@ static void _audio_set_volume(void *cls, float volume) {
 static void _audio_get_format(void *cls, unsigned char *ct, unsigned short *spf,
                                bool *usingScreen, bool *isMedia, uint64_t *audioFormat) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_format,
                            (jint)*ct, (jint)*spf, (jboolean)*usingScreen);
@@ -174,7 +205,7 @@ static void _audio_get_format(void *cls, unsigned char *ct, unsigned short *spf,
 
 static void _video_report_size(void *cls, float *w_src, float *h_src, float *w, float *h) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_size,
                            (jfloat)*w_src, (jfloat)*h_src, (jfloat)*w, (jfloat)*h);
@@ -186,7 +217,7 @@ static void _display_pin(void *cls, char *pin) {
     /* certain senders trigger pair-pin-start even when we advertise no auth */
     if (!ctx->require_pin) return;
 
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     jstring jpin = (*env)->NewStringUTF(env, pin);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_display_pin, jpin);
@@ -214,20 +245,20 @@ static void _audio_flush(void *cls) { LOGI("audio_flush"); }
 static void _audio_stop_coverart_rendering(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     LOGI("audio_teardown");
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_teardown);
 }
 static void _video_flush(void *cls) { LOGI("video_flush"); }
 static double _audio_set_client_volume(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return 0.0;
     return (double)(*env)->CallFloatMethod(env, ctx->callback_obj, ctx->on_client_volume_query);
 }
 static void _audio_set_metadata(void *cls, const void *buf, int len) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env || !buf || len <= 0) return;
     jbyteArray arr = (*env)->NewByteArray(env, len);
     (*env)->SetByteArrayRegion(env, arr, 0, len, (jbyte *)buf);
@@ -237,7 +268,7 @@ static void _audio_set_metadata(void *cls, const void *buf, int len) {
 
 static void _audio_set_coverart(void *cls, const void *buf, int len) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env || !buf || len <= 0) return;
     jbyteArray arr = (*env)->NewByteArray(env, len);
     (*env)->SetByteArrayRegion(env, arr, 0, len, (jbyte *)buf);
@@ -247,7 +278,7 @@ static void _audio_set_coverart(void *cls, const void *buf, int len) {
 
 static void _audio_remote_control_id(void *cls, const char *dacp_id, const char *active_remote) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     jstring jdacp = (*env)->NewStringUTF(env, dacp_id ? dacp_id : "");
     jstring jremote = (*env)->NewStringUTF(env, active_remote ? active_remote : "");
@@ -258,7 +289,7 @@ static void _audio_remote_control_id(void *cls, const char *dacp_id, const char 
 
 static void _audio_set_progress(void *cls, uint32_t *start, uint32_t *curr, uint32_t *end) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env || !start || !curr || !end) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_progress,
                            (jlong)*start, (jlong)*curr, (jlong)*end);
@@ -266,7 +297,7 @@ static void _audio_set_progress(void *cls, uint32_t *start, uint32_t *curr, uint
 
 static void _mirror_video_running(void *cls, bool running) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     LOGI("mirror running: %d", running);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_mirror_running, (jboolean)running);
@@ -299,7 +330,7 @@ static void _video_play(void *cls, const char *location, const float start_posit
     ctx->play_ready = 0;
     pthread_mutex_unlock(&ctx->playback_info_lock);
     android_callbacks_update_playback_info(ctx, start_position, 0.0, 0.0f, 0);
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env || !location) return;
     jstring jloc = (*env)->NewStringUTF(env, location);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_play, jloc, (jfloat)start_position);
@@ -308,14 +339,14 @@ static void _video_play(void *cls, const char *location, const float start_posit
 
 static void _video_scrub(void *cls, const float position) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_scrub, (jfloat)position);
 }
 
 static void _video_rate(void *cls, const float rate) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_rate, (jfloat)rate);
 }
@@ -323,7 +354,7 @@ static void _video_rate(void *cls, const float rate) {
 static void _video_stop(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     android_callbacks_update_playback_info(ctx, 0.0, -1.0, 0.0f, 0);
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_stop);
 }
@@ -343,7 +374,7 @@ static void _video_acquire_playback_info(void *cls, playback_info_t *info) {
     info->seek_duration = ctx->playback_duration > 0.0 ? ctx->playback_duration : 0.0;
     pthread_mutex_unlock(&ctx->playback_info_lock);
     /* polls are the earliest video-channel signal, starting ~1s before /play */
-    JNIEnv *env = _get_env(ctx);
+    JNI_SCOPE(ctx);
     if (env) {
         (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_session_poll);
     }
