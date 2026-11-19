@@ -172,6 +172,8 @@ final class StreamReceiver: ObservableObject {
 
     private var nowMs: Double { Date().timeIntervalSince1970 * 1000 }
 
+    var onBrightness: ((_ delta: Double) -> Void)?
+    
     // Local cursor echo (both called on the main thread): position is
     // normalized [0,1] in video space; the sprite arrives as a PNG with its
     // hotspot anchor and size normalized against the Mac display. The anchor
@@ -887,6 +889,10 @@ final class StreamReceiver: ObservableObject {
                 ?? "Update OpenDisplay from the App Store to keep using your second display."
             let store = (obj["store"] as? String).flatMap { URL(string: $0) } ?? AppStore.updateURL
             DispatchQueue.main.async { self.peerSignal = .updateReceiver(message: message, storeURL: store) }
+        case WireMessage.brightness:
+            if let delta = (obj["delta"] as? NSNumber)?.doubleValue {
+                Task { @MainActor in self.onBrightness?(delta) }
+            }
         default:
             break
         }
