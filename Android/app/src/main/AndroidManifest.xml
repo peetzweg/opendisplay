@@ -9,10 +9,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- AirPlay audio receiver. Control/RTP traffic is plain HTTP/UDP. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Wired from a Mac without adb: Android Open Accessory (AOA). -->
     <uses-feature android:name="android.hardware.usb.accessory" android:required="false" />
@@ -49,16 +47,6 @@
         <service
             android:name=".airplay.service.AirPlayReceiverService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|mediaPlayback" />
-
-        <receiver
-            android:name=".airplay.BootReceiver"
-            android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-            </intent-filter>
-        </receiver>
+            android:foregroundServiceType="connectedDevice" />
     </application>
 </manifest>

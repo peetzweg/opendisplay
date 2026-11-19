@@ -191,8 +191,8 @@ protocol/  framing, demux, Annex B, H.264 SPS size, clock sync, hello,
 net/       ReceiverServer (TCP 9000), CursorChannel (UDP 9001), Advertiser (NSD)
 video/     VideoDecoder (MediaCodec), DecoderCaps (videoCaps), StreamStats
 ui/        MainActivity, VideoFrame (aspect fit), CursorView, DeviceIdentity
-airplay/   RAOP audio sink for AirPlay audio, BootReceiver, NSD advertiser,
-           audio renderer and JNI bridge
+airplay/   RAOP audio sink for AirPlay audio, NSD advertiser, audio renderer
+           and JNI bridge
 cpp/       native UxPlay/FFmpeg/OpenSSL/Oboe engine for the AirPlay receiver
 tools/android/  scripted ffmpeg sender and mock receiver for testing without a Mac
 tools/bootstrap-airplay-third-party.py  pinned downstream source bootstrap

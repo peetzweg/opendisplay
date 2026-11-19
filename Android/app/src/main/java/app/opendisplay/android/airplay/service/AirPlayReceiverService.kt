@@ -53,8 +53,14 @@ class AirPlayReceiverService : Service() {
         when (intent?.action) {
             ACTION_STOP -> stopReceiver()
             else -> {
-                promoteToForeground()
-                startReceiver()
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                    Log.w(TAG, "AirPlay audio requires API 23+; stopping")
+                    ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                } else {
+                    promoteToForeground()
+                    startReceiver()
+                }
             }
         }
         // The host app's settings switch owns the lifetime; do not auto-restart.
@@ -64,10 +70,6 @@ class AirPlayReceiverService : Service() {
     @Synchronized
     private fun startReceiver() {
         if (serverHandle != 0L) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            Log.w(TAG, "AirPlay audio requires API 23+; skipping on API ${Build.VERSION.SDK_INT}")
-            return
-        }
 
         try {
             nsdManager.acquireMulticastLock()
@@ -168,7 +170,13 @@ class AirPlayReceiverService : Service() {
         wakeLock = null
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopReceiver()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         teardown()
         super.onDestroy()
     }
@@ -314,19 +322,23 @@ class AirPlayReceiverService : Service() {
 
         const val ACTION_START = "app.opendisplay.android.airplay.audio.START"
         const val ACTION_STOP = "app.opendisplay.android.airplay.audio.STOP"
-        const val PREF_FILE = "settings"
-        const val PREF_KEY_ENABLED = "airplayAudioReceiver"
 
         // AirPlay feature bits for video, photos, HLS, slideshow and H.265.
         private val AUDIO_ONLY_DISABLED_BITS = intArrayOf(0, 1, 2, 4, 5, 6, 7, 8, 13, 33, 34, 42)
 
-        fun isEnabled(context: Context): Boolean =
-            context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
-                .getBoolean(PREF_KEY_ENABLED, true)
-
         fun start(context: Context) {
             val intent = Intent(context, AirPlayReceiverService::class.java).setAction(ACTION_START)
-            ContextCompat.startForegroundService(context, intent)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (t: Throwable) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    t is android.app.ForegroundServiceStartNotAllowedException
+                ) {
+                    Log.w(TAG, "foreground service start not allowed", t)
+                } else {
+                    throw t
+                }
+            }
         }
 
         fun stop(context: Context) {

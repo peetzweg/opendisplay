@@ -58,6 +58,12 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     private val main = Handler(Looper.getMainLooper())
     // AirPlay mDNS must wait until Advertiser has claimed the single NSD slot.
     private var airPlayStartPending = true
+    private val airPlayStartFallback = Runnable {
+        if (airPlayStartPending) {
+            airPlayStartPending = false
+            syncAirPlayAudioReceiver()
+        }
+    }
 
     private lateinit var root: FrameLayout
     private lateinit var videoFrame: VideoFrame
@@ -265,6 +271,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         // Both this advertiser and the AirPlay service use NsdManager, which
         // only accepts one registration at a time on some OEM builds. Start
         // AirPlay only after _opensidecar._tcp has claimed its slot.
+        airPlayStartPending = true
         advertiser.onRegistered = {
             if (airPlayStartPending) {
                 airPlayStartPending = false
@@ -272,12 +279,8 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
             }
         }
         advertiser.register(DeviceIdentity.serviceName(this), installId)
-        main.postDelayed({
-            if (airPlayStartPending) {
-                airPlayStartPending = false
-                syncAirPlayAudioReceiver()
-            }
-        }, AIRPLAY_START_FALLBACK_MS)
+        main.removeCallbacks(airPlayStartFallback)
+        main.postDelayed(airPlayStartFallback, AIRPLAY_START_FALLBACK_MS)
         refreshIdle()
         // Launched by the attach intent, or attached while we were away.
         takeAccessory()
@@ -295,6 +298,8 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     override fun onStop() {
         super.onStop()
         main.removeCallbacks(resendHello)
+        main.removeCallbacks(airPlayStartFallback)
+        advertiser.onRegistered = null
         advertiser.unregister()
         val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
         val keyguard = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
@@ -303,6 +308,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     }
 
     override fun onDestroy() {
+        if (isFinishing) AirPlayReceiverService.stop(this)
         super.onDestroy()
         unregisterReceiver(accessoryDetached)
         unregisterReceiver(accessoryPermission)
@@ -751,7 +757,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     companion object {
         private const val TAG = "OpenDisplay"
-        private const val AIRPLAY_START_FALLBACK_MS = 3_000L
+        private const val AIRPLAY_START_FALLBACK_MS = 5_000L
         private const val ACTION_USB_PERMISSION = "app.opendisplay.android.USB_PERMISSION"
 
         /**
