@@ -175,28 +175,13 @@ Mac sender with `-testPattern YES`, HEVC 2424x1080 at 60 fps:
 
 End-to-end is capture on the Mac to decoder output on the phone.
 
-## Android 5/6 (legacy OMX decoders)
-
-On API 21-23 (e.g. CyanogenMod 13 / Android 6.0.1) vendor OMX decoders size
-their output buffers from the raster in the MediaFormat. H.264 codes a
-16-aligned raster and crops it in the SPS, so the non-16-aligned panel rasters
-this app negotiates used to come out as diagonal stripes and colour blocks
-(花屏). `LegacyCodecs` gates the workarounds for those platforms: H.264 only,
-16-pixel (or coarser) aligned rasters, a 15 fps cap (a 60 fps desktop stream
-overwhelms these decoders and triggers a keyframe storm), rate-limited keyframe
-requests, and the old output-buffer handshake. Where the vendor decoder cannot
-handle the sender's H.264 High-profile stream (e.g. TI DUCATI1 on the Galaxy
-Tab 2), the platform's software H.264 decoder is used instead: it produces a
-clean picture at the reduced frame rate. API 24+ is unchanged. The debug log
-prints `legacy:` when this path is active.
-
 ## Code map
 
 ```
 protocol/  framing, demux, Annex B, H.264 SPS size, clock sync, hello,
            cursor sequence, touch gestures (pure Kotlin, unit tested)
 net/       ReceiverServer (TCP 9000), CursorChannel (UDP 9001), Advertiser (NSD)
-video/     VideoDecoder (MediaCodec), DecoderCaps (videoCaps), LegacyCodecs, StreamStats
+video/     VideoDecoder (MediaCodec), DecoderCaps (videoCaps), StreamStats
 ui/        MainActivity, VideoFrame (aspect fit), CursorView, DeviceIdentity
 airplay/   RAOP audio-only receiver service, BootReceiver, NSD advertiser,
            audio renderer and JNI bridge
