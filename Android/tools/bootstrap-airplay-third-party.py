@@ -37,7 +37,7 @@ DOWNLOADS = THIRD_PARTY / ".downloads"
 STAGING = THIRD_PARTY / ".staging"
 MARKER = THIRD_PARTY / ".airplay-bootstrap"
 
-CONFIG_VERSION = "airplay-third-party-v2"
+CONFIG_VERSION = "airplay-third-party-v3"
 
 # Downloaded archives plus extracted sources. The later native build needs much
 # more, but this is the minimum for bootstrap itself to make progress.
@@ -61,11 +61,13 @@ ARCHIVES: List[Dict[str, str]] = [
         "name": "UxPlay",
         "url": f"https://github.com/FDH2/UxPlay/archive/{UXPLAY_COMMIT}.tar.gz",
         "filename": f"UxPlay-{UXPLAY_COMMIT}.tar.gz",
+        "sha256": "168de53ed688f87c4022d79357ce91f9608ad5c53236bff95134d19b88efeb3f",
     },
     {
         "name": "ffmpeg",
         "url": f"https://github.com/FFmpeg/FFmpeg/archive/{FFMPEG_COMMIT}.tar.gz",
         "filename": f"FFmpeg-{FFMPEG_COMMIT}.tar.gz",
+        "sha256": "2ae7e42343cfffb811d15cfe98b6d005f082595fcdf034d30a4ff90cfed9f9c6",
     },
     {
         "name": "libplist",
@@ -74,6 +76,7 @@ ARCHIVES: List[Dict[str, str]] = [
             f"{LIBPLIST_COMMIT}.tar.gz"
         ),
         "filename": f"libplist-{LIBPLIST_COMMIT}.tar.gz",
+        "sha256": "40ff7909bb5a58289b6c8d18c68f118715483548e2492bb1695c874e774ab38d",
     },
     {
         "name": "openssl-cmake",
@@ -82,6 +85,7 @@ ARCHIVES: List[Dict[str, str]] = [
             f"{OPENSSL_CMAKE_COMMIT}.tar.gz"
         ),
         "filename": f"openssl-cmake-{OPENSSL_CMAKE_COMMIT}.tar.gz",
+        "sha256": "4bfd7f0995f63e82a3b261debc0c0433fac3db63688f7e3dc21c3cbf89004e10",
     },
 ]
 
@@ -180,7 +184,7 @@ def _download(url: str, destination: Path, expected_sha256: Optional[str] = None
 def _install_archive(spec: Dict[str, str]) -> None:
     name = spec["name"]
     archive = DOWNLOADS / spec["filename"]
-    _download(spec["url"], archive)
+    _download(spec["url"], archive, spec.get("sha256"))
 
     target = THIRD_PARTY / name
     work = STAGING / name

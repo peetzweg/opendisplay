@@ -24,7 +24,6 @@ import app.opendisplay.android.airplay.discovery.NsdServiceManager
 import app.opendisplay.android.airplay.renderer.AudioRenderer
 import java.io.File
 import java.util.UUID
-import kotlin.math.log10
 
 /**
  * RAOP audio sink for AirPlay senders. It accepts ALAC/AAC audio and metadata
@@ -253,11 +252,11 @@ class AirPlayReceiverService : Service() {
         }
 
         override fun onClientVolume(db: Float) {
-            senderGain = dbToGain(db)
+            senderGain = AirPlayGain.dbToGain(db)
             audioRenderer.setClientGain(senderGain)
         }
 
-        override fun onClientVolumeQuery(): Float = gainToDb(senderGain)
+        override fun onClientVolumeQuery(): Float = AirPlayGain.gainToDb(senderGain)
 
         override fun onAudioTeardown() {
             audioRenderer.stop()
@@ -294,16 +293,6 @@ class AirPlayReceiverService : Service() {
         override fun onVideoStop() = Unit
         override fun onVideoSessionPoll() = Unit
     }
-
-    private fun dbToGain(db: Float): Float = when {
-        db <= -30f -> 0f
-        db >= 0f -> 1f
-        else -> (db + 30f) / 30f
-    }
-
-    private fun gainToDb(gain: Float): Float =
-        if (gain <= 0.001f) -144f
-        else (20.0 * log10(gain.toDouble())).toFloat().coerceIn(-30f, 0f)
 
     companion object {
         private const val TAG = "AirPlayAudio"

@@ -22,21 +22,31 @@ revisions listed below and keeps only local patches and notices here. Run
 If a GPL-only FFmpeg component is enabled later, update this notice and review
 the repository licence before merging.
 
-## Source availability
+## Source availability and written offer
 
 The corresponding source for every linked component is identified by the exact
 commit or tarball above and reconstructed by `tools/bootstrap-airplay-third-party.py`.
 All local changes are kept as patches in `app/src/main/cpp/patches/UxPlay` or as
-explicit edits in the bootstrap script. Anyone receiving a binary can rebuild
-the exact source set from this repository plus those pinned upstream URLs. For
-distribution channels that require an offline source offer, attach an archive
-of the pinned source trees to the release.
+explicit edits in the bootstrap script. Downloaded archives are verified against
+these SHA-256 digests:
 
-OpenSSL 3.4.4 tarball SHA-256:
+| Archive | SHA-256 |
+|---|---|
+| UxPlay `df67c212...` | `168de53ed688f87c4022d79357ce91f9608ad5c53236bff95134d19b88efeb3f` |
+| FFmpeg `38b88335...` | `2ae7e42343cfffb811d15cfe98b6d005f082595fcdf034d30a4ff90cfed9f9c6` |
+| libplist `2117b8fd...` | `40ff7909bb5a58289b6c8d18c68f118715483548e2492bb1695c874e774ab38d` |
+| openssl-cmake `61be7754...` | `4bfd7f0995f63e82a3b261debc0c0433fac3db63688f7e3dc21c3cbf89004e10` |
+| OpenSSL `3.4.4` | `7bdf55ac20f2779e99e5eca306f824fad2b37dee5a06cc35ed5a8b85a6060010` |
 
-```text
-7bdf55ac20f2779e99e5eca306f824fad2b37dee5a06cc35ed5a8b85a6060010
-```
+**Written offer (GPLv3 section 6).** For any binary distribution of this Android
+module, the Complete Corresponding Source for the exact distributed revision —
+including this repository, all third-party source archives listed above, the
+local UxPlay patches and the bootstrap script — is available from
+`https://github.com/peetzweg/opendisplay/releases` and from the source archive
+for the corresponding release tag or commit. This offer is valid for at least
+three years from the date the binary is distributed. On request, a copy will
+also be supplied on physical media for no more than the cost of copying and
+shipping. Distributors must include this notice with the binary.
 
 ## Local modifications
 

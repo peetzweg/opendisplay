@@ -17,8 +17,11 @@ class NsdServiceManager(private val ctx: Context) {
     private val nsdManager = ctx.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val lock = Any()
     private val pending = ArrayDeque<MdnsService>()
-    private val registrations = mutableListOf<NsdManager.RegistrationListener>()
+    // Every listener we ever handed to NsdManager, including timed-out ones.
+    // A late onServiceRegistered() after a timeout must still be cleaned up.
+    private val tracked = mutableSetOf<NsdManager.RegistrationListener>()
     private val active = mutableSetOf<NsdManager.RegistrationListener>()
+    private val timeouts = mutableMapOf<NsdManager.RegistrationListener, Runnable>()
     private var registering = false
     private var released = false
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -45,6 +48,14 @@ class NsdServiceManager(private val ctx: Context) {
             }
         }
         if (start) registerNext()
+    }
+
+    private fun unregisterQuietly(listener: NsdManager.RegistrationListener) {
+        try { nsdManager.unregisterService(listener) } catch (_: Exception) {}
+    }
+
+    private fun clearTimeout(listener: NsdManager.RegistrationListener) {
+        timeouts.remove(listener)?.let { handler.removeCallbacks(it) }
     }
 
     private fun registerNext() {
@@ -75,21 +86,43 @@ class NsdServiceManager(private val ctx: Context) {
         // fallback the queue would stop after the first service and never
         // advertise _airplay._tcp, which macOS needs to list the device.
         val settled = AtomicBoolean(false)
+        var timeoutRunnable: Runnable? = null
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
-                if (!settled.compareAndSet(false, true)) return
+                var continueQueue = false
                 synchronized(lock) {
-                    if (!released) {
-                        registrations += this
+                    clearTimeout(this)
+                    if (!settled.compareAndSet(false, true)) {
+                        // Success arrived after the fallback timeout: the
+                        // record may be live even though we moved on. Drop it
+                        // here as well as in the timeout path.
+                        Log.w(TAG, "${next.type} registered after timeout; unregistering")
+                        active -= this
+                        tracked -= this
+                        unregisterQuietly(this)
+                    } else if (released) {
+                        active -= this
+                        tracked -= this
+                        unregisterQuietly(this)
+                    } else {
+                        tracked += this
                         active += this
+                        continueQueue = true
                     }
                 }
-                Log.i(TAG, "${next.type} registered: ${info.serviceName}")
-                registerNext()
+                if (continueQueue) {
+                    Log.i(TAG, "${next.type} registered: ${info.serviceName}")
+                    registerNext()
+                }
             }
 
             override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
                 if (!settled.compareAndSet(false, true)) return
+                synchronized(lock) {
+                    clearTimeout(this)
+                    active -= this
+                    tracked -= this
+                }
                 Log.e(TAG, "${next.type} registration failed: $code")
                 registerNext()
             }
@@ -103,20 +136,37 @@ class NsdServiceManager(private val ctx: Context) {
             }
         }
 
+        timeoutRunnable = Runnable {
+            if (!settled.compareAndSet(false, true)) return@Runnable
+            synchronized(lock) {
+                timeouts -= listener
+                active -= listener
+                tracked -= listener
+            }
+            Log.w(TAG, "${next.type} registration callback timed out; continuing")
+            // The OEM stack may still have the record half-alive; drop it so
+            // the retry does not end up as "Name (2)" on the Mac.
+            unregisterQuietly(listener)
+            registerNext()
+        }
+
+        synchronized(lock) {
+            if (released) return
+            tracked += listener
+            timeoutRunnable?.let { timeouts[listener] = it }
+        }
+
         try {
             Log.i(TAG, "registering ${next.type} as ${next.name} on ${next.port}")
             nsdManager.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
-            handler.postDelayed({
-                if (settled.compareAndSet(false, true)) {
-                    Log.w(TAG, "${next.type} registration callback timed out; continuing")
-                    // The OEM stack may still have the record half-alive; drop it
-                    // so the retry does not end up as "Name (2)" on the Mac.
-                    try { nsdManager.unregisterService(listener) } catch (_: Exception) {}
-                    registerNext()
-                }
-            }, REGISTRATION_TIMEOUT_MS)
+            timeoutRunnable?.let { handler.postDelayed(it, REGISTRATION_TIMEOUT_MS) }
         } catch (t: Throwable) {
             if (settled.compareAndSet(false, true)) {
+                synchronized(lock) {
+                    clearTimeout(listener)
+                    active -= listener
+                    tracked -= listener
+                }
                 Log.e(TAG, "${next.type} registerService threw", t)
                 registerNext()
             }
@@ -124,17 +174,18 @@ class NsdServiceManager(private val ctx: Context) {
     }
 
     fun release() {
-        val toUnregister = synchronized(lock) {
+        val (toUnregister, pendingTimeouts) = synchronized(lock) {
             released = true
             pending.clear()
-            val list = active.toList()
+            val callbacks = timeouts.values.toList()
+            timeouts.clear()
+            val listeners = tracked.toList()
+            tracked.clear()
             active.clear()
-            registrations.clear()
-            list
+            listeners to callbacks
         }
-        toUnregister.forEach {
-            try { nsdManager.unregisterService(it) } catch (_: Exception) {}
-        }
+        pendingTimeouts.forEach { handler.removeCallbacks(it) }
+        toUnregister.forEach { unregisterQuietly(it) }
         multicastLock?.release()
         multicastLock = null
     }
