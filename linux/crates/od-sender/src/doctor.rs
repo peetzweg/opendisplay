@@ -64,6 +64,13 @@ pub fn doctor(req: &Request, config_path: Option<&Path>) -> bool {
             println!("  => adopt output {output}");
             true
         }
+        Decision::X11 { display, output } => {
+            match output {
+                Some(o) => println!("  => x11 ({display}), existing output {o}"),
+                None => println!("  => x11 ({display})"),
+            }
+            true
+        }
         Decision::Unsupported(m) => {
             println!("  => unsupported: {m}");
             false
@@ -76,7 +83,7 @@ pub fn doctor(req: &Request, config_path: Option<&Path>) -> bool {
                 let snap = snapshot.as_ref().and_then(|s| s.as_ref().ok());
                 match detect::choose_capture(b.as_ref(), req.capture, snap) {
                     Ok(Some(sel)) => println!("  capture: {} ({})", sel.path, sel.reason),
-                    Ok(None) => println!("  capture: n/a (PipeWire)"),
+                    Ok(None) => println!("  capture: n/a ({})", b.capture_label()),
                     Err(e) => {
                         println!("  capture: none ({e:#})");
                         supported = false;
