@@ -469,19 +469,23 @@ class VideoDecoder(private val callbacks: Callbacks, compat: Boolean = false) {
         private fun reportSize(format: MediaFormat) {
             var width = format.getInteger(MediaFormat.KEY_WIDTH)
             var height = format.getInteger(MediaFormat.KEY_HEIGHT)
-            val hasCrop = format.containsKey("crop-right") && format.containsKey("crop-left") &&
-                format.containsKey("crop-bottom") && format.containsKey("crop-top")
-            if (hasCrop) {
+            val hasHorizontalCrop = format.containsKey("crop-right") && format.containsKey("crop-left")
+            val hasVerticalCrop = format.containsKey("crop-bottom") && format.containsKey("crop-top")
+            if (hasHorizontalCrop) {
                 width = format.getInteger("crop-right") - format.getInteger("crop-left") + 1
+            }
+            if (hasVerticalCrop) {
                 height = format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1
-            } else if (legacyCompat) {
+            }
+            if (legacyCompat && (!hasHorizontalCrop || !hasVerticalCrop)) {
                 // Old OMX decoders report the padded raster; the SPS has the
-                // visible size the sender actually captured.
+                // visible size the sender actually captured. Fill only axes the
+                // decoder did not report, so the default path stays unchanged.
                 parameterSets.firstOrNull { AnnexB.nalType(Codec.H264, it) == 7 }
                     ?.let { SpsParser.h264Size(it) }
                     ?.let {
-                        width = it.width
-                        height = it.height
+                        if (!hasHorizontalCrop) width = it.width
+                        if (!hasVerticalCrop) height = it.height
                     }
             }
             Log.i(TAG, "decoder output ${width}x$height${if (legacyCompat) " (legacy)" else ""}")

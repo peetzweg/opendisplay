@@ -50,18 +50,13 @@ class AirPlayReceiverService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> stopReceiver()
-            else -> {
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-                    Log.w(TAG, "AirPlay audio requires API 23+; stopping")
-                    ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                } else {
-                    promoteToForeground()
-                    startReceiver()
-                }
-            }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            Log.w(TAG, "AirPlay audio requires API 23+; stopping")
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        } else {
+            promoteToForeground()
+            startReceiver()
         }
         // The host app's settings switch owns the lifetime; do not auto-restart.
         return START_NOT_STICKY
@@ -81,7 +76,7 @@ class AirPlayReceiverService : Service() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "OpenDisplay:AirPlayAudio")
             .apply {
                 setReferenceCounted(false)
-                acquire(WAKE_LOCK_TIMEOUT_MS)
+                acquire()
             }
 
         try {
@@ -317,11 +312,9 @@ class AirPlayReceiverService : Service() {
         private const val DEFAULT_PORT = 7000
         private const val RAOP_SERVICE_TYPE = "_raop._tcp"
         private const val AIRPLAY_SERVICE_TYPE = "_airplay._tcp"
-        private const val WAKE_LOCK_TIMEOUT_MS = 10L * 60 * 1000
         private const val KEY_HW_ADDRESS = "hwAddress"
 
         const val ACTION_START = "app.opendisplay.android.airplay.audio.START"
-        const val ACTION_STOP = "app.opendisplay.android.airplay.audio.STOP"
 
         // AirPlay feature bits for video, photos, HLS, slideshow and H.265.
         private val AUDIO_ONLY_DISABLED_BITS = intArrayOf(0, 1, 2, 4, 5, 6, 7, 8, 13, 33, 34, 42)
@@ -342,8 +335,7 @@ class AirPlayReceiverService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, AirPlayReceiverService::class.java).setAction(ACTION_STOP)
-            context.stopService(intent)
+            context.stopService(Intent(context, AirPlayReceiverService::class.java))
         }
     }
 }

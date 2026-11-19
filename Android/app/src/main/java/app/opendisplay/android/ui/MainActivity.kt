@@ -1,5 +1,8 @@
 package app.opendisplay.android.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.color.DynamicColors
@@ -56,6 +59,13 @@ import kotlin.math.roundToInt
  */
 class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.Callbacks, SettingsDialog.Host {
     private val main = Handler(Looper.getMainLooper())
+    private val requestPostNotifications = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && prefs.airplayAudioReceiver) {
+            AirPlayReceiverService.start(this)
+        }
+    }
     // AirPlay mDNS must wait until Advertiser has claimed the single NSD slot.
     private var airPlayStartPending = true
     private val airPlayStartFallback = Runnable {
@@ -262,7 +272,18 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     /** AirPlay audio runs as a foreground service and is independent of the screen-cast session. */
     private fun syncAirPlayAudioReceiver(enabled: Boolean = prefs.airplayAudioReceiver) {
-        if (enabled) AirPlayReceiverService.start(this) else AirPlayReceiverService.stop(this)
+        if (!enabled) {
+            AirPlayReceiverService.stop(this)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPostNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        AirPlayReceiverService.start(this)
     }
 
     override fun onStart() {

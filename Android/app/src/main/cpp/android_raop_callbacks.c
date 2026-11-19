@@ -18,6 +18,13 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+static void _jni_clear_exception(JNIEnv *env) {
+    if (env && (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+    }
+}
+
 typedef struct {
     JNIEnv *env;
     JavaVM *vm;
@@ -25,6 +32,8 @@ typedef struct {
 } jni_thread_scope_t;
 
 static void _jni_thread_scope_cleanup(jni_thread_scope_t *scope) {
+    if (!scope) return;
+    _jni_clear_exception(scope->env);
     if (scope->attached && scope->vm) {
         (*scope->vm)->DetachCurrentThread(scope->vm);
     }
@@ -49,11 +58,31 @@ static jni_thread_scope_t _jni_thread_scope(android_callback_ctx_t *ctx) {
 
     /* Clear any pending exception from a previous callback on this thread,
        otherwise JNI calls like NewByteArray will fatally abort. */
-    if (env && (*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionDescribe(env);
-        (*env)->ExceptionClear(env);
-    }
+    _jni_clear_exception(env);
     return scope;
+}
+
+static jbyteArray _jni_new_byte_array(JNIEnv *env, const void *buf, int len) {
+    if (!env || !buf || len <= 0) return NULL;
+    jbyteArray arr = (*env)->NewByteArray(env, len);
+    if (!arr) {
+        _jni_clear_exception(env);
+        return NULL;
+    }
+    (*env)->SetByteArrayRegion(env, arr, 0, len, (const jbyte *)buf);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->DeleteLocalRef(env, arr);
+        _jni_clear_exception(env);
+        return NULL;
+    }
+    return arr;
+}
+
+static jstring _jni_new_string(JNIEnv *env, const char *s) {
+    if (!env) return NULL;
+    jstring out = (*env)->NewStringUTF(env, s ? s : "");
+    if (!out) _jni_clear_exception(env);
+    return out;
 }
 
 #define JNI_SCOPE(ctx) \
@@ -61,9 +90,11 @@ static jni_thread_scope_t _jni_thread_scope(android_callback_ctx_t *ctx) {
     jni_thread_scope_t _jni_scope = _jni_thread_scope(ctx); \
     JNIEnv *env = _jni_scope.env
 
-void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj) {
-    (*env)->GetJavaVM(env, &ctx->jvm);
-    ctx->callback_obj = (*env)->NewGlobalRef(env, callback_obj);
+bool android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj) {
+    bool ok = true;
+    ctx->jvm = NULL;
+    ctx->callback_obj = NULL;
+    ctx->raop = NULL;
     ctx->h265_enabled = 1;
     ctx->require_pin = 0;
     ctx->registered_count = 0;
@@ -79,28 +110,50 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->playback_rate = 0.0f;
     ctx->playback_ready = 0;
 
+    if ((*env)->GetJavaVM(env, &ctx->jvm) != JNI_OK) {
+        LOGE("GetJavaVM failed");
+        ok = false;
+    }
+    ctx->callback_obj = (*env)->NewGlobalRef(env, callback_obj);
+    if (!ctx->callback_obj) {
+        LOGE("NewGlobalRef(callback) failed");
+        ok = false;
+    }
+
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
-    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
-    ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
-    ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
-    ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "(F)V");
-    ctx->on_client_volume_query = (*env)->GetMethodID(env, cls, "onClientVolumeQuery", "()F");
-    ctx->on_audio_teardown = (*env)->GetMethodID(env, cls, "onAudioTeardown", "()V");
-    ctx->on_conn_init = (*env)->GetMethodID(env, cls, "onConnectionInit", "()V");
-    ctx->on_conn_destroy = (*env)->GetMethodID(env, cls, "onConnectionDestroy", "()V");
-    ctx->on_conn_reset = (*env)->GetMethodID(env, cls, "onConnectionReset", "(I)V");
-    ctx->on_display_pin = (*env)->GetMethodID(env, cls, "onDisplayPin", "(Ljava/lang/String;)V");
-    ctx->on_metadata = (*env)->GetMethodID(env, cls, "onMetadata", "([B)V");
-    ctx->on_coverart = (*env)->GetMethodID(env, cls, "onCoverArt", "([B)V");
-    ctx->on_progress = (*env)->GetMethodID(env, cls, "onProgress", "(JJJ)V");
-    ctx->on_dacp_id = (*env)->GetMethodID(env, cls, "onDacpId", "(Ljava/lang/String;Ljava/lang/String;)V");
-    ctx->on_mirror_running = (*env)->GetMethodID(env, cls, "onMirrorRunning", "(Z)V");
-    ctx->on_video_play = (*env)->GetMethodID(env, cls, "onVideoPlay", "(Ljava/lang/String;F)V");
-    ctx->on_video_scrub = (*env)->GetMethodID(env, cls, "onVideoScrub", "(F)V");
-    ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
-    ctx->on_video_stop = (*env)->GetMethodID(env, cls, "onVideoStop", "()V");
-    ctx->on_video_session_poll = (*env)->GetMethodID(env, cls, "onVideoSessionPoll", "()V");
-    (*env)->DeleteLocalRef(env, cls);
+    if (!cls) {
+        LOGE("GetObjectClass(callback) failed");
+        ok = false;
+    } else {
+#define GET_METHOD(field, name, sig) do { \
+        (field) = (*env)->GetMethodID(env, cls, name, sig); \
+        if (!(field)) { LOGE("missing callback method %s", name); ok = false; } \
+    } while (0)
+        GET_METHOD(ctx->on_video_data, "onVideoData", "([BJZ)V");
+        GET_METHOD(ctx->on_audio_format, "onAudioFormat", "(IIZ)V");
+        GET_METHOD(ctx->on_video_size, "onVideoSize", "(FFFF)V");
+        GET_METHOD(ctx->on_client_volume, "onClientVolume", "(F)V");
+        GET_METHOD(ctx->on_client_volume_query, "onClientVolumeQuery", "()F");
+        GET_METHOD(ctx->on_audio_teardown, "onAudioTeardown", "()V");
+        GET_METHOD(ctx->on_conn_init, "onConnectionInit", "()V");
+        GET_METHOD(ctx->on_conn_destroy, "onConnectionDestroy", "()V");
+        GET_METHOD(ctx->on_conn_reset, "onConnectionReset", "(I)V");
+        GET_METHOD(ctx->on_display_pin, "onDisplayPin", "(Ljava/lang/String;)V");
+        GET_METHOD(ctx->on_metadata, "onMetadata", "([B)V");
+        GET_METHOD(ctx->on_coverart, "onCoverArt", "([B)V");
+        GET_METHOD(ctx->on_progress, "onProgress", "(JJJ)V");
+        GET_METHOD(ctx->on_dacp_id, "onDacpId", "(Ljava/lang/String;Ljava/lang/String;)V");
+        GET_METHOD(ctx->on_mirror_running, "onMirrorRunning", "(Z)V");
+        GET_METHOD(ctx->on_video_play, "onVideoPlay", "(Ljava/lang/String;F)V");
+        GET_METHOD(ctx->on_video_scrub, "onVideoScrub", "(F)V");
+        GET_METHOD(ctx->on_video_rate, "onVideoRate", "(F)V");
+        GET_METHOD(ctx->on_video_stop, "onVideoStop", "()V");
+        GET_METHOD(ctx->on_video_session_poll, "onVideoSessionPoll", "()V");
+#undef GET_METHOD
+        (*env)->DeleteLocalRef(env, cls);
+    }
+    if (!ok) _jni_clear_exception(env);
+    return ok;
 }
 
 void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
@@ -150,8 +203,8 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
         return;
     }
 
-    jbyteArray arr = (*env)->NewByteArray(env, data->data_len);
-    (*env)->SetByteArrayRegion(env, arr, 0, data->data_len, (jbyte *)data->data);
+    jbyteArray arr = _jni_new_byte_array(env, data->data, data->data_len);
+    if (!arr) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data,
                            arr, (jlong)data->ntp_time_local, (jboolean)data->is_h265);
     (*env)->DeleteLocalRef(env, arr);
@@ -219,7 +272,8 @@ static void _display_pin(void *cls, char *pin) {
 
     JNI_SCOPE(ctx);
     if (!env) return;
-    jstring jpin = (*env)->NewStringUTF(env, pin);
+    jstring jpin = _jni_new_string(env, pin);
+    if (!jpin) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_display_pin, jpin);
     (*env)->DeleteLocalRef(env, jpin);
 }
@@ -260,8 +314,8 @@ static void _audio_set_metadata(void *cls, const void *buf, int len) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNI_SCOPE(ctx);
     if (!env || !buf || len <= 0) return;
-    jbyteArray arr = (*env)->NewByteArray(env, len);
-    (*env)->SetByteArrayRegion(env, arr, 0, len, (jbyte *)buf);
+    jbyteArray arr = _jni_new_byte_array(env, buf, len);
+    if (!arr) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_metadata, arr);
     (*env)->DeleteLocalRef(env, arr);
 }
@@ -270,8 +324,8 @@ static void _audio_set_coverart(void *cls, const void *buf, int len) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNI_SCOPE(ctx);
     if (!env || !buf || len <= 0) return;
-    jbyteArray arr = (*env)->NewByteArray(env, len);
-    (*env)->SetByteArrayRegion(env, arr, 0, len, (jbyte *)buf);
+    jbyteArray arr = _jni_new_byte_array(env, buf, len);
+    if (!arr) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_coverart, arr);
     (*env)->DeleteLocalRef(env, arr);
 }
@@ -280,8 +334,13 @@ static void _audio_remote_control_id(void *cls, const char *dacp_id, const char 
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNI_SCOPE(ctx);
     if (!env) return;
-    jstring jdacp = (*env)->NewStringUTF(env, dacp_id ? dacp_id : "");
-    jstring jremote = (*env)->NewStringUTF(env, active_remote ? active_remote : "");
+    jstring jdacp = _jni_new_string(env, dacp_id);
+    if (!jdacp) return;
+    jstring jremote = _jni_new_string(env, active_remote);
+    if (!jremote) {
+        (*env)->DeleteLocalRef(env, jdacp);
+        return;
+    }
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_dacp_id, jdacp, jremote);
     (*env)->DeleteLocalRef(env, jdacp);
     (*env)->DeleteLocalRef(env, jremote);
@@ -332,7 +391,8 @@ static void _video_play(void *cls, const char *location, const float start_posit
     android_callbacks_update_playback_info(ctx, start_position, 0.0, 0.0f, 0);
     JNI_SCOPE(ctx);
     if (!env || !location) return;
-    jstring jloc = (*env)->NewStringUTF(env, location);
+    jstring jloc = _jni_new_string(env, location);
+    if (!jloc) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_play, jloc, (jfloat)start_position);
     (*env)->DeleteLocalRef(env, jloc);
 }

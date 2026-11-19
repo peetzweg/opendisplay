@@ -15,12 +15,36 @@
 class LogSink {
 public:
     // bind to Kotlin handler with `void onLog(String)` (bridge.LogListener)
-    void bind(JNIEnv *env, jobject handler) {
-        env->GetJavaVM(&mVm);
+    bool bind(JNIEnv *env, jobject handler) {
+        bool ok = true;
+        if (env->GetJavaVM(&mVm) != JNI_OK) {
+            ok = false;
+        }
         mObj = env->NewGlobalRef(handler);
+        if (!mObj) {
+            ok = false;
+        }
         jclass cls = env->GetObjectClass(handler);
-        mMethod = cls ? env->GetMethodID(cls, "onLog", "(Ljava/lang/String;)V") : nullptr;
-        if (cls) env->DeleteLocalRef(cls);
+        if (!cls) {
+            ok = false;
+        } else {
+            mMethod = env->GetMethodID(cls, "onLog", "(Ljava/lang/String;)V");
+            if (!mMethod) ok = false;
+            env->DeleteLocalRef(cls);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionDescribe();
+            env->ExceptionClear();
+        }
+        if (!ok) {
+            if (mObj) {
+                env->DeleteGlobalRef(mObj);
+                mObj = nullptr;
+            }
+            mMethod = nullptr;
+            mVm = nullptr;
+        }
+        return ok;
     }
 
     // releases handler global ref; thread safe
@@ -61,9 +85,13 @@ private:
             attached = true;
         }
         jstring s = env->NewStringUTF(buf);
-        env->CallVoidMethod(mObj, mMethod, s);
-        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
-        env->DeleteLocalRef(s);
+        if (!s) {
+            if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+        } else {
+            env->CallVoidMethod(mObj, mMethod, s);
+            if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+            env->DeleteLocalRef(s);
+        }
         if (attached) mVm->DetachCurrentThread();
     }
 

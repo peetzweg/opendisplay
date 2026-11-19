@@ -1,6 +1,7 @@
 #ifndef ANDROID_RAOP_CALLBACKS_H
 #define ANDROID_RAOP_CALLBACKS_H
 
+#include <stdbool.h>
 #include <jni.h>
 #include <pthread.h>
 #include "raop.h"
@@ -51,7 +52,7 @@ typedef struct {
     AudioEngine *audio_engine;
 } android_callback_ctx_t;
 
-void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);
+bool android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);
 void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env);
 void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx);
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,

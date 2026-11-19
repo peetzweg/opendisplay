@@ -37,7 +37,7 @@ DOWNLOADS = THIRD_PARTY / ".downloads"
 STAGING = THIRD_PARTY / ".staging"
 MARKER = THIRD_PARTY / ".airplay-bootstrap"
 
-CONFIG_VERSION = "airplay-third-party-v1"
+CONFIG_VERSION = "airplay-third-party-v2"
 
 # Downloaded archives plus extracted sources. The later native build needs much
 # more, but this is the minimum for bootstrap itself to make progress.
@@ -364,11 +364,10 @@ def main() -> int:
         print("third-party sources are already bootstrapped")
         return 0
     if marker_text is not None and marker_text != CONFIG_VERSION and not args.force:
-        raise SystemExit(
-            f"{MARKER} was written by {marker_text}, but this build needs {CONFIG_VERSION}. "
-            "Run with --force to refresh the third-party sources."
+        print(
+            f"{MARKER} was written by {marker_text}; refreshing sources for {CONFIG_VERSION}."
         )
-    if _legacy_tree_is_complete() and not args.force:
+    if marker_text is None and _legacy_tree_is_complete() and not args.force:
         MARKER.write_text(CONFIG_VERSION + "\n", encoding="utf-8")
         print("existing vendored third-party sources detected; nothing to download")
         return 0

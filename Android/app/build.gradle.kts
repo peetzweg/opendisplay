@@ -145,11 +145,9 @@ tasks.register("applyUxplayPatches") {
         val patches = file("src/main/cpp/patches/UxPlay")
             .listFiles { f -> f.extension == "patch" }!!
             .sorted()
-        val touched = patches
-            .flatMap { git("apply", "--numstat", it.path).trim().lines() }
-            .map { it.substringAfterLast("\t") }
-            .distinct()
-        if (touched.isNotEmpty()) git("checkout", "--", *touched.toTypedArray())
+        // Discard any previously applied local patches before reapplying the
+        // current set, so a removed patch cannot linger in a legacy checkout.
+        git("checkout", "--", ".")
         patches.forEach { git("apply", "--unidiff-zero", it.path) }
     }
 }

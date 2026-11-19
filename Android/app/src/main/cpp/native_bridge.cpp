@@ -24,6 +24,26 @@ extern "C" {
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+static const char *_get_utf(JNIEnv *env, jstring s) {
+    if (!s) return NULL;
+    const char *c = env->GetStringUTFChars(s, NULL);
+    if (!c && env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+    }
+    return c;
+}
+
+static jstring _new_string(JNIEnv *env, const char *s) {
+    if (!env || !s) return NULL;
+    jstring out = env->NewStringUTF(s);
+    if (!out && env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+    }
+    return out;
+}
+
 /* Holds all native state for one server instance */
 typedef struct {
     raop_t *raop;
@@ -49,30 +69,65 @@ Java_app_opendisplay_android_airplay_bridge_NativeBridge_nativeInit(
         jobject callback, jbyteArray hwAddr, jstring name, jstring keyFile,
         jboolean nohold, jboolean requirePin) {
 
+    if (!callback || !hwAddr || !name || !keyFile || env->GetArrayLength(hwAddr) < 6) {
+        LOGE("nativeInit: invalid arguments");
+        return 0;
+    }
+
     server_ctx_t *ctx = new server_ctx_t();
+    const char *keyfile_c = NULL;
+    const char *name_c = NULL;
+
+    auto fail = [&]() -> jlong {
+        if (keyfile_c) env->ReleaseStringUTFChars(keyFile, keyfile_c);
+        if (name_c) env->ReleaseStringUTFChars(name, name_c);
+        if (ctx->raop) {
+            raop_destroy(ctx->raop);
+            ctx->raop = NULL;
+        }
+        if (ctx->dnssd) {
+            dnssd_destroy(ctx->dnssd);
+            ctx->dnssd = NULL;
+        }
+        AudioEngine *engine = ctx->cb_ctx.audio_engine;
+        ctx->cb_ctx.audio_engine = NULL;
+        if (engine) audio_engine_destroy(engine);
+        android_callbacks_destroy(&ctx->cb_ctx, env);
+        delete ctx;
+        return 0;
+    };
 
     jsize hw_len = env->GetArrayLength(hwAddr);
     if (hw_len > 6) hw_len = 6;
     env->GetByteArrayRegion(hwAddr, 0, hw_len, (jbyte *)ctx->hw_addr);
+    if (env->ExceptionCheck()) {
+        LOGE("nativeInit: GetByteArrayRegion failed");
+        return fail();
+    }
 
-    android_callbacks_init(&ctx->cb_ctx, env, callback);
+    if (!android_callbacks_init(&ctx->cb_ctx, env, callback)) {
+        LOGE("android_callbacks_init failed");
+        return fail();
+    }
     ctx->cb_ctx.require_pin = requirePin ? 1 : 0;
     android_callbacks_fill(&ctx->callbacks, &ctx->cb_ctx);
 
     ctx->raop = raop_init(&ctx->callbacks);
     if (!ctx->raop) {
         LOGE("raop_init failed");
-        android_callbacks_destroy(&ctx->cb_ctx, env);
-        delete ctx;
-        return 0;
+        return fail();
     }
     ctx->cb_ctx.raop = ctx->raop;
 
     raop_set_log_level(ctx->raop, LOGGER_ERR);
     raop_set_log_callback(ctx->raop, _log_callback, NULL);
 
-    const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
-    const char *name_c = env->GetStringUTFChars(name, NULL);
+    keyfile_c = _get_utf(env, keyFile);
+    name_c = _get_utf(env, name);
+    if (!keyfile_c || !name_c) {
+        LOGE("nativeInit: GetStringUTFChars failed");
+        return fail();
+    }
 
     char device_id[18];
     snprintf(device_id, sizeof(device_id), "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -83,6 +138,7 @@ Java_app_opendisplay_android_airplay_bridge_NativeBridge_nativeInit(
     int ret = raop_init2(ctx->raop, nohold ? 1 : 0, device_id, keyfile_c);
     if (ret < 0) {
         LOGE("raop_init2 failed: %d", ret);
+        return fail();
     }
 
     if (requirePin) {
@@ -101,17 +157,26 @@ Java_app_opendisplay_android_airplay_bridge_NativeBridge_nativeInit(
     ctx->dnssd = dnssd_init(name_c, (int)strlen(name_c), ctx->hw_addr, 6, &dns_err, pin_pw);
     if (!ctx->dnssd) {
         LOGE("dnssd_init failed: %d", dns_err);
-    } else {
-        raop_set_dnssd(ctx->raop, ctx->dnssd);
+        return fail();
     }
+    raop_set_dnssd(ctx->raop, ctx->dnssd);
 
     env->ReleaseStringUTFChars(keyFile, keyfile_c);
     env->ReleaseStringUTFChars(name, name_c);
+    keyfile_c = NULL;
+    name_c = NULL;
 
     ctx->log = std::make_shared<LogSink>();
-    ctx->log->bind(env, callback);
+    if (!ctx->log->bind(env, callback)) {
+        LOGE("LogSink::bind failed");
+        return fail();
+    }
 
     ctx->cb_ctx.audio_engine = audio_engine_create(ctx->log, 44100, 2);
+    if (!ctx->cb_ctx.audio_engine) {
+        LOGE("audio_engine_create failed");
+        return fail();
+    }
 
     return (jlong)(intptr_t)ctx;
 }
@@ -202,10 +267,27 @@ Java_app_opendisplay_android_airplay_bridge_NativeBridge_nativeSetDisplaySize(
 /* Returns a HashMap<String, String> of TXT records */
 static jobject _build_txt_map(JNIEnv *env, dnssd_t *dnssd, int is_raop) {
     jclass mapClass = env->FindClass("java/util/HashMap");
+    if (!mapClass) {
+        LOGE("FindClass(HashMap) failed");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+        return NULL;
+    }
     jmethodID mapInit = env->GetMethodID(mapClass, "<init>", "()V");
     jmethodID mapPut = env->GetMethodID(mapClass, "put",
         "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    if (!mapInit || !mapPut) {
+        LOGE("HashMap method lookup failed");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+        env->DeleteLocalRef(mapClass);
+        return NULL;
+    }
     jobject map = env->NewObject(mapClass, mapInit);
+    if (!map) {
+        LOGE("NewObject(HashMap) failed");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+        env->DeleteLocalRef(mapClass);
+        return NULL;
+    }
 
     int count = is_raop ? android_dnssd_get_raop_txt_count(dnssd)
                         : android_dnssd_get_airplay_txt_count(dnssd);
@@ -216,9 +298,15 @@ static jobject _build_txt_map(JNIEnv *env, dnssd_t *dnssd, int is_raop) {
         const char *val = is_raop ? android_dnssd_get_raop_txt_val(dnssd, i)
                                   : android_dnssd_get_airplay_txt_val(dnssd, i);
         if (key && val) {
-            jstring jkey = env->NewStringUTF(key);
-            jstring jval = env->NewStringUTF(val);
+            jstring jkey = _new_string(env, key);
+            if (!jkey) continue;
+            jstring jval = _new_string(env, val);
+            if (!jval) {
+                env->DeleteLocalRef(jkey);
+                continue;
+            }
             env->CallObjectMethod(map, mapPut, jkey, jval);
+            if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
             env->DeleteLocalRef(jkey);
             env->DeleteLocalRef(jval);
         }
@@ -255,7 +343,8 @@ Java_app_opendisplay_android_airplay_bridge_NativeBridge_nativeGetRaopServiceNam
 
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->dnssd) return NULL;
-    return env->NewStringUTF(android_dnssd_get_raop_servname(ctx->dnssd));
+    const char *name = android_dnssd_get_raop_servname(ctx->dnssd);
+    return name ? _new_string(env, name) : NULL;
 }
 
 extern "C"
@@ -267,7 +356,7 @@ Java_app_opendisplay_android_airplay_bridge_NativeBridge_nativeGetServerName(
     if (!ctx || !ctx->dnssd) return NULL;
     int len = 0;
     const char *name = dnssd_get_name(ctx->dnssd, &len);
-    return env->NewStringUTF(name);
+    return name ? _new_string(env, name) : NULL;
 }
 
 extern "C"
@@ -277,7 +366,8 @@ Java_app_opendisplay_android_airplay_bridge_NativeBridge_nativeSetPlist(
 
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->raop) return;
-    const char *key_c = env->GetStringUTFChars(key, NULL);
+    const char *key_c = _get_utf(env, key);
+    if (!key_c) return;
     raop_set_plist(ctx->raop, key_c, value);
     env->ReleaseStringUTFChars(key, key_c);
 }
@@ -318,7 +408,8 @@ Java_app_opendisplay_android_airplay_bridge_NativeBridge_nativeSetLang(
 
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->raop) return;
-    const char *c = env->GetStringUTFChars(lang, NULL);
+    const char *c = _get_utf(env, lang);
+    if (!c) return;
     raop_set_lang(ctx->raop, c);
     env->ReleaseStringUTFChars(lang, c);
 }
