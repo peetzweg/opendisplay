@@ -13,6 +13,38 @@ final class CaptureSourceCheckTests: XCTestCase {
         }
     }
 
+    func testFractionalScaleRoundingDoesNotTrip() {
+        let expected = CGRect(x: -674, y: 0, width: 674, height: 1_514)
+        let reportedRects = [
+            CGRect(x: -674, y: 0, width: 674, height: 1_514.0000000000002),
+            CGRect(x: -674, y: 0, width: 673.9999999999999, height: 1_514),
+        ]
+        for screenRect in reportedRects {
+            var check = CaptureSourceCheck()
+            XCTAssertFalse(check.frame(screenRect: screenRect, expected: expected, now: t0))
+            XCTAssertFalse(check.frame(screenRect: screenRect, expected: expected, now: t0 + 2))
+        }
+    }
+
+    func testOnePointEdgeDifferenceResetsMismatchTimer() {
+        var check = CaptureSourceCheck()
+        let withinOnePoint = iMac.insetBy(dx: -1, dy: -1)
+
+        XCTAssertFalse(check.frame(screenRect: pixel, expected: iMac, now: t0))
+        XCTAssertFalse(check.frame(screenRect: withinOnePoint, expected: iMac, now: t0 + 2))
+        XCTAssertFalse(check.frame(screenRect: pixel, expected: iMac, now: t0 + 3))
+        XCTAssertTrue(check.frame(screenRect: pixel, expected: iMac, now: t0 + 5))
+    }
+
+    func testEdgeDifferenceBeyondOnePointStillTrips() {
+        var check = CaptureSourceCheck()
+        // The near edge moves 0.75 points and the far edge moves 1.5 points.
+        let shifted = CGRect(x: iMac.minX + 0.75, y: iMac.minY, width: iMac.width + 0.75, height: iMac.height)
+
+        XCTAssertFalse(check.frame(screenRect: shifted, expected: iMac, now: t0))
+        XCTAssertTrue(check.frame(screenRect: shifted, expected: iMac, now: t0 + 2))
+    }
+
     /// #391: after sleep the iMac's stream kept delivering the Pixel's display.
     func testSustainedOtherDisplayTripsOnce() {
         var check = CaptureSourceCheck()
