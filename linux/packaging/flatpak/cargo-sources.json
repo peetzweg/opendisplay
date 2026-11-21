@@ -769,14 +769,14 @@
   {
     "type": "archive",
     "archive-type": "tar-gzip",
-    "url": "https://static.crates.io/crates/ffmpeg-next/ffmpeg-next-9.0.0.crate",
-    "sha256": "6380599799e175191eb7ffe82c97f36a2a90a36cbc54c738a903e5287d7f516a",
-    "dest": "cargo/vendor/ffmpeg-next-9.0.0"
+    "url": "https://static.crates.io/crates/ffmpeg-next/ffmpeg-next-9.1.0.crate",
+    "sha256": "041fc1d1e9e6f62e03f52d8a2b1cc138d799defbaf7a9d69ddde78c97fb06e97",
+    "dest": "cargo/vendor/ffmpeg-next-9.1.0"
   },
   {
     "type": "inline",
-    "contents": "{\"package\": \"6380599799e175191eb7ffe82c97f36a2a90a36cbc54c738a903e5287d7f516a\", \"files\": {}}",
-    "dest": "cargo/vendor/ffmpeg-next-9.0.0",
+    "contents": "{\"package\": \"041fc1d1e9e6f62e03f52d8a2b1cc138d799defbaf7a9d69ddde78c97fb06e97\", \"files\": {}}",
+    "dest": "cargo/vendor/ffmpeg-next-9.1.0",
     "dest-filename": ".cargo-checksum.json"
   },
   {
