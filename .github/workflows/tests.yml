@@ -112,13 +112,36 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Lint is what catches a platform API above minSdk 21 sneaking in
-      # without an SDK_INT guard. assembleRelease (unsigned) runs the release
-      # variant's lintVital and resource checks, which otherwise first run in
-      # the release workflow after the tag already exists. The bundle is the
-      # Google Play build, which needs minSdk 24.
-      - name: Unit tests, lint, debug and release builds
-        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug assembleRelease
+      # The native AirPlay engine needs SDK 36 and NDK 27; ubuntu-latest does
+      # not guarantee either. Pin them here so a PR finds out on the change
+      # that introduced the dependency, not during a release build.
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36 and NDK 27
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+
+      # The bootstrap downloads pinned FFmpeg, UxPlay, libplist and OpenSSL
+      # sources. Cache the tarballs so lint/test reruns do not hit the network
+      # again, while the key still changes when the bootstrap or patches change.
+      - uses: actions/cache@v4
+        with:
+          path: Android/app/src/main/cpp/third_party/.downloads
+          key: android-airplay-downloads-${{ hashFiles('Android/tools/bootstrap-airplay-third-party.py', 'Android/app/src/main/cpp/patches/UxPlay/*.patch') }}
+
+      # Lint catches a platform API above minSdk 21 without an SDK_INT guard.
+      # Assembling with the native engine enabled catches JNI/CMake failures
+      # and makes sure the third-party bootstrap still produces a buildable
+      # source tree. -PskipAirplayNative is deliberately not used here.
+      - name: Unit tests, lint and native debug build
+        run: ./gradlew --no-daemon prepareAirplayThirdParty testDebugUnitTest lintDebug assembleDebug
+
+      # assembleRelease runs the release variant's lintVital and resource
+      # checks, which otherwise first run in the release workflow after the
+      # tag already exists.
+      - name: Native release build
+        run: ./gradlew --no-daemon assembleRelease
 
       - name: Google Play bundle (minSdk 24)
         run: ./gradlew --no-daemon bundleRelease -PappMinSdk=24

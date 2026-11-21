@@ -65,6 +65,7 @@ class IdleView(context: Context, kind: String, onSettings: () -> Unit) : ScrollV
             setPadding(dp(20), dp(20), dp(20), dp(6))
         }
         hints.addView(hint(R.drawable.ic_laptop, context.getString(R.string.hint_open_mac)))
+        hints.addView(hint(R.drawable.airplay_audio_icon, context.getString(R.string.hint_airplay_audio, kind)))
         hints.addView(hint(R.drawable.ic_wifi, context.getString(R.string.hint_pick_wifi, kind)))
         hints.addView(hint(R.drawable.ic_play, context.getString(R.string.hint_keep_open)))
         val card = MaterialCardView(ContextThemeWrapper(context,

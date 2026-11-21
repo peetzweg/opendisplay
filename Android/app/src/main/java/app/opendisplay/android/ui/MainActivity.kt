@@ -1,5 +1,8 @@
 package app.opendisplay.android.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.color.DynamicColors
@@ -46,6 +49,7 @@ import app.opendisplay.android.protocol.WireProtocol
 import app.opendisplay.android.video.DecoderCaps
 import app.opendisplay.android.video.StreamStats
 import app.opendisplay.android.video.VideoDecoder
+import app.opendisplay.android.airplay.service.AirPlayReceiverService
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -55,6 +59,21 @@ import kotlin.math.roundToInt
  */
 class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.Callbacks, SettingsDialog.Host {
     private val main = Handler(Looper.getMainLooper())
+    private val requestPostNotifications = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && prefs.airplayAudioReceiver) {
+            AirPlayReceiverService.start(this)
+        }
+    }
+    // AirPlay mDNS must wait until Advertiser has claimed the single NSD slot.
+    private var airPlayStartPending = true
+    private val airPlayStartFallback = Runnable {
+        if (airPlayStartPending) {
+            airPlayStartPending = false
+            syncAirPlayAudioReceiver()
+        }
+    }
 
     private lateinit var root: FrameLayout
     private lateinit var videoFrame: VideoFrame
@@ -126,7 +145,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         setContentView(root)
         enterImmersive()
 
-        decoder = VideoDecoder(this).also { it.start() }
+        decoder = VideoDecoder(this, prefs.legacyVideoCompat).also { it.start() }
         server = ReceiverServer(this, ::buildHello)
         advertiser = Advertiser(this)
         val slop = 10 * resources.displayMetrics.density
@@ -240,10 +259,49 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     override fun onOverlayChanged(enabled: Boolean) = refreshIdle()
 
+    override fun onAirPlayReceiverChanged(enabled: Boolean) = syncAirPlayAudioReceiver(enabled)
+
+    override fun onLegacyVideoCompatChanged(enabled: Boolean) {
+        prefs.legacyVideoCompat = enabled
+        decoder.setCompatMode(enabled)
+        videoCaps = DecoderCaps.videoCaps(panel.pixelsWide, panel.pixelsHigh, enabled)
+        Log.i(TAG, "legacy video compatibility ${if (enabled) "enabled" else "disabled"}; caps $videoCaps")
+        main.removeCallbacks(resendHello)
+        if (connected) main.postDelayed(resendHello, 250)
+    }
+
+    /** AirPlay audio runs as a foreground service and is independent of the screen-cast session. */
+    private fun syncAirPlayAudioReceiver(enabled: Boolean = prefs.airplayAudioReceiver) {
+        if (!enabled) {
+            AirPlayReceiverService.stop(this)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPostNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        AirPlayReceiverService.start(this)
+    }
+
     override fun onStart() {
         super.onStart()
         server.start()
+        // Both this advertiser and the AirPlay service use NsdManager, which
+        // only accepts one registration at a time on some OEM builds. Start
+        // AirPlay only after _opensidecar._tcp has claimed its slot.
+        airPlayStartPending = true
+        advertiser.onRegistered = {
+            if (airPlayStartPending) {
+                airPlayStartPending = false
+                syncAirPlayAudioReceiver()
+            }
+        }
         advertiser.register(DeviceIdentity.serviceName(this), installId)
+        main.removeCallbacks(airPlayStartFallback)
+        main.postDelayed(airPlayStartFallback, AIRPLAY_START_FALLBACK_MS)
         refreshIdle()
         // Launched by the attach intent, or attached while we were away.
         takeAccessory()
@@ -261,6 +319,8 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     override fun onStop() {
         super.onStop()
         main.removeCallbacks(resendHello)
+        main.removeCallbacks(airPlayStartFallback)
+        advertiser.onRegistered = null
         advertiser.unregister()
         val power = getSystemService(POWER_SERVICE) as android.os.PowerManager
         val keyguard = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
@@ -269,6 +329,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     }
 
     override fun onDestroy() {
+        if (isFinishing) AirPlayReceiverService.stop(this)
         super.onDestroy()
         unregisterReceiver(accessoryDetached)
         unregisterReceiver(accessoryPermission)
@@ -427,7 +488,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         displayMaxFrameRate = maxRefreshRate()
         if (next == panel) return
         panel = next
-        videoCaps = DecoderCaps.videoCaps(w, h)
+        videoCaps = DecoderCaps.videoCaps(w, h, prefs.legacyVideoCompat)
         Log.i(TAG, "panel ${w}x$h @${next.scale}, caps $videoCaps")
         // 6.1: re-send hello on the live connection whenever the panel
         // changes. Settle first: locking rotates to the lock screen's
@@ -717,6 +778,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
 
     companion object {
         private const val TAG = "OpenDisplay"
+        private const val AIRPLAY_START_FALLBACK_MS = 5_000L
         private const val ACTION_USB_PERMISSION = "app.opendisplay.android.USB_PERMISSION"
 
         /**

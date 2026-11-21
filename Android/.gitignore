@@ -1,6 +1,23 @@
 .gradle/
+.kotlin/
 build/
+release/
 local.properties
 *.iml
 .idea/
 captures/
+.signing/
+.workbuddy/
+**/.DS_Store
+**/.cxx/
+
+# Pinned third-party native sources are downloaded by
+# tools/bootstrap-airplay-third-party.py. Keep only our patches and notices in
+# the repository.
+/app/src/main/cpp/third_party/UxPlay/
+/app/src/main/cpp/third_party/ffmpeg/
+/app/src/main/cpp/third_party/libplist/
+/app/src/main/cpp/third_party/openssl-cmake/
+/app/src/main/cpp/third_party/.airplay-bootstrap
+/app/src/main/cpp/third_party/.downloads/
+/app/src/main/cpp/third_party/.staging/
