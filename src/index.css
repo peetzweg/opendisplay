@@ -162,8 +162,9 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+.google-play-button { transition: transform 140ms ease; }
 @media (prefers-reduced-motion: reduce) {
-  .download-option .btn, .app-store-button { transition: none; }
+  .download-option .btn, .app-store-button, .google-play-button { transition: none; }
 }
 .btn.primary { background: var(--fg); color: var(--bg); }
 .btn.primary:hover { background: #000; }
@@ -193,6 +194,8 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
   height: calc(var(--download-control-height) * 250 / 166);
   margin: calc(var(--download-control-height) * -42 / 166) auto; line-height: 0; }
 .google-play-button img { display: block; width: auto; height: 100%; }
+.google-play-button:hover { transform: translateY(-1px); }
+.google-play-button:active { transform: translateY(1px) scale(0.98); transition-duration: 70ms; }
 .google-play-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .beta-tag { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--muted); border: 1px solid var(--line, currentColor);
