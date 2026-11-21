@@ -1,16 +1,20 @@
 ---
 title: Third-party Android receivers for OpenDisplay
 nav: Android receivers
-description: Community Android receivers for OpenDisplay, including one built for GrapheneOS and de-Googled Pixel devices, as alternatives to the official Android beta on Google Play.
+description: Community Android receivers for OpenDisplay, including one built for GrapheneOS and de-Googled Pixel devices, as alternatives to the official Android receiver released on Google Play.
 order: 3
-updated: 2026-11-05
+updated: 2026-11-21
 ---
 
 ## Official receiver first
 
-OpenDisplay has its own Android receiver, in public beta on Google Play
-(Android 7.0+, over Wi-Fi or a USB cable); the link is on the
-[home page](/). Use it if your device has Google Play.
+OpenDisplay has its own Android receiver, released on
+[Google Play](https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay)
+(Android 7.0+, over Wi-Fi or a USB cable). Use it if your device has Google Play.
+Beta enrollment is optional: for early builds, join the
+[OpenDisplay Google Group](https://groups.google.com/g/opendisplay) with your Google Play account,
+then [join the Android beta](https://play.google.com/apps/testing/com.peetzweg.opendisplay)
+and update through Google Play, similar to TestFlight on iOS.
 
 ### Over a USB cable
 
@@ -36,7 +40,7 @@ device up within a few seconds.
 
 The community receivers below are for devices without Google Play, such as
 **GrapheneOS** phones and tablets, or for connection setups the official
-beta does not cover yet, such as networks that block connections between
+receiver does not cover yet, such as networks that block connections between
 devices.
 
 > These are community projects, not official builds. See
@@ -77,7 +81,7 @@ is an Android receiver that works with the **unmodified** OpenDisplay Mac app.
 
 ## Compared
 
-| | Official beta | android-opendisplay | opendisplay-android |
+| | Official receiver | android-opendisplay | opendisplay-android |
 |---|---|---|---|
 | Android | 7.0+ | 8.0+ (GrapheneOS focus) | 8.0+ |
 | Needs Google Play | Yes | No | No |

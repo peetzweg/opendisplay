@@ -6,8 +6,8 @@ import SupportNudge from "./components/SupportNudge"
 import TextRotate from "./components/TextRotate"
 
 const APP_STORE_URL = "https://apps.apple.com/us/app/opendisplay/id6780264891"
-// Android is a public beta on Google Play (Android 7.0+). The store page only
-// opens for testers, so the site links the group and the tester opt-in page.
+// The released Android receiver is on Google Play; beta enrollment stays optional.
+const ANDROID_STORE_URL = "https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay"
 const ANDROID_BETA_GROUP_URL = "https://groups.google.com/g/opendisplay"
 const ANDROID_BETA_TESTER_URL = "https://play.google.com/apps/testing/com.peetzweg.opendisplay"
 // The Linux sender (od-sender) and receiver (od-receiver) are betas, shipped
@@ -203,9 +203,9 @@ export default function App() {
             Use your iPhone and iPad as a second — and even a third — screen for your Mac.
             A true extended display, not a mirror: USB or WiFi, Retina-sharp, with touch and
             scroll. No subscription. No dongle. No account. Android phones and tablets are
-            in public beta, over WiFi, and so is a sender for Linux desktops.
+            available on Google Play, over WiFi. A sender for Linux desktops is in beta.
           </p>
-          <p className="meta">macOS 14+ &nbsp;·&nbsp; iPadOS 15+ &nbsp;·&nbsp; iOS 15+ &nbsp;·&nbsp; Android 7.0+ (beta) &nbsp;·&nbsp; Receiver Mac 12+ &nbsp;·&nbsp; Linux sender (beta) &nbsp;·&nbsp; Linux receiver (beta) &nbsp;·&nbsp; GPL-3.0</p>
+          <p className="meta">macOS 14+ &nbsp;·&nbsp; iPadOS 15+ &nbsp;·&nbsp; iOS 15+ &nbsp;·&nbsp; Android 7.0+ &nbsp;·&nbsp; Receiver Mac 12+ &nbsp;·&nbsp; Linux sender (beta) &nbsp;·&nbsp; Linux receiver (beta) &nbsp;·&nbsp; GPL-3.0</p>
         </div>
       </section>
 
@@ -279,28 +279,23 @@ export default function App() {
               <div className="download-option">
                 <div className="app-store-qr">
                   <img
-                    src="android-beta-qr.svg"
-                    alt="QR code for joining the OpenDisplay Android beta Google Group"
+                    src="android-play-qr.svg"
+                    alt="QR code for OpenDisplay on Google Play"
                     width="148"
                     height="148"
                   />
                 </div>
-                <div className="platform">Android <span className="beta-tag">Beta</span></div>
-                <p className="dl-sub">Early access for Android phones and tablets.</p>
-                <a className="btn primary" href={ANDROID_BETA_GROUP_URL}>
-                  Join the beta
+                <div className="platform">Android</div>
+                <p className="dl-sub">The receiver app for your Android phone and tablet.</p>
+                <a className="btn primary" href={ANDROID_STORE_URL}>
+                  Get it on Google Play
                 </a>
                 <div className="receiver-copy">
-                  <ol className="beta-steps">
-                    <li>
-                      Join the <a href={ANDROID_BETA_GROUP_URL}>OpenDisplay Google Group</a> with the
-                      Google account you use on the phone.
-                    </li>
-                    <li>
-                      Open the <a href={ANDROID_BETA_TESTER_URL}>tester link</a> on the phone or a
-                      computer, accept, then install OpenDisplay from Google Play.
-                    </li>
-                  </ol>
+                  <p className="note">
+                    Want early builds? <span className="no-break"><a id="android-beta" href={ANDROID_BETA_TESTER_URL}>Join the Android beta</a></span>.
+                    {" "}Join the <a href={ANDROID_BETA_GROUP_URL}>OpenDisplay Google Group</a> with
+                    your Google Play account first, then accept the tester invitation.
+                  </p>
                   <p className="note">
                     Android&nbsp;7.0 or later, over WiFi. Android&nbsp;5 and 6 support via a direct
                     download is coming.
@@ -404,7 +399,7 @@ export default function App() {
             <div className="fcell"><span className="n">008</span><h3>Portrait mode</h3><p>Rotate the phone and the virtual display rebuilds as a vertical monitor — perfect for chat, logs, or docs.</p></div>
             <div className="fcell"><span className="n">009</span><h3>Private by design</h3><p>One direct TCP connection between your devices. No servers, no accounts, no telemetry. Read the code.</p></div>
             <div className="fcell"><span className="n">010</span><h3>A spare Mac as a display</h3><p>Install the small <em>OpenDisplay Receiver</em> app (macOS 12+) on an old Mac and another Mac extends onto it — a real Retina extended display, over WiFi or a Thunderbolt or Ethernet cable. An old MacBook becomes a second monitor.</p></div>
-            <div className="fcell"><span className="n">011</span><h3>Android, in beta</h3><p>An Android phone or tablet works as a display too, over WiFi, with touch and scrolling. The app is in public beta on Google Play for Android 7.0 and later; join through the Download section above.</p></div>
+            <div className="fcell"><span className="n">011</span><h3>Android phones &amp; tablets</h3><p>An Android phone or tablet works as a display too, over WiFi, with touch and scrolling. The app is released on Google Play for Android 7.0 and later, with an optional beta for early builds. Get it through the Download section above.</p></div>
           </div>
         </div>
       </section>
@@ -443,7 +438,7 @@ export default function App() {
               <tbody>
                 <tr><td>Price</td><td className="mark-yes os">Free &amp; open source</td><td>Free</td><td className="mark-no">Subscription</td><td className="mark-no">$$$ + dongle</td></tr>
                 <tr><td>iPhone as display</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-no">✕</td></tr>
-                <tr><td>Android as display</td><td className="mark-yes os">✓ Beta</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-no">✕</td></tr>
+                <tr><td>Android as display</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-no">✕</td></tr>
                 <tr><td>Mac as display</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
                 <tr><td>Different Apple IDs</td><td className="mark-yes os">✓</td><td className="mark-no">✕</td><td className="mark-yes">✓</td><td className="mark-yes">✓</td></tr>
                 <tr><td>No account / sign-up</td><td className="mark-yes os">✓</td><td>Apple&nbsp;ID</td><td className="mark-no">✕</td><td>?</td></tr>
@@ -537,13 +532,12 @@ export default function App() {
             </details>
             <details>
               <summary>How do I get the Android app?</summary>
-              <p>It's in public beta on Google Play, for Android 7.0 and later. Two steps:</p>
-              <ol>
-                <li>Join the <a href={ANDROID_BETA_GROUP_URL}>OpenDisplay Google Group</a> with the
-                Google account you use on the phone.</li>
-                <li>Open the <a href={ANDROID_BETA_TESTER_URL}>tester link</a> on the phone or a
-                computer, accept, then install OpenDisplay from Google Play.</li>
-              </ol>
+              <p>Install the released app from <a href={ANDROID_STORE_URL}>Google Play</a>,
+              for Android 7.0 and later. No beta enrollment is needed.</p>
+              <p>Want early builds, like TestFlight on iOS? Join the{" "}
+              <a href={ANDROID_BETA_GROUP_URL}>OpenDisplay Google Group</a> with your Google Play
+              account, then <a href={ANDROID_BETA_TESTER_URL}>join the Android beta</a> and update
+              through Google Play.</p>
               <p>Updates then arrive through Google Play like for any app. It connects over WiFi: open
               the app, and pick the device in the Mac app (or let <code>od-sender</code> find it on
               Linux). A USB cable isn't supported yet. Touch,
