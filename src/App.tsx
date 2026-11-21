@@ -287,13 +287,12 @@ export default function App() {
                 </div>
                 <div className="platform">Android</div>
                 <p className="dl-sub">The receiver app for your Android phone and tablet.</p>
-                <a className="btn primary" href={ANDROID_STORE_URL}>
-                  Get it on Google Play
+                <a className="google-play-button" href={ANDROID_STORE_URL} aria-label="Get it on Google Play">
+                  <img src="google-play-badge.png" alt="" width="646" height="250" />
                 </a>
                 <div className="receiver-copy">
                   <p className="note">
-                    Want early builds? <span className="no-break"><a id="android-beta" href={ANDROID_BETA_TESTER_URL}>Join the Android beta</a></span>.
-                    {" "}Join the <a href={ANDROID_BETA_GROUP_URL}>OpenDisplay Google Group</a> with
+                    Join the <a href={ANDROID_BETA_GROUP_URL}>OpenDisplay Google Group</a> with
                     your Google Play account first, then accept the tester invitation.
                   </p>
                   <p className="note">

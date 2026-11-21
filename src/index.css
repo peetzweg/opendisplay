@@ -187,6 +187,13 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.1; letter-spacing: -0.0
 .app-store-button { display: block; width: 132px; height: var(--download-control-height);
   margin-inline: auto; border-radius: var(--download-control-radius); overflow: hidden; line-height: 0; }
 .app-store-button img { display: block; width: auto; height: 100%; }
+/* Google's supplied PNG includes clear space. Preserve it while matching the
+   visible badge to the App Store badge's height. */
+.google-play-button { display: block; width: fit-content;
+  height: calc(var(--download-control-height) * 250 / 166);
+  margin: calc(var(--download-control-height) * -42 / 166) auto; line-height: 0; }
+.google-play-button img { display: block; width: auto; height: 100%; }
+.google-play-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .beta-tag { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--muted); border: 1px solid var(--line, currentColor);
   border-radius: 999px; padding: 2px 8px; vertical-align: middle; }
