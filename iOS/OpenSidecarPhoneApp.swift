@@ -40,6 +40,7 @@ struct ReceiverScreen: View {
     @StateObject private var model = ReceiverModel()
     @StateObject private var versionGate = VersionGate()
     @State private var showSettings = false
+    @State private var showSend = false
     @State private var showOnboarding = false
     @State private var nagDismissed = false
     @Environment(\.scenePhase) private var scenePhase
@@ -90,7 +91,8 @@ struct ReceiverScreen: View {
                         .allowsHitTesting(false)   // never block touch input
                     }
                 } else {
-                    IdleView(receiver: model.receiver, showSettings: $showSettings)
+                    IdleView(receiver: model.receiver, showSettings: $showSettings,
+                             showSend: $showSend)
                 }
             }
             // The window, not this view: a sheet, the keyboard or the
@@ -105,6 +107,9 @@ struct ReceiverScreen: View {
         .systemOverlaysHidden(isStreaming)
         .sheet(isPresented: $showSettings) {
             SettingsView(receiver: model.receiver)
+        }
+        .sheet(isPresented: $showSend) {
+            SendScreen(receiver: model.receiver)
         }
         // Below the force floor → blocking gate. Setter is a no-op: the user
         // cannot dismiss it, only update.
@@ -182,6 +187,7 @@ struct ReceiverScreen: View {
 struct IdleView: View {
     @ObservedObject var receiver: StreamReceiver
     @Binding var showSettings: Bool
+    @Binding var showSend: Bool
 
     var body: some View {
         VStack(spacing: 28) {
@@ -221,12 +227,11 @@ struct IdleView: View {
 
             Spacer()
 
-            Button {
-                showSettings = true
-            } label: {
-                Label("Settings & Help", systemImage: "gearshape")
+            // Side by side where they fit (iPad), stacked on narrow phones.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { idleButtons }
+                VStack(spacing: 12) { idleButtons }
             }
-            .buttonStyle(.bordered)
 
             Text("Tip: shake the \(deviceKind) to open settings anytime")
                 .font(.footnote)
@@ -236,6 +241,23 @@ struct IdleView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
+    }
+
+    @ViewBuilder
+    private var idleButtons: some View {
+        Button {
+            showSend = true
+        } label: {
+            Label("Send this screen", systemImage: "rectangle.on.rectangle")
+        }
+        .buttonStyle(.bordered)
+
+        Button {
+            showSettings = true
+        } label: {
+            Label("Settings & Help", systemImage: "gearshape")
+        }
+        .buttonStyle(.bordered)
     }
 }
 
