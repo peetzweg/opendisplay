@@ -82,8 +82,8 @@ three tries and says so.
 
 ## A virtual display is left over
 
-After a crash or `kill -9`, the virtual display stays behind on Hyprland and
-Sway. Remove it with:
+After a crash or `kill -9`, the virtual display stays behind on Hyprland,
+Sway and X11. Remove it with:
 
 ```sh
 od-sender clean

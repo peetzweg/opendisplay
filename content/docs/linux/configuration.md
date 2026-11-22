@@ -45,7 +45,7 @@ Only on the command line:
 | Option | What it does |
 |---|---|
 | `--wait` | Keep looking until the receiver appears (the login unit uses it). Off by default |
-| `--backend` | `hyprland`, `wlroots` (Sway), `kde`, `gnome`, or `adopt` with `--output`. Detected by default |
+| `--backend` | `hyprland`, `wlroots` (Sway), `kde`, `gnome`, `x11`, or `adopt` with `--output`. Detected by default |
 | `--output <name>` | Stream an existing output you created yourself instead of creating one (adopt mode) |
 | `--config <path>` | Use another config file instead of `~/.config/opendisplay/sender.toml` |
 | `--instance <id>` | Target one of several running Hyprland instances by index or signature, like `hyprctl -i` |

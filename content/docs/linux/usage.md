@@ -31,7 +31,8 @@ answer. Scripts and agents get no prompt: `connect` then exits with code 4
 `od-sender list --json` returns the receivers as JSON (`name`, `addr`, `id`,
 `pv`).
 
-`od-sender` detects your desktop (Hyprland, Sway, KDE Plasma or GNOME) and
+`od-sender` detects your desktop (Hyprland, Sway, KDE Plasma, GNOME or an X11
+session) and
 creates the virtual display there, by default to the right of your current
 monitors. Once it is up, `run` prints one line such as:
 
@@ -143,8 +144,8 @@ Stop the sender with Ctrl+C, `SIGTERM` (what `systemctl --user stop` sends) or
 `SIGHUP` (closing its terminal): each removes the virtual display before
 exiting.
 
-After a crash or `kill -9`, the virtual display stays behind on Hyprland and
-Sway. `od-sender clean` removes it, and the next `run` for the same receiver
+After a crash or `kill -9`, the virtual display stays behind on Hyprland,
+Sway and X11. `od-sender clean` removes it, and the next `run` for the same receiver
 reuses it. KDE Plasma and GNOME remove it themselves.
 
 ```sh
