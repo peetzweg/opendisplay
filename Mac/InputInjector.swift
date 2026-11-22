@@ -107,6 +107,7 @@ final class InputInjector {
             return
         }
 
+        _ = CGWarpMouseCursorPosition(point)
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                   mouseCursorPosition: point, mouseButton: .left) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
