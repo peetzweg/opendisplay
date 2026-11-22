@@ -20,12 +20,15 @@ private enum SystemClickMetrics {
 }
 
 /// Turns normalized touch coordinates from the phone into mouse events on a
-/// target display. Touch semantics: finger down = left button down, finger
-/// move = drag, finger up = button up — i.e. the phone acts as a touchscreen.
+/// target display. Touch semantics: finger down = button down, finger move =
+/// drag, finger up = button up — i.e. the phone acts as a touchscreen. The
+/// button is left unless the receiver asks for right (long press, two-finger tap).
 final class InputInjector {
 
     private let displayID: CGDirectDisplayID
-    private var isDown = false
+    /// The button a finger is holding down, nil while no finger is down.
+    private var downButton: CGMouseButton?
+    private var isDown: Bool { downButton != nil }
     private var penDown = false
     // A real event source (vs nil) plus non-zero clickState on down/up: menu
     // tracking treats sourceless/zero-click synthetic clicks as malformed — menus
@@ -42,24 +45,25 @@ final class InputInjector {
     private let capabilityMask: Int64 = 0x05C7       // pressure + tilt + rotation + buttons
     private var inRange = false
 
-    // Pencil-only synthetic click counting — tablet events don't get click
-    // state from the Window Server, so we mirror macOS double-click prefs here.
-    private struct PenClickSession {
-        let downLocation: CGPoint
-        let clickState: Int
-    }
+    // Synthetic events don't get click state from the Window Server, so we
+    // mirror macOS double-click prefs here. Pencil uses the system distance; a
+    // fingertip lands less precisely, so finger taps get a touch-sized radius.
+    private var penClicks = ClickCounter(interval: SystemClickMetrics.interval,
+                                         distance: SystemClickMetrics.distance)
+    private var fingerClicks = ClickCounter(interval: SystemClickMetrics.interval,
+                                            distance: max(SystemClickMetrics.distance, 24))
 
-    private struct PenCompletedClick {
-        let upTime: CFAbsoluteTime
-        let downLocation: CGPoint
-        let clickState: Int
-    }
+    /// Nil when the sender can't watch the pointer (no cursor echo), since
+    /// nothing would then give the pointer back.
+    private let pointerHandoff: PointerHandoff?
 
-    private var penClickSession: PenClickSession?
-    private var penLastClick: PenCompletedClick?
-
-    init(displayID: CGDirectDisplayID) {
+    init(displayID: CGDirectDisplayID, pointerHandoff: PointerHandoff?) {
         self.displayID = displayID
+        self.pointerHandoff = pointerHandoff
+    }
+
+    deinit {
+        scrollTick?.cancel()
     }
 
     static func ensureAccessibilityPermission() -> Bool {
@@ -71,58 +75,220 @@ final class InputInjector {
         return trusted
     }
 
-    /// x/y are normalized [0,1] in video space (origin top-left).
-    func handleTouch(phase: String, x: Double, y: Double) {
+    /// x/y are normalized [0,1] in video space (origin top-left). `button` is
+    /// the wire's optional `touch.button`; only `"right"` changes anything, and
+    /// only on `began` (the rest of the press follows the button it started with).
+    func handleTouch(phase: String, x: Double, y: Double, button: String? = nil) {
         let bounds = CGDisplayBounds(displayID)   // global CG coords, y-down
         let point = CGPoint(
             x: bounds.origin.x + x * bounds.width,
             y: bounds.origin.y + y * bounds.height
         )
+        let now = ProcessInfo.processInfo.systemUptime
 
         let type: CGEventType
-        // Click count on the release. A cancel means "a second finger joined,
-        // this was a scroll, not a tap" — but there is no CGEvent for undoing a
-        // press, and a plain up over the press point is indistinguishable from a
-        // click, so every two-finger scroll opened whatever was under finger one.
-        // Releasing with clickCount 0 keeps the button state honest while telling
-        // AppKit and WebKit not to synthesize a click. Only the cancel path gets
-        // 0: a zero-click *down* is what breaks menu tracking (see above).
+        let mouseButton: CGMouseButton
+        // A cancel means "a second finger joined, this was a scroll, not a tap"
+        // — but there is no CGEvent for undoing a press, and a plain up over the
+        // press point is indistinguishable from a click, so every two-finger
+        // scroll opened whatever was under finger one. Releasing with clickCount
+        // 0 keeps the button state honest while telling AppKit and WebKit not to
+        // synthesize a click. Only the cancel path gets 0: a zero-click *down* is
+        // what breaks menu tracking (see above).
         var clickState = 1
         switch phase {
         case "began":
-            type = .leftMouseDown
-            isDown = true
+            if let held = downButton {
+                // A down without its up: release it first so the button state
+                // never sticks.
+                postMouse(held == .right ? .rightMouseUp : .leftMouseUp, at: point, button: held, clickState: 0)
+            }
+            mouseButton = button == "right" ? .right : .left
+            if mouseButton == .right {
+                type = .rightMouseDown
+            } else {
+                type = .leftMouseDown
+                clickState = fingerClicks.down(at: point, now: now)
+            }
+            downButton = mouseButton
         case "moved":
-            type = isDown ? .leftMouseDragged : .mouseMoved
-        case "ended":
-            guard isDown else { return }   // spurious up without a down
-            type = .leftMouseUp
-            isDown = false
-        case "cancelled":
-            guard isDown else { return }
-            type = .leftMouseUp
-            isDown = false
-            clickState = 0
+            mouseButton = downButton ?? .left
+            switch downButton {
+            case .left?: type = .leftMouseDragged
+            case .right?: type = .rightMouseDragged
+            default: type = .mouseMoved
+            }
+        case "ended", "cancelled":
+            guard let held = downButton else { return }   // spurious up without a down
+            mouseButton = held
+            type = held == .right ? .rightMouseUp : .leftMouseUp
+            if phase == "cancelled" {
+                clickState = 0
+                if held == .left { fingerClicks.cancel() }
+            } else if held == .left {
+                clickState = fingerClicks.up(at: point, now: now)
+            }
+            downButton = nil
         default:
             return
         }
 
+        pointerHandoff?.touchMovesPointer(to: point, from: currentCursor(), holding: isDown)
+        postMouse(type, at: point, button: mouseButton, clickState: clickState)
+    }
+
+    private func postMouse(_ type: CGEventType, at point: CGPoint, button: CGMouseButton, clickState: Int) {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
-                                  mouseCursorPosition: point, mouseButton: .left) else { return }
+                                  mouseCursorPosition: point, mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
         event.post(tap: .cghidEventTap)
     }
 
     /// dx/dy in display pixels, natural-scrolling sign from the phone.
     /// Scroll events take points, so convert via the display's pixel scale.
-    func handleScroll(dx: Double, dy: Double) {
+    /// `phase` is the wire's optional `scroll.phase`; with it the events carry
+    /// trackpad scroll and momentum phases (see ScrollPhaser).
+    func handleScroll(dx: Double, dy: Double, phase: String? = nil) {
         let bounds = CGDisplayBounds(displayID)
         let scale = bounds.width > 0 ? Double(CGDisplayPixelsWide(displayID)) / bounds.width : 2
+        guard let phase else {
+            guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
+                                      wheelCount: 2,
+                                      wheel1: Int32((dy / scale).rounded()),
+                                      wheel2: Int32((dx / scale).rounded()),
+                                      wheel3: 0) else { return }
+            event.post(tap: .cghidEventTap)
+            return
+        }
+        gestureQueue.async { [self] in
+            for e in scrollSmoother.receive(phase: phase, dx: dx / scale, dy: dy / scale) { postScroll(e) }
+            if !scrollSmoother.isIdle { startScrollTick() }
+        }
+    }
+
+    /// Close a scroll, momentum or magnify phase the receiver left open, e.g.
+    /// because it disconnected mid-gesture.
+    func endScrollGestures() {
+        gestureQueue.async { [self] in
+            for e in scrollSmoother.finish() { postScroll(e) }
+            stopScrollTick()
+            if magnifying { applyMagnify(phase: "ended", magnification: 0) }
+        }
+    }
+
+    // Phased scrolling and magnify run on their own queue: the scroll is paced
+    // there by ScrollSmoother at 120 Hz (the tick runs only while a scroll is
+    // in flight), and closing either on disconnect must not race the stream.
+    private let gestureQueue = DispatchQueue(label: "input.gesture", qos: .userInteractive)
+    private var scrollSmoother = ScrollSmoother(timeConstant: InputInjector.scrollSmoothing)
+    private var scrollTick: DispatchSourceTimer?
+    private var lastScrollTick: TimeInterval = 0
+
+    /// `defaults write … scrollSmoothingMs -int N` (0 = post deltas as they arrive).
+    private static var scrollSmoothing: TimeInterval {
+        let ms = UserDefaults.standard.object(forKey: "scrollSmoothingMs") as? Double ?? 25
+        return max(ms, 0) / 1000
+    }
+
+    private func startScrollTick() {
+        guard scrollTick == nil else { return }
+        lastScrollTick = ProcessInfo.processInfo.systemUptime
+        let timer = DispatchSource.makeTimerSource(queue: gestureQueue)
+        timer.schedule(deadline: .now() + .milliseconds(8), repeating: .microseconds(8_333), leeway: .microseconds(500))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            for e in self.scrollSmoother.tick(dt: now - self.lastScrollTick) { self.postScroll(e) }
+            self.lastScrollTick = now
+            if self.scrollSmoother.isIdle { self.stopScrollTick() }
+        }
+        timer.resume()
+        scrollTick = timer
+    }
+
+    private func stopScrollTick() {
+        scrollTick?.cancel()
+        scrollTick = nil
+    }
+
+    // MARK: System actions
+
+    /// The wire's `gesture.action` (see SystemAction). Unknown names are
+    /// logged and ignored, so newer receivers never break older senders.
+    func handleSystemAction(_ name: String) {
+        guard let action = SystemAction(rawValue: name) else {
+            Log.info("system action: unknown \(name)")
+            return
+        }
+        if action.needsPointerOnDisplay {
+            // Spaces switch on the display under the pointer: bring it to this
+            // device's display (borrowed, like a touch) unless it is already there.
+            let bounds = CGDisplayBounds(displayID)
+            let current = currentCursor()
+            if !bounds.contains(current) {
+                let center = CGPoint(x: bounds.midX, y: bounds.midY)
+                pointerHandoff?.touchMovesPointer(to: center, from: current, holding: false)
+                postMouse(.mouseMoved, at: center, button: .left, clickState: 0)
+            }
+        }
+        action.perform()
+    }
+
+    // MARK: Magnify
+    //
+    // A pinch becomes the trackpad's magnify gesture. There is no public API
+    // to create one: these are NSEventTypeGesture (29) events with the
+    // undocumented fields Mac Mouse Fix and Hammerspoon post — 110 the gesture
+    // kind (8 = kIOHIDEventTypeZoom), 132 its IOHIDEventPhaseBits, 113 the
+    // magnification. The gesture lands on the window under the pointer, which
+    // the receiver first moves to the pinch.
+
+    private static let gestureEventType: Int64 = 29
+    private static let fieldEventType = CGEventField(rawValue: 55)!
+    private static let fieldGestureKind = CGEventField(rawValue: 110)!
+    private static let fieldGestureMagnification = CGEventField(rawValue: 113)!
+    private static let fieldGesturePhase = CGEventField(rawValue: 132)!
+    private static let gestureKindZoom: Int64 = 8
+    private var magnifying = false
+
+    /// `magnification` is the relative change since the previous message
+    /// (NSEvent.magnification semantics); `phase` is began, changed, ended or
+    /// cancelled.
+    func handleMagnify(phase: String, magnification: Double) {
+        gestureQueue.async { [self] in applyMagnify(phase: phase, magnification: magnification) }
+    }
+
+    private func applyMagnify(phase: String, magnification: Double) {
+        let bits: Int64
+        switch phase {
+        case "began":
+            if magnifying { applyMagnify(phase: "ended", magnification: 0) }
+            bits = 1
+            magnifying = true
+        case "changed":
+            guard magnifying else { return applyMagnify(phase: "began", magnification: magnification) }
+            bits = 2
+        case "ended", "cancelled":
+            guard magnifying else { return }
+            bits = phase == "ended" ? 4 : 8
+            magnifying = false
+        default:
+            return
+        }
+        guard let event = CGEvent(source: source) else { return }
+        event.setIntegerValueField(Self.fieldEventType, value: Self.gestureEventType)
+        event.setIntegerValueField(Self.fieldGestureKind, value: Self.gestureKindZoom)
+        event.setIntegerValueField(Self.fieldGesturePhase, value: bits)
+        event.setDoubleValueField(Self.fieldGestureMagnification, value: magnification)
+        event.post(tap: .cghidEventTap)
+    }
+
+    private func postScroll(_ e: ScrollPhaser.Event) {
         guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
-                                  wheelCount: 2,
-                                  wheel1: Int32((dy / scale).rounded()),
-                                  wheel2: Int32((dx / scale).rounded()),
-                                  wheel3: 0) else { return }
+                                  wheelCount: 2, wheel1: e.dy, wheel2: e.dx, wheel3: 0) else { return }
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(e.scrollPhase))
+        event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(e.momentumPhase))
         event.post(tap: .cghidEventTap)
     }
 
@@ -205,6 +371,7 @@ final class InputInjector {
         let p: CGPoint
         if let nx = x, let ny = y { p = screenPoint(nx: nx, ny: ny) }
         else { p = currentCursor() }
+        pointerHandoff?.deviceMovesPointer(to: p, holding: phase == .down || phase == .drag)
 
         let type: CGEventType
         switch phase {
@@ -225,54 +392,17 @@ final class InputInjector {
         ev.setDoubleValueField(.tabletEventTiltX, value: tiltX)
         ev.setDoubleValueField(.tabletEventTiltY, value: tiltY)
         ev.setDoubleValueField(.tabletEventRotation, value: rotation)
+        let now = ProcessInfo.processInfo.systemUptime
         switch phase {
         case .down:
-            ev.setIntegerValueField(.mouseEventClickState, value: Int64(beginPenClickSession(at: p)))
+            ev.setIntegerValueField(.mouseEventClickState, value: Int64(penClicks.down(at: p, now: now)))
         case .up:
-            ev.setIntegerValueField(.mouseEventClickState, value: Int64(finishPenClickSession(at: p)))
+            ev.setIntegerValueField(.mouseEventClickState, value: Int64(penClicks.up(at: p, now: now)))
         case .drag, .hover:
             break
         }
         ev.flags = .maskNonCoalesced
         ev.post(tap: .cghidEventTap)
-    }
-
-    private func penClickStateForMouseDown(at point: CGPoint) -> Int {
-        let now = CFAbsoluteTimeGetCurrent()
-        guard let last = penLastClick,
-              now - last.upTime <= SystemClickMetrics.interval else {
-            return 1
-        }
-        let dx = point.x - last.downLocation.x
-        let dy = point.y - last.downLocation.y
-        guard hypot(dx, dy) <= SystemClickMetrics.distance else { return 1 }
-        return last.clickState + 1
-    }
-
-    private func beginPenClickSession(at point: CGPoint) -> Int {
-        let state = penClickStateForMouseDown(at: point)
-        penClickSession = PenClickSession(downLocation: point, clickState: state)
-        return state
-    }
-
-    /// Returns click state for the matching pen mouse-up. Extends the multi-click
-    /// chain only when down→up displacement is within the system threshold.
-    private func finishPenClickSession(at upLocation: CGPoint) -> Int {
-        guard let session = penClickSession else { return 1 }
-        penClickSession = nil
-
-        let dx = upLocation.x - session.downLocation.x
-        let dy = upLocation.y - session.downLocation.y
-        if hypot(dx, dy) <= SystemClickMetrics.distance {
-            penLastClick = PenCompletedClick(
-                upTime: CFAbsoluteTimeGetCurrent(),
-                downLocation: session.downLocation,
-                clickState: session.clickState
-            )
-        } else {
-            penLastClick = nil
-        }
-        return session.clickState
     }
 
     /// UIKit altitude is radians from the surface (pi/2 = upright); CGEvent tilt

@@ -158,6 +158,11 @@ targets:
       - Mac/PhoneInfo.swift
       - Mac/DesktopPolicy.swift
       - Mac/CaptureSourceCheck.swift
+      - Mac/PointerHandoff.swift
+      - Mac/ClickCounter.swift
+      - Mac/ScrollPhaser.swift
+      - Mac/ScrollSmoother.swift
+      - Mac/SystemActions.swift
       - Mac/AndroidUSBFunction.swift
       - Mac/USBAccessory.swift
       - Mac/Log.swift

@@ -33,6 +33,7 @@ class SettingsDialog : DialogFragment() {
         val uiKind: String
         fun onNameChanged(name: String?)
         fun onOverlayChanged(enabled: Boolean)
+        fun onActionsButtonChanged(enabled: Boolean)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,6 +119,20 @@ class SettingsDialog : DialogFragment() {
                     }
                 })
                 addPreference(footer(getString(R.string.name_footer)))
+            }
+
+            screen.category(R.string.section_touch) {
+                addPreference(SwitchPreferenceCompat(ctx).apply {
+                    key = AppPrefs.KEY_ACTIONS_BUTTON
+                    title = getString(R.string.mac_actions_button)
+                    summary = getString(R.string.mac_actions_footer)
+                    setDefaultValue(true)
+                    isIconSpaceReserved = false
+                    setOnPreferenceChangeListener { _, value ->
+                        ui.post { host.onActionsButtonChanged(value as Boolean) }
+                        true
+                    }
+                })
             }
 
             screen.category(R.string.section_analytics) {

@@ -21,6 +21,7 @@ import android.os.SystemClock
 import app.opendisplay.android.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -47,6 +48,7 @@ import app.opendisplay.android.video.DecoderCaps
 import app.opendisplay.android.video.StreamStats
 import app.opendisplay.android.video.VideoDecoder
 import org.json.JSONObject
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 /**
@@ -63,6 +65,7 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     private lateinit var blank: View
     private lateinit var idleView: IdleView
     private lateinit var statsText: TextView
+    private lateinit var actionsButton: ActionsButton
     private lateinit var prefs: AppPrefs
     private lateinit var shake: ShakeDetector
     private var onboarding: androidx.appcompat.app.AlertDialog? = null
@@ -134,9 +137,19 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
             output = object : TouchGestures.Output {
                 override fun touch(phase: String, x: Double, y: Double) = server.sendTouch(phase, x, y)
                 override fun scroll(dx: Double, dy: Double) = server.sendScroll(dx, dy)
+                override fun secondaryTouch(phase: String, x: Double, y: Double) =
+                    server.sendTouch(phase, x, y, button = "right")
+                override fun phasedScroll(dx: Double, dy: Double, phase: String) =
+                    server.sendScroll(dx, dy, phase)
+                override fun magnify(phase: String, m: Double) = server.sendMagnify(phase, m)
+                override fun holdArmed() {
+                    root.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                }
             },
             scheduler = gestureScheduler,
             dragSlopPx = slop,
+            features = { TouchGestures.Features.from(server.senderInput) },
+            now = { SystemClock.uptimeMillis() },
         )
         pen = PenInput(
             output = object : PenInput.Output {
@@ -239,6 +252,8 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     }
 
     override fun onOverlayChanged(enabled: Boolean) = refreshIdle()
+
+    override fun onActionsButtonChanged(enabled: Boolean) = refreshIdle()
 
     override fun onStart() {
         super.onStart()
@@ -363,8 +378,16 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
             leftMargin = dp(12)
         })
 
+        actionsButton = ActionsButton(this, prefs) { server.sendGesture(it) }.apply {
+            visibility = View.GONE
+        }
+        root.addView(actionsButton, FrameLayout.LayoutParams(actionsButton.sizePx, actionsButton.sizePx))
+
         root.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
-            if (r - l != or - ol || b - t != ob - ot) updatePanel()
+            if (r - l != or - ol || b - t != ob - ot) {
+                updatePanel()
+                actionsButton.place()
+            }
         }
         root.setOnTouchListener { _, event -> onTouch(event) }
         root.setOnGenericMotionListener { _, event -> onHover(event) }
@@ -379,6 +402,9 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         statsText.visibility = if (streaming && prefs.showAnalytics) View.VISIBLE else View.GONE
         blank.visibility = if (connected && senderAsleep) View.VISIBLE else View.GONE
         cursorView.visibility = if (streaming) View.VISIBLE else View.INVISIBLE
+        val showActions = streaming && prefs.actionsButton && actionsButton.actions.isNotEmpty()
+        if (showActions && actionsButton.visibility != View.VISIBLE) actionsButton.post { actionsButton.place() }
+        actionsButton.visibility = if (showActions) View.VISIBLE else View.GONE
         // Input is gated on streaming: a gesture cut off here must still
         // release the button (and drop a pending hold) on the sender.
         if (!streaming) gestures.cancel()
@@ -509,21 +535,23 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         if (isStylus(event) || pen.penDown) {
             return if (isStylus(event)) onPen(event) else true
         }
-        val primary = point(event.getX(0), event.getY(0))
+        val primary = point(event.getX(0), event.getY(0), event.eventTime)
         when (action) {
             MotionEvent.ACTION_DOWN -> gestures.down(primary)
-            MotionEvent.ACTION_POINTER_DOWN -> gestures.pointerDown(event.pointerCount, centroid(event))
-            MotionEvent.ACTION_POINTER_UP -> gestures.pointerUp()
+            MotionEvent.ACTION_POINTER_DOWN ->
+                gestures.pointerDown(event.pointerCount, centroid(event), span(event))
+            MotionEvent.ACTION_POINTER_UP -> gestures.pointerUp(primary)
             MotionEvent.ACTION_MOVE -> {
                 // Android batches touch samples per frame; forward each one so
                 // the sender gets the full-rate drag, like the iOS receiver.
                 if (event.pointerCount == 1) {
                     for (h in 0 until event.historySize) {
-                        val past = point(event.getHistoricalX(0, h), event.getHistoricalY(0, h))
+                        val past = point(event.getHistoricalX(0, h), event.getHistoricalY(0, h),
+                            event.getHistoricalEventTime(h))
                         gestures.move(1, past, past, videoFrame.videoScale)
                     }
                 }
-                gestures.move(event.pointerCount, primary, centroid(event), videoFrame.videoScale)
+                gestures.move(event.pointerCount, primary, centroid(event), videoFrame.videoScale, span(event))
             }
             MotionEvent.ACTION_UP -> gestures.up(primary)
             MotionEvent.ACTION_CANCEL -> gestures.cancel()
@@ -532,14 +560,19 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
     }
 
     /** Root coordinates to normalized video coordinates (7: top-left origin). */
-    private fun point(x: Float, y: Float): TouchGestures.Point {
+    private fun point(x: Float, y: Float, t: Long = 0): TouchGestures.Point {
         val left = videoFrame.left + videoFrame.videoLeft
         val top = videoFrame.top + videoFrame.videoTop
         val w = videoFrame.videoRectWidth.coerceAtLeast(1)
         val h = videoFrame.videoRectHeight.coerceAtLeast(1)
         return TouchGestures.Point(x, y, ((x - left) / w).toDouble().coerceIn(0.0, 1.0),
-            ((y - top) / h).toDouble().coerceIn(0.0, 1.0))
+            ((y - top) / h).toDouble().coerceIn(0.0, 1.0), t)
     }
+
+    /** Distance between the first two fingers, for pinch. 0 with fewer. */
+    private fun span(event: MotionEvent): Float =
+        if (event.pointerCount < 2) 0f
+        else hypot(event.getX(1) - event.getX(0), event.getY(1) - event.getY(0))
 
     private fun centroid(event: MotionEvent): TouchGestures.Point {
         var sx = 0f
@@ -552,8 +585,8 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
             sy += event.getY(i)
             n++
         }
-        if (n == 0) return point(event.getX(0), event.getY(0))
-        return point(sx / n, sy / n)
+        if (n == 0) return point(event.getX(0), event.getY(0), event.eventTime)
+        return point(sx / n, sy / n, event.eventTime)
     }
 
     // endregion
@@ -615,6 +648,13 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         }
         streamInfo = "${codec.wire.uppercase()} ${width}x$height @$fps"
         decoder.setStream(codec, width, height)
+    }
+
+    override fun onSenderInput(input: Set<String>, actions: List<String>) {
+        main.post {
+            actionsButton.actions = actions
+            refreshIdle()
+        }
     }
 
     override fun onCursor(x: Double, y: Double, visible: Boolean) {

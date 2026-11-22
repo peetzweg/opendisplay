@@ -8,9 +8,11 @@ import app.opendisplay.android.protocol.Codec
 import app.opendisplay.android.protocol.CursorSequence
 import app.opendisplay.android.protocol.Demux
 import app.opendisplay.android.protocol.Framing
+import app.opendisplay.android.protocol.InputFeature
 import app.opendisplay.android.protocol.Messages
 import app.opendisplay.android.protocol.PenInput
 import app.opendisplay.android.protocol.WireProtocol
+import app.opendisplay.android.protocol.strings
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.ByteArrayInputStream
@@ -49,6 +51,8 @@ class ReceiverServer(
         fun onCursorImage(png: ByteArray, nw: Double, nh: Double, ax: Double, ay: Double)
         fun onSenderSleeping()
         fun onSenderVersion(pv: Int)
+        /** `welcome.input` and, when it includes `gesture`, `welcome.actions`. */
+        fun onSenderInput(input: Set<String>, actions: List<String>)
         fun onUpdateRequired(message: String, store: String?)
         fun onSenderHealth(obj: JSONObject)
         /** Receiver-side telemetry for the sender's log, every ~5 s. */
@@ -69,6 +73,8 @@ class ReceiverServer(
     private var cursorChannel: CursorChannel? = null
 
     @Volatile var senderPv: Int = WireProtocol.ASSUMED_WHEN_ABSENT
+    /** The sender's `welcome.input` (see InputFeature); empty until it says. */
+    @Volatile var senderInput: Set<String> = emptySet()
         private set
 
     private val loggedUnknownTypes = HashSet<String>()
@@ -224,8 +230,10 @@ class ReceiverServer(
             cursorSeq.reset()
             clock.reset()
             senderPv = WireProtocol.ASSUMED_WHEN_ABSENT
+            senderInput = emptySet()
         }
         old?.close()
+        listener.onSenderInput(emptySet(), emptyList())
         listener.onSessionStarted(link.transport)
         session.start()
         sendHello()
@@ -243,11 +251,17 @@ class ReceiverServer(
         Log.i(TAG, "hello sent: $hello")
     }
 
-    fun sendTouch(phase: String, x: Double, y: Double) {
-        send(Messages.touch(phase, x.coerceIn(0.0, 1.0), y.coerceIn(0.0, 1.0), senderNow()))
+    /** [button] (`"right"`) only when [senderInput] has InputFeature.BUTTON. */
+    fun sendTouch(phase: String, x: Double, y: Double, button: String? = null) {
+        send(Messages.touch(phase, x.coerceIn(0.0, 1.0), y.coerceIn(0.0, 1.0), senderNow(), button))
     }
 
-    fun sendScroll(dx: Double, dy: Double) = send(Messages.scroll(dx, dy))
+    /** [phase] only when [senderInput] has InputFeature.SCROLL_PHASE. */
+    fun sendScroll(dx: Double, dy: Double, phase: String? = null) = send(Messages.scroll(dx, dy, phase))
+
+    fun sendMagnify(phase: String, m: Double) = send(Messages.magnify(phase, m))
+
+    fun sendGesture(action: String) = send(Messages.gesture(action))
 
     fun sendPencil(phase: String, s: PenInput.Sample) = send(Messages.pencil(phase,
         s.copy(x = s.x.coerceIn(0.0, 1.0), y = s.y.coerceIn(0.0, 1.0)), senderNow()))
@@ -327,6 +341,10 @@ class ReceiverServer(
                 val pv = obj.optInt("pv", WireProtocol.ASSUMED_WHEN_ABSENT)
                 senderPv = pv
                 listener.onSenderVersion(pv)
+                val input = obj.optJSONArray("input").strings().toSet()
+                senderInput = input
+                val actions = if (InputFeature.GESTURE in input) obj.optJSONArray("actions").strings() else emptyList()
+                listener.onSenderInput(input, actions)
             }
             "streamConfig" -> {
                 val token = obj.optString("codec", "h264").lowercase()
