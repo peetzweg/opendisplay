@@ -17,6 +17,7 @@ class Advertiser(private val context: Context) {
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private var retries = 0
     private var multicastLock: WifiManager.MulticastLock? = null
+    private val hotspotMdns = HotspotMdnsBroadcaster()
 
     var registeredName: String? = null
         private set
@@ -25,7 +26,19 @@ class Advertiser(private val context: Context) {
         main.removeCallbacksAndMessages(null)
         retries = 0
         acquireMulticastLock()
-        registerOnce(name, installId, port)
+        unregisterQuietly()
+        // In hotspot mode NSD registers on the uplink (wlan0) and its name
+        // collides with our ap0 announcement, producing endless "(2)/(3)"
+        // renames. Announce only on ap0 there; NSD stays authoritative on a
+        // normal Wi-Fi network where it reaches every client.
+        if (hotspotMdns.hasHotspot()) {
+            registeredName = name
+            Log.i(TAG, "hotspot active: advertising '$name' via ap0 mDNS only")
+            hotspotMdns.start(name, installId, WireProtocol.VERSION, port)
+        } else {
+            hotspotMdns.stop()
+            registerOnce(name, installId, port)
+        }
     }
 
     /**
@@ -94,6 +107,7 @@ class Advertiser(private val context: Context) {
     fun unregister() {
         main.removeCallbacksAndMessages(null)
         unregisterQuietly()
+        hotspotMdns.stop()
         releaseMulticastLock()
     }
 
