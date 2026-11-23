@@ -3,6 +3,7 @@ package app.opendisplay.android.net
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import app.opendisplay.android.Log
 import app.opendisplay.android.protocol.WireProtocol
 
@@ -10,11 +11,12 @@ import app.opendisplay.android.protocol.WireProtocol
  * Bonjour advertisement (PROTOCOL.md 2.1): `_opensidecar._tcp` with TXT `id`
  * (must equal hello.id) and `pv`. The name is display-only.
  */
-class Advertiser(context: Context) {
+class Advertiser(private val context: Context) {
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private var registration: NsdManager.RegistrationListener? = null
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private var retries = 0
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     var registeredName: String? = null
         private set
@@ -22,7 +24,35 @@ class Advertiser(context: Context) {
     fun register(name: String, installId: String, port: Int = WireProtocol.TCP_PORT) {
         main.removeCallbacksAndMessages(null)
         retries = 0
+        acquireMulticastLock()
         registerOnce(name, installId, port)
+    }
+
+    /**
+     * mDNS uses multicast, which Android drops unless a MulticastLock is held.
+     * Without this the service is invisible to peers on a Wi-Fi hotspot, where
+     * the phone is the AP and multicast replies to clients are dropped.
+     */
+    private fun acquireMulticastLock() {
+        if (multicastLock != null) return
+        try {
+            val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            multicastLock = wifi?.createMulticastLock("opensidecar_mdns")?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MulticastLock unavailable: $e")
+        }
+    }
+
+    private fun releaseMulticastLock() {
+        try {
+            multicastLock?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "MulticastLock release: $e")
+        }
+        multicastLock = null
     }
 
     private fun registerOnce(name: String, installId: String, port: Int) {
@@ -64,6 +94,7 @@ class Advertiser(context: Context) {
     fun unregister() {
         main.removeCallbacksAndMessages(null)
         unregisterQuietly()
+        releaseMulticastLock()
     }
 
     private fun unregisterQuietly() {
