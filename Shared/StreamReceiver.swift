@@ -444,7 +444,7 @@ final class StreamReceiver: ObservableObject {
 
     private func closeSession(announcing type: String, status: String,
                               completion: (() -> Void)?) {
-        queue.async {
+        queue.async { [self] in
             var finished = false
             let finish = { [weak self] in
                 guard let self, !finished else { return }
