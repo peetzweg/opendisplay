@@ -158,12 +158,15 @@ targets:
       - Mac/PhoneInfo.swift
       - Mac/DesktopPolicy.swift
       - Mac/CaptureSourceCheck.swift
+      - Mac/AndroidUSBFunction.swift
+      - Mac/USBAccessory.swift
       - Mac/Log.swift
       - Mac/LogPolicies.swift
       - Shared/Protocol.swift
       - Shared/DirectCable.swift
       - Shared/LogSnapshot.swift
       - MacReceiver/FullscreenPreference.swift
+      - iOS/ReceiverPanelGeometry.swift
     settings:
       base:
         # A hostless test bundle: the sources under test are compiled straight
@@ -192,7 +195,11 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
+        # Full screen on iPadOS 26 and earlier, as before. From iOS 27 the
+        # app follows its window instead (an iPhone Duo's Split View, iPadOS
+        # 27 multitasking); the receiver reports whatever window it gets.
         UIRequiresFullScreen: true
+        UIRequiresFullScreenIgnoredStartingWithVersion: "27"
         NSLocalNetworkUsageDescription: OpenDisplay advertises itself on the local network so your Mac can connect over WiFi.
         NSBonjourServices: ["_opensidecar._tcp"]
         UISupportedInterfaceOrientations:

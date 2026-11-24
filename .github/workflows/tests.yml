@@ -52,6 +52,26 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
+  # Same runner, Xcode and Ruby setup as the release workflow's build-ios job,
+  # so a pull request finds out when that image stops working, not a release.
+  ios:
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
       # Shared protocol/receiver code is also compiled into the universal
       # iPhone+iPad app. Catch a mobile-only compile or asset failure on the
       # change that introduced it, before release-please creates a tag and the
@@ -63,9 +83,21 @@ jobs:
             -scheme OpenSidecariOS \
             -configuration Release \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
+
+      # iPhone Duo letterboxes apps built with an iOS SDK older than 27.1.
+      - name: Check the iOS SDK
+        run: |
+          sdk=$(/usr/libexec/PlistBuddy -c "Print :DTPlatformVersion" \
+            build/ios/Build/Products/Release-iphoneos/OpenSidecariOS.app/Info.plist)
+          echo "Built with the iOS $sdk SDK"
+          ruby -e 'exit Gem::Version.new(ARGV[0]) >= Gem::Version.new("27.1")' "$sdk"
+
+      - name: fastlane loads the iOS upload lane
+        run: bundle exec fastlane lanes | grep -q "ios beta"
 
   android:
     runs-on: ubuntu-latest

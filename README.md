@@ -6,7 +6,7 @@
 
 **Turn your spare devices into second monitors for your Mac — free, open source, no subscription.**
 
-iPhone, iPad, spare Macs, and Android (beta); a Linux sender and receiver are in beta too. A self-hosted
+iPhone, iPad, spare Macs, and Android; a Linux sender and receiver are in beta too. A self-hosted
 alternative to Apple Sidecar, Duet Display, and Luna Display: true extended
 display (not just mirroring), Retina-sharp, over USB or WiFi, with touch and
 scroll input.
@@ -118,6 +118,14 @@ screen — Duet, Luna, OBS, and Zoom trigger it too. Apple Sidecar doesn't,
 only because it's implemented inside the OS rather than on public capture
 APIs. It cannot (and shouldn't) be hidden by an app; it's how macOS tells
 you a capture is running.
+
+**Why don't I get notifications while a device is connected?**
+For the same reason: macOS treats any app that captures the screen as
+*sharing* it, and by default hides notifications while the screen is shared.
+Luna Display and DisplayLink run into the same thing, and no app can opt
+out. To keep notifications, turn on System Settings → Notifications →
+**Allow notifications when mirroring or sharing the display**. That setting
+covers real screen sharing too, such as in a video call.
 
 **The Mac app doesn't show my iPhone in the Connection menu (WiFi).**
 Both sides need **Local Network** permission, and both fail *silently*
@@ -362,14 +370,15 @@ protocol evolves across releases is covered in
 [COMPATIBILITY.md](COMPATIBILITY.md).
 
 `CGVirtualDisplay` is a **private CoreGraphics API** (the same one used by
-BetterDisplay and DeskPad) — which is precisely why this project can't ship
-on the App Store and lives on GitHub instead.
+BetterDisplay and DeskPad) — which is why the Mac sender ships as a direct
+download instead of through the Mac App Store. The iPhone/iPad and Android
+receivers are available in their respective app stores.
 
 ## Install
 
-You need **two apps**: a Mac app (captures and sends) and an iOS app
-(receives and displays). To use a **second Mac** as the display, install
-`OpenDisplay Receiver` on it instead of the iOS app.
+You need **two apps**: the Mac sender (captures and sends) and a receiver on
+your iPhone, iPad or Android device (receives and displays). To use a
+**second Mac** as the display, install `OpenDisplay Receiver` on it instead.
 
 ### Homebrew (Mac)
 
@@ -403,10 +412,24 @@ hover needs iPadOS 16.4 and a hover-capable iPad and Pencil pairing (see
 [Apple's list](https://support.apple.com/guide/ipad/ipadc55b6c7a/ipados));
 everything else works the same on every supported version.
 
-- **TestFlight** (recommended): join the public beta at
+- **App Store** (recommended): install the released app from the
+  [App Store](https://apps.apple.com/us/app/opendisplay/id6780264891).
+- **TestFlight** (early builds): join the public beta at
   [testflight.apple.com/join/3NYaY11c](https://testflight.apple.com/join/3NYaY11c).
 - **Build from source**: open the project in Xcode, select your free Apple ID
   under Signing, hit Run. Takes ~2 minutes.
+
+### Android app
+
+Install the released receiver from [Google Play](https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay) on
+Android 7.0 or later. Beta enrollment is optional.
+
+Want early builds, like TestFlight on iOS? Join the
+[OpenDisplay Google Group](https://groups.google.com/g/opendisplay) with your Google Play account,
+then [join the Android beta](https://play.google.com/apps/testing/com.peetzweg.opendisplay)
+and install or update through Google Play.
+
+Install the Mac sender above as well, then open the Android receiver.
 
 ## Quick start (from source)
 

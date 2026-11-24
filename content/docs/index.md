@@ -31,7 +31,7 @@ any receiver works with any sender.
 |---|---|---|
 | **macOS** | macOS 14+, download or Homebrew | OpenDisplay Receiver, macOS 12+ |
 | **iPhone and iPad** | | App Store, iOS / iPadOS 15+ |
-| **Android** | | Public beta on Google Play, Android 7.0+, over Wi-Fi |
+| **Android** | | [Google Play](https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay), Android 7.0+, over Wi-Fi; [optional beta](https://play.google.com/apps/testing/com.peetzweg.opendisplay) |
 | **Linux** | Beta: [Linux sender](/docs/linux/) | Beta: [Linux receiver](/docs/linux/receiver/) |
 
 The Mac apps and the iPhone, iPad and Android apps are covered on the

@@ -40,7 +40,7 @@ on a real desktop session yet. Reports are very welcome in
 | | Setup |
 |---|---|
 | **Tested** | Arch / Omarchy, Hyprland 0.56, aarch64 (Asahi Linux on an M1 Pro), CPU encoding. Receivers: iPhone (App Store), Mac receiver app (Intel iMac) |
-| **Expected to work** | Arch / Omarchy on x86_64. Any distribution with Hyprland 0.55+. iPad and Android (Google Play beta) as receivers: Android streamed fine in a first session, but touch, scroll, rotation, lock and quit are not checked yet |
+| **Expected to work** | Arch / Omarchy on x86_64. Any distribution with Hyprland 0.55+. iPad and Android ([Google Play](https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay)) as receivers: Android streamed fine in a first session, but touch, scroll, rotation, lock and quit are not checked yet |
 | **Experimental** | **Sway 1.10+**, **KDE Plasma 6.8+** (6.7 and older with the desktop entry in place, see [KDE Plasma](/docs/linux/desktops/#kde-plasma)), **GNOME 50+** (older GNOME may work, untested). Verified on headless desktops only |
 | **Existing outputs only** | niri, COSMIC, river, labwc, Wayfire and similar: `od-sender run --output <name>` streams an output you created yourself, if the compositor offers the screen-capture and virtual-pointer protocols `od-sender doctor` lists |
 | **Not supported yet** | X11 sessions, Hyprland older than 0.55, Flatpak, SteamOS Gaming Mode, USB cable transport, HEVC, Apple Pencil pressure (mapped to a plain pointer), audio, mirror mode |

@@ -143,6 +143,11 @@ pub fn doctor(req: &Request, config_path: Option<&Path>) -> bool {
         encoder::Backend::X264,
         encoder::Backend::Openh264,
     ] {
+        if b == encoder::Backend::V4l2m2m && !encoder::v4l2m2m_present() {
+            // Only some ARM SoCs have one; its absence is not a fault (#409).
+            println!("  {b:?}: not present (no V4L2 H.264 encoder device)");
+            continue;
+        }
         let s = encoder::EncoderSettings {
             backend: b,
             bitrate_bps: 2_000_000,
@@ -154,6 +159,7 @@ pub fn doctor(req: &Request, config_path: Option<&Path>) -> bool {
             Err(e) => println!("  {b:?}: unavailable ({e:#})"),
         }
     }
+    println!("  (x264 and OpenH264 encode on the CPU; VA-API is not supported yet)");
 
     let dir: PathBuf = lock::dir();
     println!("\nlocks: {}", dir.display());

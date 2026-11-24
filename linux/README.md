@@ -35,7 +35,7 @@ Reports are very welcome ([#299](https://github.com/peetzweg/opendisplay/issues/
 | | Setup |
 |---|---|
 | **Tested** | Arch / Omarchy, Hyprland 0.56, aarch64 (Asahi Linux on an M1 Pro), CPU encoding. Receivers: iPhone (App Store), Mac receiver app (Intel iMac) |
-| **Expected to work** | Arch / Omarchy on x86_64. Any distro with Hyprland 0.55+. iPad and Android (Google Play beta) as receivers: Android streamed fine in a first session (Pixel 10a, 53 fps, 33 ms), but touch, scroll, rotation, lock and quit are not checked yet |
+| **Expected to work** | Arch / Omarchy on x86_64. Any distro with Hyprland 0.55+. iPad and Android ([Google Play](https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay)) as receivers: Android streamed fine in a first session (Pixel 10a, 53 fps, 33 ms), but touch, scroll, rotation, lock and quit are not checked yet |
 | **Experimental** | **Sway 1.10+**, **KDE Plasma 6.8+** (6.7 and older with the desktop entry in place, see [KDE Plasma](#kde-plasma)), **GNOME 50+** (older GNOME may work, untested). Verified on headless desktops only |
 | **Existing outputs only** | niri, COSMIC, river, labwc, Wayfire and similar: `od-sender run --output <name>` streams an output you created yourself, if the compositor offers the screen-capture and virtual-pointer protocols `od-sender doctor` lists |
 | **Not supported yet** | X11 sessions, Hyprland older than 0.55, Flatpak, SteamOS Gaming Mode, USB cable transport, HEVC, Apple Pencil pressure (mapped to a plain pointer), audio, mirror mode |
@@ -118,7 +118,7 @@ cargo build --release -p od-sender
 
 Open the OpenDisplay app on the receiver, in the foreground and on the same
 Wi-Fi as your computer. Receivers: iPhone and iPad from the App Store,
-Android from the Google Play beta, Mac: OpenDisplay Receiver from the
+Android from [Google Play](https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay), Mac: OpenDisplay Receiver from the
 [releases page](https://github.com/peetzweg/opendisplay/releases/latest).
 Then:
 
@@ -136,6 +136,14 @@ network it lists them and asks you to pick one with `--to` (or `to = "…"` in
 the [config file](#configuration)). `--to` matches part of a receiver's name
 or its full id, or connects straight to a `host:port`. `--wait` keeps looking
 until the receiver appears.
+
+Bonjour does not cross VPNs. When it finds nothing and
+[Tailscale](https://tailscale.com) is running, `run` and `list` also try the
+online Tailscale peers on port 9000 and use the ones that answer as an
+OpenDisplay receiver, named as `tailscale status` shows them. This adds about
+a second, only when Bonjour found nothing; `tailscale = false` in the config
+file turns it off. `run --wait` does not try Tailscale: give it the address
+(`--to <tailscale-ip>:9000`).
 
 `od-sender` detects your desktop (Hyprland, Sway, KDE Plasma or GNOME) and
 creates the virtual display there, by default to the right of your current
@@ -207,6 +215,7 @@ encoder = "auto"         # "auto", "v4l2m2m", "x264" or "openh264"
 cursor = "auto"          # "auto", "video" or "off" (true/false: auto/off)
 capture = "auto"         # "auto", "ext" or "wlr"
 workspace = "8"          # Hyprland/Sway: show workspace 8 on the virtual display
+tailscale = true         # false: never try Tailscale peers when Bonjour finds nothing
 
 # Overrides for one receiver: position, scale, bitrate-mbps and workspace.
 [receiver."3F2A9C1E-..."]
@@ -309,7 +318,9 @@ session.
   network, which usually blocks devices from seeing each other)? On iPhone and
   iPad, Settings → Privacy & Security → Local Network must allow OpenDisplay.
   `od-sender list --timeout 10` shows what answers; `od-sender run --to
-  <device-ip>:9000` skips discovery.
+  <device-ip>:9000` skips discovery. Over a VPN, Bonjour does not reach the
+  device: Tailscale peers are tried automatically (`RUST_LOG=debug` shows
+  each probe); with another VPN, use `--to <vpn-ip>:9000`.
 * **"several receivers found"** (exit 4): pick one with `--to <name>`, or set
   `to = "…"` in the config file.
 * **The receiver stays black**: on Hyprland, see

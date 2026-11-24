@@ -270,8 +270,8 @@ ${jsonLd(article)}
   <script type="application/ld+json">
 ${jsonLd(breadcrumbList)}
   </script>
-  <link rel="preconnect" href="https://analytics.drdrip.xyz" crossorigin />
-  <script defer data-domain="opendisplay.app" src="https://analytics.drdrip.xyz/js/script.hash.outbound-links.js"></script>
+  <link rel="preconnect" href="https://analytics.466920160.xyz" crossorigin />
+  <script defer data-domain="opendisplay.app" src="https://analytics.466920160.xyz/js/script.hash.outbound-links.js"></script>
 </head>
 <body class="docs-page">
 ${body}

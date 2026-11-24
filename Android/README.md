@@ -41,6 +41,15 @@ immersive insets) are used when present.
 
 Not yet: sender-side ADB discovery.
 
+## Install from Google Play
+
+Install the released app from [Google Play](https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay).
+The Play release requires Android 7.0 or later; beta enrollment is optional.
+
+For early builds, join the [OpenDisplay Google Group](https://groups.google.com/g/opendisplay)
+with your Google Play account, then [join the Android beta](https://play.google.com/apps/testing/com.peetzweg.opendisplay)
+and install or update through Google Play, similar to TestFlight on iOS.
+
 ## Build and install
 
 Needs JDK 17 and the Android SDK (platform 35).

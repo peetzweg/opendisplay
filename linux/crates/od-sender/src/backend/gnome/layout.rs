@@ -26,7 +26,7 @@ pub struct LogicalConfig {
 }
 
 /// `layout-mode` 1 positions in logical pixels, 2 in physical ones.
-fn logical_layout(state: &State) -> bool {
+pub fn logical_layout(state: &State) -> bool {
     state
         .3
         .get("layout-mode")

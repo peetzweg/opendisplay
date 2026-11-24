@@ -122,6 +122,76 @@ final class DisplayArrangementTests: XCTestCase {
         XCTAssertEqual(DisplayArrangement.inferredMainDisplaySide(of: legacy, relativeTo: main), .below)
     }
 
+    func testFitsNeedsContactWithoutOverlap() {
+        let size = CGSize(width: 698, height: 1_016)
+
+        XCTAssertTrue(DisplayArrangement.fits(CGRect(origin: CGPoint(x: -698, y: 0), size: size), among: [main]))
+        XCTAssertTrue(DisplayArrangement.fits(CGRect(origin: CGPoint(x: -698, y: -1_016), size: size), among: [main]),
+                      "a shared corner is a valid arrangement")
+        XCTAssertFalse(DisplayArrangement.fits(CGRect(origin: CGPoint(x: -697, y: 0), size: size), among: [main]),
+                       "overlap")
+        XCTAssertFalse(DisplayArrangement.fits(CGRect(origin: CGPoint(x: -699, y: 0), size: size), among: [main]),
+                       "gap")
+        XCTAssertTrue(DisplayArrangement.fits(CGRect(origin: .zero, size: size), among: []))
+    }
+
+    /// iPhone Duo bench: the record came from a layout with a monitor that is
+    /// gone, so every fold asked for a detached spot that WindowServer
+    /// snapped back to (1512, y), a second reconfiguration per fold.
+    func testLiveResizeKeepsTheDisplayWhereItIsWhenTheRecordIsFromAnotherLayout() {
+        let stale = CGRect(x: 3_560, y: 0, width: 2_852, height: 2_006)
+        let current = CGRect(x: 1_512, y: 290, width: 1_002, height: 1_426)
+        let folded = CGSize(width: 698, height: 1_016)
+
+        let creation = DisplayArrangement.origin(for: folded, saved: stale, side: nil, main: main,
+                                                 others: [main], current: nil)
+        let live = DisplayArrangement.origin(for: folded, saved: stale, side: nil, main: main,
+                                             others: [main], current: current)
+
+        XCTAssertEqual(creation, CGPoint(x: 4_637, y: 495), "creation still asks for the saved spot")
+        XCTAssertEqual(live, CGPoint(x: 1_512, y: 290))
+    }
+
+    func testLiveResizeNeverAsksForAnOriginOverlappingTheMainDisplay() {
+        // A record saved while the display sat at the main display's origin.
+        let overlapping = CGRect(x: 0, y: 0, width: 1_426, height: 1_002)
+        let unfolded = CGRect(x: -1_426, y: 0, width: 1_426, height: 1_002)
+        let folded = CGSize(width: 698, height: 1_016)
+
+        let fold = DisplayArrangement.origin(for: folded, saved: overlapping, side: nil, main: main,
+                                             others: [main], current: unfolded)
+        let unfold = DisplayArrangement.origin(for: unfolded.size, saved: overlapping, side: nil, main: main,
+                                               others: [main],
+                                               current: CGRect(origin: fold, size: folded))
+
+        XCTAssertEqual(fold, CGPoint(x: -698, y: 0))
+        XCTAssertEqual(unfold, unfolded.origin)
+    }
+
+    func testLiveResizeKeepsAValidSavedPlacement() {
+        let saved = CGRect(x: -1_002, y: 0, width: 1_002, height: 1_426)
+        // macOS restored its own record for the identity somewhere else.
+        let current = CGRect(x: 1_512, y: 0, width: 1_002, height: 1_426)
+
+        let target = DisplayArrangement.origin(for: CGSize(width: 698, height: 1_016), saved: saved,
+                                               side: .left, main: main, others: [main], current: current)
+
+        XCTAssertEqual(target, CGPoint(x: -698, y: 0))
+    }
+
+    func testLiveResizeStaysBesideASiblingThatNowHoldsTheSavedSide() {
+        let saved = CGRect(x: -1_426, y: 0, width: 1_426, height: 1_002)
+        let sibling = CGRect(x: -588, y: 0, width: 588, height: 1_278)
+        let current = CGRect(x: -2_014, y: 0, width: 1_426, height: 1_002)
+        let folded = CGSize(width: 698, height: 1_016)
+
+        let target = DisplayArrangement.origin(for: folded, saved: saved, side: .left, main: main,
+                                               others: [main, sibling], current: current)
+
+        XCTAssertEqual(target, CGPoint(x: -1_286, y: 0))
+        XCTAssertTrue(DisplayArrangement.fits(CGRect(origin: target, size: folded), among: [main, sibling]))
+    }
+
     func testRotationFallsBackToCenterWhenTheSavedNeighbourIsGone() {
         let saved = CGRect(x: -588, y: 0, width: 588, height: 1_278)
 

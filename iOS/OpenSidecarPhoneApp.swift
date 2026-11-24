@@ -69,7 +69,9 @@ struct ReceiverScreen: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
+        // Kept for its layout (fill the window, top-leading); the panel size
+        // comes from WindowObserver below, not from the proxy.
+        GeometryReader { _ in
             ZStack {
                 if isStreaming {
                     Color.black.ignoresSafeArea()
@@ -91,10 +93,9 @@ struct ReceiverScreen: View {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
             }
-            .onAppear { model.receiver.setOrientation(portrait: geo.size.height > geo.size.width) }
-            .onChange(of: geo.size) { size in
-                model.receiver.setOrientation(portrait: size.height > size.width)
-            }
+            // The window, not this view: a sheet, the keyboard or the
+            // hidden status bar change the view's frame but not the panel.
+            .background(WindowObserver { model.updatePanel(window: $0) })
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView { onboardingDismissed = true }
             }
@@ -540,36 +541,31 @@ private struct DeviceNameField: View {
 @MainActor
 final class ReceiverModel: ObservableObject {
     let receiver: StreamReceiver
+    private let decodesHEVC: Bool
     private var started = false
     private var cancellables = Set<AnyCancellable>()
 
     init() {
         // Offer HEVC wherever the hardware decodes it (A9 and later; the A8/A8X
         // iPads stay on H.264). Panels here fit H.264's raster anyway, so HEVC
-        // buys quality per bit, which matters most over WiFi. Bounded by the
-        // panel in either orientation, so a large mirrored Mac display is
-        // scaled to what this screen can show instead of sent in full.
-        let native = UIScreen.main.nativeBounds.size   // portrait pixels
-        let longSide = Int(max(native.width, native.height))
+        // buys quality per bit, which matters most over WiFi.
         var decodesHEVC = VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)
         #if DEBUG
         // The simulator has no hardware decoder; -forceHEVCOffer YES exercises
         // the HEVC receive path there with software decode.
         if UserDefaults.standard.bool(forKey: "forceHEVCOffer") { decodesHEVC = true }
         #endif
-        let hevc = decodesHEVC
-            ? VideoCapability(codec: "hevc", maxWidth: longSide, maxHeight: longSide,
-                              maxFrameRate: 60)
-            : nil
+        self.decodesHEVC = decodesHEVC
         receiver = StreamReceiver(displayLayer: AVSampleBufferDisplayLayer(),
                                   deviceKind: deviceKind,
-                                  fallbackServiceName: UIDevice.current.name,
-                                  hevcCapability: hevc)
-        // Announce the native panel size to the Mac.
-        receiver.setNativePanel(long: Int(max(native.width, native.height)),
-                                short: Int(min(native.width, native.height)),
-                                scale: Double(UIScreen.main.nativeScale))
-        receiver.setDisplayMaxFrameRate(UIScreen.main.maximumFramesPerSecond)
+                                  fallbackServiceName: UIDevice.current.name)
+        // Seed with the whole screen in landscape; the view replaces it with
+        // its window size on first layout, before any Mac connects.
+        let native = UIScreen.main.nativeBounds.size   // portrait pixels
+        applyPanel(pixelsWide: Int(max(native.width, native.height)),
+                   pixelsHigh: Int(min(native.width, native.height)),
+                   scale: Double(UIScreen.main.nativeScale),
+                   displayMaxFrameRate: UIScreen.main.maximumFramesPerSecond)
         if let budget = DecodeBudget.maxPixelsPerSecond(model: DecodeBudget.currentModel) {
             receiver.setDecodeBudget(maxPixelsPerSecond: budget)
         }
@@ -579,6 +575,51 @@ final class ReceiverModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+    }
+
+    /// The window this app renders into, kept to re-read on activation.
+    private weak var panelWindow: UIWindow?
+
+    /// Announce the window this app renders into. A rotation, a fold or
+    /// unfold (iPhone Duo) and a multitasking resize all land here, so the
+    /// Mac always builds its virtual display for what is on screen.
+    func updatePanel(window: UIWindow) {
+        panelWindow = window
+        // The window's own screen: an iPhone Duo's outer and inner screens
+        // differ in size, and may in refresh rate. nativeScale, not scale:
+        // the Plus phones render at 3x and downsample, and the Mac should
+        // size for the pixels the panel actually has.
+        // A background scene is laid out for the app switcher's snapshot,
+        // possibly in another orientation; nobody sees it, so the Mac keeps
+        // its desktop. sceneDidActivate re-reads the window on return.
+        guard let scene = window.windowScene,
+              scene.activationState != .background,
+              scene.activationState != .unattached else { return }
+        let screen = scene.screen
+        guard let panel = ReceiverPanelGeometry(window: window.bounds.size,
+                                                screen: screen.bounds.size,
+                                                nativePixels: screen.nativeBounds.size,
+                                                nativeScale: screen.nativeScale)
+        else { return }
+        applyPanel(pixelsWide: panel.pixelsWide, pixelsHigh: panel.pixelsHigh,
+                   scale: panel.scale, displayMaxFrameRate: screen.maximumFramesPerSecond)
+    }
+
+    private func applyPanel(pixelsWide w: Int, pixelsHigh h: Int, scale: Double,
+                            displayMaxFrameRate: Int) {
+        // HEVC is bounded by the window in either orientation, so a large
+        // mirrored Mac display is scaled to what this window can show
+        // instead of sent in full.
+        let longSide = max(w, h)
+        let limitsChanged = receiver.setDecodeLimits(
+            maxEncodeWide: nil, maxEncodeHigh: nil,
+            hevc: decodesHEVC
+                ? VideoCapability(codec: "hevc", maxWidth: longSide, maxHeight: longSide,
+                                  maxFrameRate: 60)
+                : nil)
+        receiver.setPanel(pixelsWide: w, pixelsHigh: h, scale: scale,
+                          displayMaxFrameRate: displayMaxFrameRate,
+                          limitsChanged: limitsChanged)
     }
 
     func start() {
@@ -620,6 +661,9 @@ final class ReceiverModel: ObservableObject {
     func sceneDidActivate() {
         endBackgroundAssertion()
         receiver.setRenderingPaused(false)
+        // A fold while the app was in the background: announce the screen it
+        // came back on before a redialing Mac rebuilds for the old one.
+        if let panelWindow { updatePanel(window: panelWindow) }
         receiver.ensureListening()
     }
 
@@ -687,6 +731,41 @@ extension UIEvent {
     }
 }
 
+// MARK: - Window size
+
+/// Reports the window it sits in when attached and on every layout. It
+/// fills the root view, so a rotation, a fold or a multitasking resize lays
+/// it out; reports of an unchanged window cost nothing (setPanel ignores
+/// them).
+private struct WindowObserver: UIViewRepresentable {
+    let onLayout: (UIWindow) -> Void
+
+    func makeUIView(context: Context) -> ObserverView {
+        let view = ObserverView()
+        view.isUserInteractionEnabled = false
+        view.onLayout = onLayout
+        return view
+    }
+
+    func updateUIView(_ view: ObserverView, context: Context) {
+        view.onLayout = onLayout
+    }
+
+    final class ObserverView: UIView {
+        var onLayout: ((UIWindow) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if let window { onLayout?(window) }
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            if let window { onLayout?(window) }
+        }
+    }
+}
+
 // MARK: - Video layer host view
 
 /// UIView whose backing layer is the AVSampleBufferDisplayLayer.
@@ -699,6 +778,7 @@ struct VideoLayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> VideoView {
         let view = VideoView()
         view.backgroundColor = .black
+        view.clipsToBounds = true   // a held frame can be larger than a folded screen
         view.isMultipleTouchEnabled = true
         view.receiver = receiver
 
@@ -780,18 +860,94 @@ struct VideoLayerView: UIViewRepresentable {
 
         private var lastLoggedLayout = ""
 
+        // Between a resize (rotation, fold, Split View) and the first frame of
+        // the desktop the Mac rebuilds for it, the last frame is scaled to
+        // cover the new shape and blurred; once the new desktop arrives it
+        // swaps in under the blur, which then clears to reveal it.
+        private var lastVideoSize = CGSize.zero
+        private var settledBounds = CGRect.zero   // the bounds the current video was sized for
+        private var holdingStaleFrame = false
+        private var holdRelease: DispatchWorkItem?
+        private var holdArmedFor = CGRect.zero   // the bounds the fallback reveal was armed for
+        private let blurView: UIVisualEffectView = {
+            let view = UIVisualEffectView(effect: nil)
+            view.isUserInteractionEnabled = false
+            view.layer.zPosition = 20   // above the video and the cursor
+            return view
+        }()
+
+        /// Returns whether a hold just began, so the caller animates into it.
+        private func updateHold() -> Bool {
+            let video = receiver?.videoSize ?? .zero
+            if video != lastVideoSize || video == .zero || settledBounds == .zero
+                || bounds == settledBounds {
+                lastVideoSize = video
+                settledBounds = bounds
+                releaseHold()
+                return false
+            }
+            let began = !holdingStaleFrame
+            holdingStaleFrame = true
+            // A Mac that never sends a new desktop (an older sender, mirror
+            // mode, a fixed Display size, or the size settled back on one it
+            // already streams) must not leave the picture blurred: reveal
+            // what there is. Armed per window shape, not per layout pass:
+            // every receiver publish relayouts, and re-arming there would
+            // push the reveal out forever.
+            if began || bounds != holdArmedFor {
+                holdArmedFor = bounds
+                holdRelease?.cancel()
+                let release = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.settledBounds = self.bounds
+                    self.releaseHold()
+                    self.setNeedsLayout()
+                }
+                holdRelease = release
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: release)
+            }
+            if began {
+                UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState]) {
+                    self.blurView.effect = UIBlurEffect(style: .dark)
+                }
+            }
+            return began
+        }
+
+        private func releaseHold() {
+            holdRelease?.cancel()
+            holdRelease = nil
+            guard holdingStaleFrame else { return }
+            holdingStaleFrame = false
+            // A beat for the first new frame to decode under the blur.
+            UIView.animate(withDuration: 0.4, delay: 0.08,
+                           options: [.beginFromCurrentState, .curveEaseOut]) {
+                self.blurView.effect = nil
+            }
+        }
+
         override func layoutSubviews() {
             super.layoutSubviews()
+            let holdBegan = updateHold()
+            if blurView.superview == nil { addSubview(blurView) }
+            blurView.frame = bounds
             CATransaction.begin()
-            CATransaction.setDisableActions(true)
+            if holdBegan {
+                CATransaction.setAnimationDuration(0.25)
+                CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+            } else {
+                CATransaction.setDisableActions(true)
+            }
+            // Both renderers draw into the video rect; the metal layer scales
+            // its drawable to fill its frame, AVSBDL aspect-fits.
             if let renderer = metalRenderer {
-                // The metal layer scales its drawable to fill its frame, so
-                // the frame itself must be the aspect-fit rect.
                 renderer.metalLayer.frame = videoRect() ?? bounds
             } else {
-                // AVSBDL aspect-fits internally (videoGravity) — full bounds.
-                layer.sublayers?.first?.frame = bounds
+                layer.sublayers?.first?.frame = videoRect() ?? bounds
             }
+            CATransaction.commit()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             if cursorLayer.superlayer == nil { layer.addSublayer(cursorLayer) }
             updateCursorLayout()
             CATransaction.commit()
@@ -806,11 +962,14 @@ struct VideoLayerView: UIViewRepresentable {
             }
         }
 
-        /// Aspect-fit rect of the video inside the view (inverse of normalized()).
+        /// Aspect-fit rect of the video inside the view (inverse of normalized()),
+        /// or, while a stale frame is held, the rect that covers the view.
         private func videoRect() -> CGRect? {
             guard let video = receiver?.videoSize, video != .zero,
                   bounds.width > 0, bounds.height > 0 else { return nil }
-            let scale = min(bounds.width / video.width, bounds.height / video.height)
+            let fit = min(bounds.width / video.width, bounds.height / video.height)
+            let cover = max(bounds.width / video.width, bounds.height / video.height)
+            let scale = holdingStaleFrame ? cover : fit
             let size = CGSize(width: video.width * scale, height: video.height * scale)
             return CGRect(x: (bounds.width - size.width) / 2,
                           y: (bounds.height - size.height) / 2,
@@ -850,14 +1009,9 @@ struct VideoLayerView: UIViewRepresentable {
         // The video is aspect-fit inside the view; map view coords into the
         // displayed video rect and normalize to [0,1].
         fileprivate func normalized(_ point: CGPoint) -> (x: Double, y: Double)? {
-            guard let video = receiver?.videoSize, video != .zero,
-                  bounds.width > 0, bounds.height > 0 else { return nil }
-            let scale = min(bounds.width / video.width, bounds.height / video.height)
-            let size = CGSize(width: video.width * scale, height: video.height * scale)
-            let origin = CGPoint(x: (bounds.width - size.width) / 2,
-                                 y: (bounds.height - size.height) / 2)
-            let x = (point.x - origin.x) / size.width
-            let y = (point.y - origin.y) / size.height
+            guard let rect = videoRect() else { return nil }
+            let x = (point.x - rect.minX) / rect.width
+            let y = (point.y - rect.minY) / rect.height
             return (min(max(x, 0), 1), min(max(y, 0), 1))
         }
 
@@ -894,7 +1048,7 @@ struct VideoLayerView: UIViewRepresentable {
                 }
             case .changed:
                 let t = recognizer.translation(in: self)
-                let scale = min(bounds.width / video.width, bounds.height / video.height)
+                let scale = (videoRect()?.width ?? bounds.width) / video.width
                 // Deltas in video pixels, natural-scrolling direction.
                 receiver?.sendScroll(dx: (t.x - lastPan.x) / scale,
                                      dy: (t.y - lastPan.y) / scale)

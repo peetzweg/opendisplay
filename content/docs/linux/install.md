@@ -105,8 +105,10 @@ The display side is any OpenDisplay receiver:
 
 - **iPhone and iPad**: OpenDisplay from the
   [App Store](https://apps.apple.com/us/app/opendisplay/id6780264891).
-- **Android**: the public beta on Google Play, Android 7.0+; join via the
-  [home page](/).
+- **Android**: install the released app from
+  [Google Play](https://play.google.com/store/apps/details?id=com.peetzweg.opendisplay), Android 7.0+.
+  For early builds, join the [OpenDisplay Google Group](https://groups.google.com/g/opendisplay),
+  then [join the Android beta](https://play.google.com/apps/testing/com.peetzweg.opendisplay) with the same Google Play account.
 - **Mac**: OpenDisplay Receiver from the
   [latest release](https://github.com/peetzweg/opendisplay/releases/latest)
   or `brew install --cask opendisplay-receiver`.

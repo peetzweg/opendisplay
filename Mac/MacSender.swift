@@ -233,6 +233,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     private var upgradeProbes: [NWConnection] = []
     private var probeRoundGeneration = 0
     private var lastLoggedCandidates: [String] = []
+    private var probeOutcomes: [String] = []
+    private var lastLoggedProbeOutcomes: [String] = []
     private var peerAddrs: [String] = []
     // The Mac-to-Mac USB link takes ~25-30s to negotiate, and either side
     // can finish last. Peer-side lateness arrives as a re-hello; this
@@ -680,10 +682,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         let bootstrapCanvas = canvasPlan.bootstrap
         let pointsWide = bootstrapCanvas.pointsWide
         let pointsHigh = bootstrapCanvas.pointsHigh
-        // Rough physical size so macOS picks a sane default UI scale.
-        let mm = canvas.pointsWide >= canvas.pointsHigh
-            ? CGSize(width: 147, height: 68)
-            : CGSize(width: 68, height: 147)
+        let mm = VirtualCanvasSizing.physicalSizeInMillimeters(for: canvas)
 
         // USB sessions can start before lockdown resolves the device name —
         // fall back to the kind from the hello rather than the generic label.
@@ -815,13 +814,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         try ensureActiveDisplay(vd)
         var captureDisplay = display
         if requestedCanvas != bootstrapCanvas {
-            let promoted = await MainActor.run {
-                guard !self.stopped, self.virtualDisplay === vd else { return false }
-                return vd.resize(pointsWide: requestedCanvas.pointsWide,
-                                 pointsHigh: requestedCanvas.pointsHigh,
-                                 movingTo: DisplayArrangement.origin(for: requestedCanvas.cgSize,
-                                                                     device: arrangementKey))
-            }
+            let promoted = await resizeInPlace(vd, pointsWide: requestedCanvas.pointsWide,
+                                               pointsHigh: requestedCanvas.pointsHigh,
+                                               arrangementKey: arrangementKey)
             try ensureActiveDisplay(vd)
             if promoted {
                 do {
@@ -836,13 +831,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     if error is CancellationError { throw error }
                     Log.info("large virtual display mode did not come online (\(error)) — "
                         + "continuing with a \(bootstrapCanvas.pixelsWide)x\(bootstrapCanvas.pixelsHigh) desktop canvas")
-                    let rolledBack = await MainActor.run {
-                        guard !self.stopped, self.virtualDisplay === vd else { return false }
-                        return vd.resize(pointsWide: bootstrapCanvas.pointsWide,
-                                         pointsHigh: bootstrapCanvas.pointsHigh,
-                                         movingTo: DisplayArrangement.origin(for: bootstrapCanvas.cgSize,
-                                                                             device: arrangementKey))
-                    }
+                    let rolledBack = await resizeInPlace(vd, pointsWide: bootstrapCanvas.pointsWide,
+                                                         pointsHigh: bootstrapCanvas.pointsHigh,
+                                                         arrangementKey: arrangementKey)
                     try ensureActiveDisplay(vd)
                     guard rolledBack else { throw error }
                     captureDisplay = try await findSCDisplay(
@@ -876,6 +867,50 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// constraints. Loops until the stream matches the latest hello, so a
     /// capability update that arrives mid-rebuild is not lost.
     private var reconfiguring = false
+    /// The rebuild waiting out a burst of hellos; replaced by each new one.
+    private var pendingReconfigure: Task<Void, Never>?
+    private var lastSelectionChange: Date?
+    /// When the latest selection change may be built: 25 ms after a lone
+    /// change, 150 ms after the last change of a burst. Confined to `queue`,
+    /// like the two above.
+    private var selectionSettlesAt = Date()
+
+    /// A lone change (a fold, a single rotation) rebuilds almost at once:
+    /// every millisecond here is a stale picture on the receiver. The 25 ms
+    /// grace lets a change a receiver announces in several hellos sent back
+    /// to back (a new refresh rate, then the new size) land as one rebuild.
+    /// A burst (a quick double rotation, a live window resize) waits until
+    /// it settles. `reconfigure` itself picks up hellos that land while it
+    /// runs, under the same rule.
+    private func scheduleReconfigure() {
+        // Part of the change already waiting out its grace: that rebuild
+        // reads the latest hello when it starts.
+        guard let wait = noteSelectionChange() else { return }
+        pendingReconfigure?.cancel()
+        pendingReconfigure = Task {
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            guard let current = self.lastHello else { return }
+            // Its own task: cancelling the wait must never abort a rebuild
+            // that already tore the old stream down.
+            Task { await self.reconfigure(current) }
+        }
+    }
+
+    /// Starts the settle clock for a selection change and returns its wait,
+    /// or nil when the change is part of one still inside its grace. Hellos
+    /// that land mid-rebuild, while no stream exists, only start the clock:
+    /// `reconfigure` builds them after its pass, once they settle.
+    private func noteSelectionChange() -> TimeInterval? {
+        let now = Date()
+        if let last = lastSelectionChange, now.timeIntervalSince(last) < 0.025 { return nil }
+        let isLoneChange = lastSelectionChange.map { now.timeIntervalSince($0) > 0.5 } ?? true
+        let wait: TimeInterval = isLoneChange ? 0.025 : 0.150
+        lastSelectionChange = now
+        selectionSettlesAt = now.addingTimeInterval(wait)
+        return wait
+    }
+
     private func reconfigure(_ info: PhoneInfo) async {
         guard !reconfiguring, !stopped else { return }
         reconfiguring = true
@@ -924,13 +959,28 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 await status("Stream reconfiguration failed: \(error.localizedDescription)")
                 return
             }
-            if let latest = lastHello,
-               streamSelectionInputsChanged(from: target, to: latest) || canvasNeedsRebuild {
-                canvasNeedsRebuild = false
-                target = latest
-                continue
+            guard let pending = lastHello,
+                  streamSelectionInputsChanged(from: target, to: pending) || canvasNeedsRebuild else { return }
+            // A burst that outlasts a pass (a Stage Manager drag) settles
+            // first, as in scheduleReconfigure: every pass rebuilds the
+            // display and can rearrange the Mac's windows, so jumping to each
+            // newest hello would rebuild at sizes the user only passes through.
+            await waitForSelectionToSettle()
+            guard let latest = lastHello,
+                  streamSelectionInputsChanged(from: target, to: latest) || canvasNeedsRebuild else { return }
+            canvasNeedsRebuild = false
+            target = latest
+        }
+    }
+
+    private func waitForSelectionToSettle() async {
+        while !stopped {
+            let settlesAt = await withCheckedContinuation { continuation in
+                queue.async { continuation.resume(returning: self.selectionSettlesAt) }
             }
-            return
+            let remaining = settlesAt.timeIntervalSinceNow
+            guard remaining > 0 else { return }
+            do { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) } catch { return }
         }
     }
 
@@ -987,12 +1037,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             || vd.scale != scale
         let didResize: Bool
         if dimensionsChanged {
-            didResize = await MainActor.run {
-                guard !self.stopped, self.virtualDisplay === vd else { return false }
-                return vd.resize(pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale,
-                                 movingTo: DisplayArrangement.origin(for: size,
-                                                                     device: arrangementKey))
-            }
+            didResize = await resizeInPlace(vd, pointsWide: pointsWide, pointsHigh: pointsHigh,
+                                            scale: scale, arrangementKey: arrangementKey)
         } else {
             didResize = true
         }
@@ -1016,14 +1062,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                   !(nsError.domain == "MacSender" && nsError.code == 4) else { throw error }
             Log.info("virtual display mode \(canvas.pixelsWide)x\(canvas.pixelsHigh) did not come online "
                 + "(\(error)) — rolling back to \(previous.pixelsWide)x\(previous.pixelsHigh)")
-            let rolledBack = await MainActor.run {
-                guard !self.stopped, self.virtualDisplay === vd else { return false }
-                return vd.resize(pointsWide: previous.pointsWide,
-                                 pointsHigh: previous.pointsHigh,
-                                 scale: previous.scale,
-                                 movingTo: DisplayArrangement.origin(for: previous.cgSize,
-                                                                     device: arrangementKey))
-            }
+            let rolledBack = await resizeInPlace(vd, pointsWide: previous.pointsWide,
+                                                 pointsHigh: previous.pointsHigh,
+                                                 scale: previous.scale,
+                                                 arrangementKey: arrangementKey)
             try ensureActiveDisplay(vd)
             guard rolledBack else { return false }
             return try await resumeExistingCanvas(vd, canvas: previous,
@@ -1079,6 +1121,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 + "\(canvas.pixelsWide)x\(canvas.pixelsHigh) (\(error))")
             return false
         }
+    }
+
+    /// Apply a new mode to this session's display, unless the session has
+    /// stopped or moved on to another display.
+    @MainActor
+    private func resizeInPlace(_ vd: VirtualDisplay, pointsWide: Int, pointsHigh: Int,
+                               scale: Int? = nil, arrangementKey: String) async -> Bool {
+        guard !stopped, virtualDisplay === vd else { return false }
+        let origin = DisplayArrangement.origin(for: CGSize(width: pointsWide, height: pointsHigh),
+                                               device: arrangementKey, resizing: vd.displayID)
+        return await vd.resize(pointsWide: pointsWide, pointsHigh: pointsHigh, scale: scale,
+                               movingTo: origin,
+                               stillCurrent: { !self.stopped && self.virtualDisplay === vd })
     }
 
     private func ensureActiveDisplay(_ display: VirtualDisplay) throws {
@@ -1361,6 +1416,9 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self?.stopUpgradeProbing()
             self?.captureRecoveryWork?.cancel()
             self?.captureRecoveryWork = nil
+            // Scheduled from hello handling, which runs on `queue` too.
+            self?.pendingReconfigure?.cancel()
+            self?.pendingReconfigure = nil
         }
         if let encoder { VTCompressionSessionInvalidate(encoder) }
         encoder = nil
@@ -1703,6 +1761,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             currentPathUsesWiFi = path.usesInterfaceType(.wifi)
             let names = path.availableInterfaces.map(\.name).joined(separator: ",")
             Log.info("connection path to \(endpointName): \(names) wired=\(wired) direct=\(currentPathDirectLink)")
+            // A Bonjour dial that lands on loopback went to a proxy on this
+            // Mac, not to the device (only a receiver on this same Mac, a
+            // dev setup, also looks like this).
+            if case .tcp(let endpoint) = transport, case .service = endpoint,
+               path.usesInterfaceType(.loopback) {
+                Log.info("connection to \(endpointName) goes through a proxy on this Mac, "
+                    + "which usually can't reach the device; bypass the local network in the proxy app")
+            }
             Task { @MainActor in self.onTransportPath?(wired) }
         }
         // -forceUpgradeProbe YES: dev knob — loopback runs never look like
@@ -1721,6 +1787,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     /// advertised addresses, or on the USB transport, it never fires a dial.
     private func startUpgradeProbing() {
         lastLoggedCandidates = []
+        lastLoggedProbeOutcomes = []
         upgradeTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 2.0, repeating: 10.0)
@@ -1800,12 +1867,14 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         probeRoundGeneration += 1
         let round = probeRoundGeneration
+        probeOutcomes = []
 
         for host in candidates.prefix(16) {
             let tcp = NWProtocolTCP.Options()
             tcp.noDelay = true
             let params = NWParameters(tls: nil, tcp: tcp)
             params.prohibitedInterfaceTypes = [.wifi, .cellular]
+            params.preferNoProxies = true   // as in connectTCP
             let probe = NWConnection(host: host, port: 9000, using: params)
             upgradeProbes.append(probe)
             probe.stateUpdateHandler = { [weak self] state in
@@ -1815,10 +1884,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                     if let path = probe.currentPath, !path.usesInterfaceType(.wifi) {
                         self.migrate(to: probe)
                     } else {
+                        self.probeOutcomes.append("\(host) ready over WiFi")
                         self.upgradeProbes.removeAll { $0 === probe }
                         probe.cancel()
                     }
                 case .failed, .waiting:
+                    let via = probe.currentPath?.availableInterfaces.first?.name ?? "-"
+                    self.probeOutcomes.append("\(host) \(state) via \(via)")
                     self.upgradeProbes.removeAll { $0 === probe }
                     probe.cancel()
                 default: break
@@ -1831,8 +1903,21 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // not cancel the new round's probes mid-dial.
         queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             guard let self, self.probeRoundGeneration == round else { return }
+            for probe in self.upgradeProbes {
+                // Name it like the other outcomes: the host, without the port.
+                let host: String
+                if case .hostPort(let h, _) = probe.endpoint { host = "\(h)" } else { host = "\(probe.endpoint)" }
+                self.probeOutcomes.append("\(host) no answer in 3s")
+            }
             self.upgradeProbes.forEach { $0.cancel() }
             self.upgradeProbes.removeAll()
+            // Same rule as the candidate line: log only a changed outcome,
+            // so a cable that never answers shows why without a line every 10s.
+            let outcomes = self.probeOutcomes.sorted()
+            if !outcomes.isEmpty, outcomes != self.lastLoggedProbeOutcomes {
+                self.lastLoggedProbeOutcomes = outcomes
+                Log.info("no cable path answered: " + outcomes.joined(separator: "; "))
+            }
         }
     }
 
@@ -1919,6 +2004,11 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // pre-dial was tried and only ever hung until its timeout, adding 2s
         // to every connect. becomeReady reports which path won.
         let params = NWParameters(tls: nil, tcp: options)
+        // The receiver is on the local network, never behind a proxy. A
+        // system proxy (Clash, Surge and the like set one) otherwise takes
+        // the dial: it connects to the proxy on loopback, the proxy can't
+        // reach the device, and the session resets every few seconds.
+        params.preferNoProxies = true
         let conn = NWConnection(to: endpoint, using: params)
         connection = conn
         // A dial to a withdrawn Bonjour service (receiver asleep or app
@@ -2510,17 +2600,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
                 if let continuation = helloContinuation {
                     helloContinuation = nil
                     continuation.resume(returning: info)
-                } else if stream != nil, let previous,
-                          streamSelectionInputsChanged(from: previous, to: info) {
-                    // Rebuild after a short debounce so a flurry of rotations
-                    // or capability updates settles into one selection.
-                    Task {
-                        try? await Task.sleep(nanoseconds: 300000000)
-                        guard let current = self.lastHello,
-                              !self.streamSelectionInputsChanged(from: info,
-                                                                 to: current) else { return }
-                        await self.reconfigure(info)
-                    }
+                } else if let previous, streamSelectionInputsChanged(from: previous, to: info) {
+                    if stream != nil { scheduleReconfigure() } else { _ = noteSelectionChange() }
                 }
             }
         case "touch":

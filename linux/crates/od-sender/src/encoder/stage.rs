@@ -1,7 +1,7 @@
 //! A convert stage in front of the encoder: large frames are converted from
-//! BGRA to the encoder's 4:2:0 format on their own thread, so frame N+1
-//! converts while frame N encodes. The capture lease is returned as soon as
-//! the conversion is done.
+//! the capture's RGB to the encoder's 4:2:0 format on their own thread, so
+//! frame N+1 converts while frame N encodes. The capture lease is returned
+//! as soon as the conversion is done.
 //!
 //! The stage sits between capture and the encoder's latest-wins slot as a
 //! [`FrameSink`] adapter and keeps the slot semantics: a busy stage converts
@@ -94,9 +94,9 @@ impl ConvertStage {
 
     fn target_for(&self, frame: &Frame) -> Option<Pixel> {
         let (w, _) = frame.dimensions();
-        let is_bgra = matches!(frame.buf, FrameBuf::Cpu { .. });
+        let is_cpu = matches!(frame.buf, FrameBuf::Cpu { .. });
         let target = *self.target.lock().unwrap_or_else(|e| e.into_inner());
-        target.filter(|_| is_bgra && w >= MIN_STAGE_WIDTH)
+        target.filter(|_| is_cpu && w >= MIN_STAGE_WIDTH)
     }
 
     /// Wrap the encoder's sink. The returned sink is called on the capture
@@ -160,7 +160,7 @@ fn run(rx: latest::Receiver<(Frame, Pixel)>, next: Arc<Mutex<FrameSink>>) {
             width,
             height,
             stride,
-            ..
+            format: source,
         } = &frame.buf
         else {
             continue;
@@ -193,7 +193,12 @@ fn run(rx: latest::Receiver<(Frame, Pixel)>, next: Arc<Mutex<FrameSink>>) {
             pool: pool.clone(),
         };
         let (c, _) = converter.as_mut().expect("built above");
-        if let Err(e) = c.convert(pixels, *stride, yuv.video.as_mut().expect("present")) {
+        if let Err(e) = c.convert(
+            pixels,
+            *stride,
+            *source,
+            yuv.video.as_mut().expect("present"),
+        ) {
             warn!("convert stage: {e:#}");
             continue;
         }

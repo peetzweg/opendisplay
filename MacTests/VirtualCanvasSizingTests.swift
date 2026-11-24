@@ -29,6 +29,36 @@ final class VirtualCanvasSizingTests: XCTestCase {
                        VirtualCanvasSize(pointsWide: 1_600, pointsHigh: 674))
         XCTAssertEqual(plan.descriptorMaxPixelsPerAxis, 10_240)
     }
+
+    func testPhysicalSizeFollowsCanvasOrientation() {
+        let landscape = VirtualCanvasSize(pointsWide: 1_920, pointsHigh: 1_080, scale: 1)
+        let portrait = VirtualCanvasSize(pointsWide: 393, pointsHigh: 852)
+
+        XCTAssertEqual(VirtualCanvasSizing.physicalSizeInMillimeters(for: landscape),
+                       CGSize(width: 208, height: 96))
+        XCTAssertEqual(VirtualCanvasSizing.physicalSizeInMillimeters(for: portrait),
+                       CGSize(width: 175, height: 380))
+    }
+
+    func testPortraitWidthIsHonouredAndReadsAsRetina() {
+        // macOS 27 ignores a declared width under ~166 mm and starts the
+        // display at 1x below ~147 ppi of declared width. The narrowest 2x
+        // desktop is 526 points (1,052 pixels) wide.
+        let narrowest = VirtualCanvasSize(pointsWide: 526, pointsHigh: 1_138)
+        let width = VirtualCanvasSizing.physicalSizeInMillimeters(for: narrowest).width
+        XCTAssertGreaterThanOrEqual(width, 170)
+        XCTAssertGreaterThanOrEqual(Double(narrowest.pixelsWide) / (width / 25.4), 150)
+    }
+
+    func testPhysicalSizeStaysAboveTheAreaMacOSRejects() {
+        // macOS 26.1 never brings the display online below roughly 160 cm²
+        // with the 8,192-pixel reservation; 147 x 68 mm (100 cm²) failed.
+        for canvas in [VirtualCanvasSize(pointsWide: 1_920, pointsHigh: 1_080),
+                       VirtualCanvasSize(pointsWide: 834, pointsHigh: 1_194)] {
+            let size = VirtualCanvasSizing.physicalSizeInMillimeters(for: canvas)
+            XCTAssertGreaterThanOrEqual(size.width * size.height, 19_000)
+        }
+    }
 }
 
 final class VirtualCanvasOneXTests: XCTestCase {

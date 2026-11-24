@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.28.0"
+version = "1.30.3"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/peetzweg/opendisplay"
@@ -50,7 +50,8 @@ gtk4 = { version = "0.11", features = ["v4_14"] }
 gst-plugin-gtk4 = { version = "0.15", features = ["wayland", "dmabuf", "gtk_v4_14"] }
 openh264 = { version = "0.9", features = ["source"] }
 # Encoder + swscale only; ffmpeg-next needs `format` to compile, never used.
-ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling"] }
+# 9.1 handles FFmpeg 9.1's new enums and requires the corrected CUDA bindings.
+ffmpeg-next = { version = "9.1", default-features = false, features = ["codec", "format", "software-scaling"] }
 
 # OpenH264 is C++ compiled by `cc` at the profile's opt-level; at -O0 it is
 # ~10x slower than release, which makes debug-build sender tests misleading.

@@ -81,7 +81,10 @@ async fn null_sink_receives_stream_and_adopts_new_sender() {
         report.adopted_over_live, 1,
         "third sender replaced the live second one: {report:?}"
     );
-    assert_eq!(report.welcomes, 3);
+    // The third sender proves itself by answering the provisional hello it
+    // got while parked, then hears the full one once adopted: two welcomes.
+    assert_eq!(report.welcomes, 4);
+    assert_eq!(s3.hellos, 2, "{s3:?}");
     assert!(
         report.video_frames >= s1.frames_sent + s3.frames_sent,
         "{report:?} vs {s1:?} {s3:?}"
@@ -159,6 +162,121 @@ async fn decodes_with_fakesink_when_a_decoder_is_installed() {
         "frames must reach the sink: rendered {rendered} of {}",
         s.frames_sent
     );
+}
+
+/// #387: after `reset` (every reconnect, every parameter-set change) the
+/// IDR that restarts decoding and the frames after it must share one
+/// timeline. A flush that reset the running time re-based the live pipeline
+/// asynchronously, so the IDR still carried the old running time and every
+/// later frame the new one; the decoder stamped all of them with the IDR's
+/// PTS and real sinks (GL, GTK) stopped presenting. fakesink does not care,
+/// so this checks the timestamps reaching the sink instead: `take_decode_ms`
+/// only reports frames whose PTS is not in the future.
+#[cfg(feature = "gstreamer")]
+#[test]
+fn frames_after_a_reset_stay_on_one_timeline() {
+    let mut video = match od_receiver::video::open(&VideoConfig {
+        sink: SinkKind::Fake,
+        decoder: "decodebin3".into(),
+        fullscreen: false,
+        output: None,
+        videoconvert: true,
+        gl: false,
+    }) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("skipping reset timeline test: {e:#}");
+            return;
+        }
+    };
+    let clip = std::fs::read(testdata("clip-320x180-30.h264")).unwrap();
+    let units = opendisplay_proto::video::access_units(&clip);
+    assert!(units[0].is_idr);
+    let play = |video: &mut Box<dyn od_receiver::video::VideoOutput>, secs: f64| {
+        let start = std::time::Instant::now();
+        for au in units.iter().cycle() {
+            if start.elapsed().as_secs_f64() >= secs {
+                break;
+            }
+            video.push(&au.annexb, au.is_idr).unwrap();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    };
+    // Long enough that the old running time is well ahead of a new one.
+    play(&mut video, 1.5);
+    std::thread::sleep(Duration::from_millis(200));
+    if video.poll_error().is_some() || video.take_decode_ms().is_empty() {
+        eprintln!("skipping reset timeline test: no frame decoded before the reset");
+        return;
+    }
+    video.reset().unwrap();
+    play(&mut video, 0.6);
+    std::thread::sleep(Duration::from_millis(200));
+    let after = video.take_decode_ms();
+    assert!(
+        after.len() >= 15,
+        "frames after the reset must reach the sink on the current timeline: {} did",
+        after.len()
+    );
+    assert!(
+        after.iter().all(|&ms| ms < 500.0),
+        "push -> sink times after the reset: {after:?}"
+    );
+}
+
+/// A connection that reads `hello` and leaves (#435's Tailscale probe, a
+/// §6.4 cable-upgrade probe that goes nowhere), or one that just sits
+/// there, does not end the live session: newcomers prove themselves with
+/// bytes first (§1).
+#[tokio::test]
+async fn silent_newcomers_leave_a_streaming_sender_alone() {
+    use tokio::io::AsyncReadExt;
+
+    let cfg = Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        hello: hello(),
+        cursor_udp: true,
+        stats_every: Duration::from_millis(500),
+    };
+    let rx = Receiver::bind(cfg, Box::new(NullOutput::default()))
+        .await
+        .unwrap();
+    let addr = rx.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(rx.run(stop_rx));
+
+    let sender = tokio::spawn(od_fake_sender::run(sender_opts(addr, 2.0)));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The probe: connect, read hello, close without a byte.
+    let mut probe = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut len = [0u8; 4];
+    probe.read_exact(&mut len).await.unwrap();
+    let mut payload = vec![0u8; u32::from_be_bytes(len) as usize];
+    probe.read_exact(&mut payload).await.unwrap();
+    let hello: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(hello["type"], "hello", "{hello}");
+    assert!(
+        hello.get("cursorPort").is_none(),
+        "no UDP flow before it owns the session: {hello}"
+    );
+    drop(probe);
+
+    // A newcomer that never says anything while the sender streams on.
+    let lurker = tokio::net::TcpStream::connect(addr).await.unwrap();
+
+    let s = sender.await.unwrap().unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    stop.send(true).unwrap();
+    let report = task.await.unwrap().unwrap();
+    drop(lurker);
+
+    assert_eq!(s.hellos, 1, "{s:?}");
+    assert!(s.frames_sent >= 110, "streamed to the end: {s:?}");
+    assert_eq!(report.connections, 3, "{report:?}");
+    assert_eq!(report.adopted_over_live, 0, "{report:?}");
+    assert_eq!(report.welcomes, 1, "{report:?}");
+    assert_eq!(report.video_frames, s.frames_sent, "{report:?} vs {s:?}");
 }
 
 /// `sleeping` before a suspend (logind in the binary, a fake here) and

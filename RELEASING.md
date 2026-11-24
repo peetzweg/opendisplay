@@ -44,9 +44,10 @@ release-please creates. There are no per-platform tags.
   tagged tree therefore builds with `cargo --locked`, and `linux-release.yml`
   refuses a tag that differs from the workspace version. `od-sender
   --version` and `od-receiver --version` print the tag. The Arch PKGBUILDs
-  use the version as `pkgver`; after the release, run
-  `linux/packaging/arch/opendisplay-sender/bump.sh X.Y.Z` (and the
-  receiver's) and commit the checksum and `.SRCINFO`.
+  use the version as `pkgver`; after the release, `arch-bump.yml` (called
+  from `release.yml`) runs `linux/packaging/arch/opendisplay-sender/bump.sh
+  X.Y.Z` (and the receiver's) and commits the checksum and `.SRCINFO` to
+  main.
 - **Android**: `versionName` is the tag, see below.
 
 The manifest's version must always be the latest released version. Never edit
@@ -98,7 +99,8 @@ One-time setup for the Play upload:
 
 ## Release impact record
 
-Copy this section into the release PR and fill it in before creating the tag.
+Fill this section in and post it as a comment on the release PR before
+merging it (release-please rewrites the PR body, so a comment keeps it).
 "Changed" means its source or assets changed. "Affected" includes behavior
 changed through shared code or a peer's protocol behavior. "Required" means
 users need that release to receive the fix or remain compatible.
@@ -242,7 +244,8 @@ A clean average does not excuse severe tail latency or recovery failures.
       update-feed errors, or permission regressions.
 - [ ] Confirm the download page, release assets, Sparkle feeds, and App Store or
       TestFlight version show the intended release.
-- [ ] Run `bump.sh X.Y.Z` for both Arch packages and commit the result (it
-      refuses to finish with a `SKIP` checksum).
+- [ ] Confirm the `bump-arch` job pointed both Arch PKGBUILDs on main at the
+      new tag; if it failed, run the "Arch PKGBUILD bump" workflow by hand
+      with the tag.
 - [ ] Keep the previous signed artifacts available as the rollback path and
       document any data or protocol state that prevents a safe downgrade.

@@ -11,6 +11,7 @@ mod latest;
 #[cfg(feature = "pipewire")]
 mod pipewire;
 mod session;
+mod tailscale;
 mod wayland;
 
 use std::net::SocketAddr;
@@ -194,6 +195,7 @@ fn resolve_receiver(
     connect: Option<SocketAddr>,
     name: Option<String>,
     wait: bool,
+    tailscale: bool,
 ) -> Result<Receiver> {
     let direct = |addr: SocketAddr| Receiver {
         addr,
@@ -214,7 +216,7 @@ fn resolve_receiver(
         }
     }
     let timeout = (!wait).then_some(Duration::from_secs(10));
-    let found = discover::find(to.as_deref(), timeout)?;
+    let found = discover::find(to.as_deref(), timeout, tailscale)?;
     if to.is_none() {
         info!(
             "using {} ({}), the only receiver found; choose one with --to <name>",
@@ -316,7 +318,8 @@ fn real_main() -> Result<i32> {
             let mut backend = detect::detect(&backend.request_with(config.capture))?;
             let rt = tokio::runtime::Runtime::new()?;
             let ran = rt.block_on(async {
-                let receiver = resolve_receiver(to, connect, name, wait)?;
+                let receiver =
+                    resolve_receiver(to, connect, name, wait, config.tailscale.unwrap_or(true))?;
                 session::run(
                     receiver.addr,
                     backend.as_mut(),
@@ -352,7 +355,13 @@ fn real_main() -> Result<i32> {
             ran?;
         }
         Cmd::List { timeout, json } => {
-            let found = discover::list(Duration::from_secs_f64(timeout))?;
+            // `list` worked without a config file before; a broken one does
+            // not stop it, it only loses the `tailscale` setting.
+            let tailscale = load_config(args.config.as_deref())
+                .ok()
+                .and_then(|c| c.tailscale)
+                .unwrap_or(true);
+            let found = discover::list(Duration::from_secs_f64(timeout), tailscale)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&found)?);
                 return Ok(if found.is_empty() { 1 } else { 0 });

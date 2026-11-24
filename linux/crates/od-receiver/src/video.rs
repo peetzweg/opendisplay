@@ -168,6 +168,13 @@ pub mod gst_out {
         generation: u64,
         pushed: u64,
         warned_stall: bool,
+        /// `rendered` as last seen by `check_frozen`, the push count and the
+        /// time when it last moved.
+        last_rendered: u64,
+        pushed_at_render: u64,
+        last_render_at: std::time::Instant,
+        /// Rebuilds by `check_frozen` since a frame was last shown.
+        frozen_rebuilds: u32,
     }
 
     fn launch_description(cfg: &VideoConfig) -> String {
@@ -272,6 +279,10 @@ pub mod gst_out {
                 generation: 0,
                 pushed: 0,
                 warned_stall: false,
+                last_rendered: 0,
+                pushed_at_render: 0,
+                last_render_at: std::time::Instant::now(),
+                frozen_rebuilds: 0,
             })
         }
 
@@ -401,8 +412,9 @@ pub mod gst_out {
         /// IDR, with nothing shown, demote it and rebuild so decodebin3 plugs
         /// the next; say so once if there is none.
         fn check_stall(&mut self) -> Result<()> {
-            if self.rendered.load(Ordering::Relaxed) != 0 {
-                return Ok(());
+            let rendered = self.rendered.load(Ordering::Relaxed);
+            if rendered != 0 {
+                return self.check_frozen(rendered);
             }
             let idr_late = self
                 .first_idr_at
@@ -438,6 +450,47 @@ pub mod gst_out {
             Ok(())
         }
 
+        /// A pipeline that showed frames and then stops while frames keep
+        /// coming does not recover by itself, and the leaky present queue
+        /// keeps it off the bus (#387: a timestamp jump after a flush). After
+        /// 15 frames and a second with nothing new shown, build a fresh
+        /// pipeline; the caller asks for an IDR. A rebuild that shows nothing
+        /// either (a sink broken for good) doubles the wait before the next
+        /// one (`frozen_wait`), so it does not rebuild every second forever.
+        fn check_frozen(&mut self, rendered: u64) -> Result<()> {
+            if rendered != self.last_rendered {
+                self.last_rendered = rendered;
+                self.pushed_at_render = self.pushed;
+                self.last_render_at = std::time::Instant::now();
+                self.frozen_rebuilds = 0;
+                return Ok(());
+            }
+            let pushed = self.pushed - self.pushed_at_render;
+            let idle = self.last_render_at.elapsed();
+            if pushed < 15 || idle < frozen_wait(self.frozen_rebuilds) {
+                return Ok(());
+            }
+            self.frozen_rebuilds = self.frozen_rebuilds.saturating_add(1);
+            let next = frozen_wait(self.frozen_rebuilds).as_secs();
+            if self.frozen_rebuilds == 1 {
+                warn!(
+                    "{pushed} frames pushed in {:.1} s and none shown after {rendered} were; rebuilding the pipeline (again in {next} s if that shows nothing either)",
+                    idle.as_secs_f64()
+                );
+            } else {
+                debug!(
+                    "still nothing shown: rebuild {} after {:.1} s, next in {next} s",
+                    self.frozen_rebuilds,
+                    idle.as_secs_f64()
+                );
+            }
+            self.recreate()?;
+            self.pushed_at_render = self.pushed;
+            self.last_render_at = std::time::Instant::now();
+            self.pending_error = Some("presentation stalled".into());
+            Ok(())
+        }
+
         /// The factory of the video decoder decodebin3 plugged, if any.
         fn decoder_factory(&self) -> Option<gst::ElementFactory> {
             let mut it = self.pipeline.iterate_recurse();
@@ -468,6 +521,12 @@ pub mod gst_out {
             }
             self.decoder_name.clone()
         }
+    }
+
+    /// How long `check_frozen` waits for a new frame after `rebuilds`
+    /// consecutive rebuilds that showed nothing: 1 s, doubling, at most 32 s.
+    pub(crate) fn frozen_wait(rebuilds: u32) -> std::time::Duration {
+        std::time::Duration::from_secs(1 << rebuilds.min(5))
     }
 
     /// H.264 decoders that work wherever they are installed. V4L2 stateless
@@ -543,8 +602,16 @@ pub mod gst_out {
         fn reset(&mut self) -> Result<()> {
             // A flush drops everything queued in the parser, decoder and the
             // present queue; the next IDR (with SPS/PPS) restarts decoding.
+            //
+            // Without resetting the running time (#387): a reset-time flush
+            // makes the live pipeline pick a new base time asynchronously,
+            // so the IDR pushed right after it is stamped on the old
+            // timeline and every later frame on the new one. The decoder
+            // then gives all of them the IDR's PTS and GL/GTK sinks stop
+            // presenting. Timestamps here only measure latency (sinks run
+            // with sync=false), so one continuous timeline is all they need.
             self.pipeline.send_event(gst::event::FlushStart::new());
-            self.pipeline.send_event(gst::event::FlushStop::new(true));
+            self.pipeline.send_event(gst::event::FlushStop::new(false));
             Ok(())
         }
 
@@ -630,5 +697,18 @@ pub mod gst_out {
         fn drop(&mut self) {
             let _ = self.pipeline.set_state(gst::State::Null);
         }
+    }
+}
+
+#[cfg(all(test, feature = "gstreamer"))]
+mod tests {
+    use super::gst_out::frozen_wait;
+    use std::time::Duration;
+
+    #[test]
+    fn frozen_wait_doubles_to_a_cap() {
+        let waits: Vec<u64> = (0..8).map(|n| frozen_wait(n).as_secs()).collect();
+        assert_eq!(waits, [1, 2, 4, 8, 16, 32, 32, 32]);
+        assert_eq!(frozen_wait(u32::MAX), Duration::from_secs(32));
     }
 }

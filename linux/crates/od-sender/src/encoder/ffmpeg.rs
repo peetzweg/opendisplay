@@ -1,6 +1,7 @@
 //! H.264 through the system FFmpeg: libx264 in software, or a V4L2 mem2mem
-//! hardware encoder. Capture hands us BGRA; swscale converts it to the
-//! encoder's 4:2:0 format with BT.709 limited-range coefficients, which the
+//! hardware encoder. Capture hands us 4-byte RGB pixels in the compositor's
+//! byte order ([`PixelFormat`]); swscale converts them to the encoder's
+//! 4:2:0 format with BT.709 limited-range coefficients, which the
 //! stream's VUI announces so the receiver converts back the same way
 //! ([`Converter`], in parallel bands).
 
@@ -17,6 +18,7 @@ use opendisplay_proto::video::{AccessUnit, NalType, access_units, nal_units};
 use super::convert::{Converter, band_count};
 use super::stage::{YuvFrame, new_video};
 use super::{Encoded, EncoderSettings};
+use crate::backend::PixelFormat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -134,13 +136,15 @@ impl FfmpegEncoder {
 
     pub fn encode(
         &mut self,
-        bgra: &[u8],
+        pixels: &[u8],
         stride: u32,
+        format: PixelFormat,
         force_idr: bool,
         captured_at: Instant,
     ) -> Result<Vec<Encoded>> {
         let t0 = Instant::now();
-        self.convert.convert(bgra, stride, &mut self.yuv)?;
+        self.convert
+            .convert(pixels, stride, format, &mut self.yuv)?;
         let mut yuv = std::mem::replace(&mut self.yuv, ff::frame::Video::empty());
         let out = self.submit(&mut yuv, force_idr, captured_at, t0);
         self.yuv = yuv;
