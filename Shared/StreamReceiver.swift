@@ -1115,7 +1115,15 @@ final class StreamReceiver: ObservableObject {
                 self.lastDataReceived = Date()
                 self.bytesThisWindow += data.count
                 self.buffer.append(data)
-                self.drainFrames()
+                guard self.drainFrames() else {
+                    // A length field no real frame comes near: drop the peer
+                    // instead of buffering whatever it keeps sending.
+                    Log.info("frame length over \(Self.maxFrameLength >> 20) MB — closing the connection")
+                    self.buffer.removeAll()
+                    conn.cancel()
+                    self.setConnected(false)
+                    return
+                }
             }
             if let error {
                 Log.info("receive error: \(error)")
@@ -1130,12 +1138,19 @@ final class StreamReceiver: ObservableObject {
         }
     }
 
-    private func drainFrames() {
+    /// Largest frame body accepted from the wire. A 5K HEVC keyframe at the
+    /// highest bitrate is a few MB; anything near this is not a real frame.
+    static let maxFrameLength = 64 << 20
+
+    /// Returns false when a frame announces a length over `maxFrameLength`.
+    @discardableResult
+    private func drainFrames() -> Bool {
         // Cursor-based drain so we only compact the buffer once per batch.
         var cursor = buffer.startIndex
         while buffer.distance(from: cursor, to: buffer.endIndex) >= 4 {
             let len = buffer[cursor..<buffer.index(cursor, offsetBy: 4)]
                 .withUnsafeBytes { Int(UInt32(bigEndian: $0.loadUnaligned(as: UInt32.self))) }
+            if len > Self.maxFrameLength { return false }
             guard buffer.distance(from: cursor, to: buffer.endIndex) >= 4 + len else { break }
             let start = buffer.index(cursor, offsetBy: 4)
             let end = buffer.index(start, offsetBy: len)
@@ -1143,6 +1158,7 @@ final class StreamReceiver: ObservableObject {
             cursor = end
         }
         buffer.removeSubrange(buffer.startIndex..<cursor)
+        return true
     }
 
     // MARK: - Annex B -> CMSampleBuffer
