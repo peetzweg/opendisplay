@@ -220,6 +220,8 @@ A clean average does not excuse severe tail latency or recovery failures.
       `od-sender --version` from a tarball prints the release version.
 - [ ] Both DMGs and contained apps pass signature, notarization, and Gatekeeper
       checks.
+- [ ] Each DMG opens to the install window: the app on the left and the
+      Applications alias on the laptop's screen, with both labels readable.
 - [ ] The release contains `OpenDisplay-Android.apk` and its `.sha256`,
       `apksigner verify --print-certs` shows the release certificate (the same
       one as every earlier release), and the APK installs over the previous
