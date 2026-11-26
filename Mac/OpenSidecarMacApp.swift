@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hand the updater to the control window, which is built outside the
         // SwiftUI App scene (NSHostingView), so it can offer the same button.
         MainWindow.updater = updater
+        Task { await AppLanguagePack.shared.load() }
         let presentation = SenderController.shared.presentation
         NSApp.setActivationPolicy(presentation == .dock ? .regular : .accessory)
         if presentation != .menuBar {
@@ -1022,6 +1023,7 @@ final class PermissionMonitor: ObservableObject {
 
 struct ContentView: View {
     @ObservedObject var controller: SenderController
+    @ObservedObject private var language = AppLanguagePack.shared
     @StateObject private var permissions = PermissionMonitor()
     // Optional so the view still compiles/previews without an updater (e.g.
     // if Sparkle ever fails to start); the button just disables itself then.
@@ -1037,13 +1039,13 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("OpenDisplay")
                         .font(.title3.bold())
-                    Text("Your iPads, iPhones and Macs as extra displays")
+                    Text(language.text("Your iPads, iPhones and Macs as extra displays"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 if controller.running {
-                    Button("Disconnect All") { controller.disconnectAll() }
+                    Button(language.text("Disconnect All")) { controller.disconnectAll() }
                         .controlSize(.large)
                 }
             }
@@ -1053,9 +1055,9 @@ struct ContentView: View {
 
             // Settings
             Form {
-                Section("Devices") {
+                Section(language.text("Devices")) {
                     if controller.deviceEntries.isEmpty {
-                        Text("No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network.")
+                        Text(language.text("No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1079,7 +1081,7 @@ struct ContentView: View {
                                 }
                                 Spacer()
                                 if let target = entry.preferredTarget {
-                                    Button("Connect") {
+                                    Button(language.text("Connect")) {
                                         controller.connect(to: target, userInitiated: true)
                                     }
                                     .controlSize(.small)
@@ -1089,60 +1091,60 @@ struct ContentView: View {
                     }
                 }
 
-                Picker("Mode", selection: $controller.mode) {
-                    Text("Extend").tag(CaptureMode.extend)
-                    Text("Mirror").tag(CaptureMode.mirror)
+                Picker(language.text("Mode"), selection: $controller.mode) {
+                    Text(language.text("Extend")).tag(CaptureMode.extend)
+                    Text(language.text("Mirror")).tag(CaptureMode.mirror)
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: controller.mode) { controller.restartAll() }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Picker("Quality", selection: $controller.quality) {
+                    Picker(language.text("Quality"), selection: $controller.quality) {
                         ForEach(StreamQuality.allCases, id: \.self) { q in
-                            Text(q.label).tag(q)
+                            Text(language.text(String.LocalizationValue(stringLiteral: q.label))).tag(q)
                         }
                     }
                     .onChange(of: controller.quality) { controller.restartAll() }
-                    Text(controller.quality.explanation)
+                    Text(language.text(String.LocalizationValue(stringLiteral: controller.quality.explanation)))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Picker("Show app in", selection: $controller.presentation) {
+                    Picker(language.text("Show app in"), selection: $controller.presentation) {
                         ForEach(AppPresentation.allCases, id: \.self) { p in
-                            Text(p.label).tag(p)
+                            Text(language.text(String.LocalizationValue(stringLiteral: p.label))).tag(p)
                         }
                     }
                     if controller.presentation == .background {
-                        Text("No menu bar or Dock icon — streaming keeps running. Open the OpenDisplay app again (Spotlight/Finder) to show this window.")
+                        Text(language.text("No menu bar or Dock icon — streaming keeps running. Open the OpenDisplay app again (Spotlight/Finder) to show this window."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                LabeledContent("Display layout") {
-                    Button("Arrange Displays…") {
+                LabeledContent(language.text("Display layout")) {
+                    Button(language.text("Arrange Displays…")) {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.Displays-Settings.extension") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     .controlSize(.small)
                 }
-                .help("Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device.")
+                .help(language.text("Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device."))
 
-                Section("Permissions") {
+                Section(language.text("Permissions")) {
                     permissionRow(
-                        "Screen Recording",
+                        language.text("Screen Recording"),
                         granted: permissions.screenRecording,
-                        help: "Required to capture the display.",
+                        help: language.text("Required to capture the display."),
                         anchor: "Privacy_ScreenCapture",
                         request: { permissions.requestScreenRecording() }
                     )
                     permissionRow(
-                        "Accessibility",
+                        language.text("Accessibility"),
                         granted: permissions.accessibility,
-                        help: "Required for touch input from the device.",
+                        help: language.text("Required for touch input from the device."),
                         anchor: "Privacy_Accessibility",
                         request: { permissions.requestAccessibility() }
                     )
@@ -1150,12 +1152,12 @@ struct ContentView: View {
                     // infer from discovery: a blocked browse is a definite no,
                     // an empty one may just mean no receiver is open.
                     permissionRow(
-                        "Local Network",
+                        language.text("Local Network"),
                         granted: !controller.discovered.isEmpty,
                         uncertain: controller.discovered.isEmpty && !controller.localNetworkDenied,
                         help: controller.localNetworkDenied
-                            ? "Off for OpenDisplay on this Mac, so WiFi mode finds no devices. Allow OpenDisplay under Privacy & Security → Local Network."
-                            : "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
+                            ? language.text("Off for OpenDisplay on this Mac, so WiFi mode finds no devices. Allow OpenDisplay under Privacy & Security → Local Network.")
+                            : language.text("Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there."),
                         anchor: "Privacy_LocalNetwork"
                     )
                 }
@@ -1172,28 +1174,32 @@ struct ContentView: View {
                 Circle()
                     .fill(controller.running ? .green : .secondary.opacity(0.5))
                     .frame(width: 9, height: 9)
-                Text(controller.running
-                     ? "\(controller.sessions.count) device\(controller.sessions.count == 1 ? "" : "s") connected"
-                     : "Idle")
+                Text(connectionSummary)
                     .font(.callout)
                     .lineLimit(1)
                 Spacer()
                 // Support affordance: bug reports are much easier to act on
                 // with the log attached, and users shouldn't have to be told a
                 // filesystem path to find it.
-                Button("Logs") { Log.revealInFinder() }
+                Button(language.text("Logs")) { Log.revealInFinder() }
                     .controlSize(.small)
-                    .help("Reveal the OpenDisplay log files in Finder")
+                    .help(language.text("Reveal the OpenDisplay log files in Finder"))
                 if let updater {
-                    CheckForUpdatesView(updater: updater)
+                    CheckForUpdatesView(updater: updater, title: language.text("Check for Updates…"))
                 }
-                Button("Quit") { NSApp.terminate(nil) }
+                Button(language.text("Quit")) { NSApp.terminate(nil) }
                     .controlSize(.small)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
         .frame(width: 440, height: 540)
+    }
+
+    private var connectionSummary: String {
+        guard controller.running else { return language.text("Idle") }
+        let count = controller.sessions.count
+        return language.text(count == 1 ? "1 device connected" : "\(count) devices connected")
     }
 
     @ViewBuilder
@@ -1215,11 +1221,11 @@ struct ContentView: View {
             Spacer()
             if uncertain || !granted {
                 if let request {
-                    Button("Grant…") { request() }
+                    Button(language.text("Grant…")) { request() }
                         .controlSize(.small)
-                        .help("Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under \(title) in System Settings — flip the toggle there.")
+                        .help(language.text("Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under \(title) in System Settings — flip the toggle there."))
                 }
-                Button("Open Settings") {
+                Button(language.text("Open Settings")) {
                     PermissionMonitor.openPrivacyPane(anchor)
                 }
                 .controlSize(.small)
@@ -1233,6 +1239,7 @@ struct ContentView: View {
 struct SessionRow: View {
     let title: String
     @ObservedObject var session: DeviceSession
+    @ObservedObject private var language = AppLanguagePack.shared
     let controller: SenderController
     @State private var confirmingShutdown = false
     @State private var choosingDisplaySize = false
@@ -1248,6 +1255,40 @@ struct SessionRow: View {
         return .orange
     }
 
+    private var localizedStatus: String {
+        // Keep the source status for diagnostics and statusColor. Translate
+        // the presentation here without changing the session or its logs.
+        let status = session.status
+        if status.hasPrefix("Extending to ") {
+            return language.text("Extending to \(String(status.dropFirst("Extending to ".count)))")
+        }
+        if status.hasPrefix("Mirroring to ") {
+            return language.text("Mirroring to \(String(status.dropFirst("Mirroring to ".count)))")
+        }
+        if status.hasPrefix("Connected to ") {
+            return language.text("Connected to \(String(status.dropFirst("Connected to ".count)))")
+        }
+        if status.hasPrefix("Connection lost — retrying for "), status.hasSuffix("s…") {
+            let seconds = status.dropFirst("Connection lost — retrying for ".count).dropLast("s…".count)
+            return language.text("Connection lost — retrying for \(String(seconds))s…")
+        }
+        if status.hasPrefix("Failed: ") {
+            return language.text("Failed: \(String(status.dropFirst("Failed: ".count)))")
+        }
+        switch status {
+        case "Starting…", "Screen Recording permission needed — see Permissions below",
+             "Preparing virtual display…", "Display blocked by saved macOS state — trying a fresh identity…",
+             "Extending — grant Accessibility for touch input", "Capture could not be restarted",
+             "Waiting for the device to connect…", "Device found — open the OpenDisplay app on it…",
+             "Waiting for a USB device — plug in the iPhone or iPad…",
+             "Waiting for the Android device — plug it in…", "Unlock the Android device to connect over USB…",
+             "Install OpenDisplay on the Android device and allow it to use the USB accessory":
+            return language.text(String.LocalizationValue(stringLiteral: status))
+        default:
+            return status
+        }
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Circle()
@@ -1255,7 +1296,7 @@ struct SessionRow: View {
                 .frame(width: 9, height: 9)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                Text("\(session.transportLabel) · \(session.status)")
+                Text("\(session.transportLabel) · \(localizedStatus)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -1264,9 +1305,9 @@ struct SessionRow: View {
             // A live session recovers on its own (liveness watchdog, redial,
             // transport failover), so only a failed start gets a button.
             if session.failed {
-                Button("Retry") { controller.retry(session) }
+                Button(language.text("Retry")) { controller.retry(session) }
                     .controlSize(.small)
-                    .help("Start this connection over")
+                    .help(language.text("Start this connection over"))
             }
             if session.powerActions.contains(.shutdown) {
                 Button {
@@ -1275,11 +1316,11 @@ struct SessionRow: View {
                     Image(systemName: "power")
                 }
                 .controlSize(.small)
-                .help("Shut down \(title)")
-                .confirmationDialog("Shut down \(title) now?", isPresented: $confirmingShutdown) {
-                    Button("Shut Down", role: .destructive) { session.sender.requestPower(.shutdown) }
+                .help(language.text("Shut down \(title)"))
+                .confirmationDialog(language.text("Shut down \(title) now?"), isPresented: $confirmingShutdown) {
+                    Button(language.text("Shut Down"), role: .destructive) { session.sender.requestPower(.shutdown) }
                 } message: {
-                    Text("Apps on it with unsaved changes can still stop the shutdown.")
+                    Text(language.text("Apps on it with unsaved changes can still stop the shutdown."))
                 }
             }
             if !session.displaySizeOutcomes.isEmpty {
@@ -1289,12 +1330,12 @@ struct SessionRow: View {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                 }
                 .controlSize(.small)
-                .help("Display size of \(title)")
+                .help(language.text("Display size of \(title)"))
                 .popover(isPresented: $choosingDisplaySize, arrowEdge: .bottom) {
                     DisplaySizePicker(session: session)
                 }
             }
-            Button("Disconnect") { controller.disconnect(session) }
+            Button(language.text("Disconnect")) { controller.disconnect(session) }
                 .controlSize(.small)
         }
     }
@@ -1305,16 +1346,17 @@ struct SessionRow: View {
 @MainActor
 struct DisplaySizePicker: View {
     @ObservedObject var session: DeviceSession
+    @ObservedObject private var language = AppLanguagePack.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Display size").font(.headline)
-            Picker("Display size", selection: Binding(
+            Text(language.text("Display size")).font(.headline)
+            Picker(language.text("Display size"), selection: Binding(
                 get: { session.displaySize },
                 set: { session.setDisplaySize($0) })) {
                 ForEach(session.displaySizeOutcomes, id: \.choice) { outcome in
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(outcome.choice.title)
+                        Text(language.text(String.LocalizationValue(stringLiteral: outcome.choice.title)))
                         Text(caption(for: outcome))
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1334,7 +1376,10 @@ struct DisplaySizePicker: View {
     private func caption(for outcome: DisplaySizeOutcome) -> String {
         let sameAsDefault = outcome.choice != .default
             && outcome.desktop == session.displaySizeOutcomes.first(where: { $0.choice == .default })?.desktop
-        return outcome.caption + (sameAsDefault ? " (same as Default)" : "")
+        let width = String(outcome.desktop.pointsWide)
+        let height = String(outcome.desktop.pointsHigh)
+        let size = language.text("Looks like \(width) × \(height)")
+        return sameAsDefault ? language.text("\(size) (same as Default)") : size
     }
 }
 

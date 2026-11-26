@@ -1,0 +1,104 @@
+/* OpenDisplay macOS sender. Simplified Chinese, revision 1.
+   Based on the translation by wlt743 in peetzweg/opendisplay #491:
+   https://github.com/peetzweg/opendisplay/pull/491
+   Keep each format argument's type and position aligned with its source key. */
+
+/* MARK: Control panel */
+
+"Your iPads, iPhones and Macs as extra displays" = "把你的 iPad、iPhone 和 Mac 变成扩展显示器";
+"Devices" = "设备";
+"No devices found — plug one in via USB, or open the OpenDisplay app on a device on this WiFi network." = "没有找到设备——用 USB 线连一台，或在同一个 Wi-Fi 网络里的设备上打开 OpenDisplay。";
+"Connect" = "连接";
+"Disconnect" = "断开";
+"Disconnect All" = "全部断开";
+"Retry" = "重试";
+"Start this connection over" = "重新建立这条连接";
+
+/* MARK: Capture mode and quality */
+
+"Mode" = "模式";
+"Extend" = "扩展";
+"Mirror" = "镜像";
+"Quality" = "画质";
+"Best" = "最佳";
+"Balanced" = "均衡";
+"Fast" = "流畅";
+"Highest safe detail for this sender and display." = "使用这台 Mac 和显示设备能稳定支持的最高画质。";
+"Lower capture resolution for less latency and bandwidth." = "适当降低采集分辨率，减少延迟和带宽占用。";
+"Lowest latency and bandwidth, with a softer image. Good for WiFi." = "优先降低延迟和带宽占用，适合 Wi-Fi 连接。";
+
+/* MARK: Presentation and display arrangement */
+
+"Show app in" = "App 显示在";
+"Menu bar" = "菜单栏";
+"Dock" = "程序坞";
+"Background only" = "仅后台";
+"No menu bar or Dock icon — streaming keeps running. Open the OpenDisplay app again (Spotlight/Finder) to show this window." = "没有菜单栏或程序坞图标——投屏仍在运行。再次打开 OpenDisplay（聚焦搜索或访达）就能显示这个窗口。";
+"Display layout" = "显示器排列";
+"Arrange Displays…" = "排列显示器…";
+"Opens System Settings → Displays, where you can position the extended displays relative to your Mac screen (Arrange…). Each device shows up as its own display, named after the device." = "打开「系统设置 → 显示器」，在那里用「排列…」把扩展显示器摆到相对 Mac 屏幕的位置。每台设备都会作为一块显示器出现，名字就是设备名。";
+
+/* MARK: Permissions */
+
+"Permissions" = "权限";
+"Screen Recording" = "屏幕录制";
+"Required to capture the display." = "采集画面所必需。";
+"Accessibility" = "辅助功能";
+"Required for touch input from the device." = "需要此权限才能使用接收设备的触控输入。";
+"Local Network" = "本地网络";
+"Grant…" = "授权…";
+"Ask macOS for this permission. If the system dialog was already dismissed once, this registers the app under %@ in System Settings — flip the toggle there." = "向 macOS 申请这项权限。如果系统弹窗之前被关掉过，这一步会把 App 登记到「设置 → %@」里，去那里把开关打开。";
+"Open Settings" = "打开设置";
+"Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there." = "Wi-Fi 模式需要。如果设备列表里没有设备，请在这台 Mac 和那台设备上分别到「隐私与安全性 → 本地网络」里允许 OpenDisplay，并让那台设备上的 OpenDisplay 保持打开。";
+"Off for OpenDisplay on this Mac, so WiFi mode finds no devices. Allow OpenDisplay under Privacy & Security → Local Network." = "这台 Mac 未向 OpenDisplay 授予本地网络权限，所以 Wi-Fi 模式找不到设备。请到「隐私与安全性 → 本地网络」里允许 OpenDisplay。";
+
+/* MARK: Session row */
+
+"Idle" = "空闲";
+"1 device connected" = "1 台设备已连接";
+"%lld devices connected" = "%lld 台设备已连接";
+"Shut Down" = "关机";
+"Shut down %@" = "将 %@ 关机";
+"Shut down %@ now?" = "现在将 %@ 关机？";
+"Apps on it with unsaved changes can still stop the shutdown." = "上面有未保存改动的 App 仍可阻止这次关机。";
+"Display size" = "显示尺寸";
+"Display size of %@" = "%@ 的显示尺寸";
+
+/* MARK: Status line */
+
+"Starting…" = "正在启动…";
+"Preparing virtual display…" = "正在准备虚拟显示器…";
+"Display blocked by saved macOS state — trying a fresh identity…" = "显示器被 macOS 记住的旧状态挡住了——正在换一个新身份重试…";
+"Screen Recording permission needed — see Permissions below" = "需要屏幕录制权限——见下方「权限」";
+"Extending — grant Accessibility for touch input" = "正在扩展——请授权辅助功能以使用触摸输入";
+"Connected to %@" = "已连接到 %@";
+"Capture could not be restarted" = "无法重新启动画面采集";
+
+/* MARK: Footer, logs, updates */
+
+"Logs" = "日志";
+"Reveal the OpenDisplay log files in Finder" = "在访达中显示 OpenDisplay 的日志文件";
+"Quit" = "退出";
+"Check for Updates…" = "检查更新…";
+
+/* MARK: Connection details */
+
+"Extending to %@" = "正在扩展到 %@";
+"Mirroring to %@" = "正在镜像到 %@";
+"Connection lost — retrying for %@s…" = "连接已断开，正在尝试重连（%@ 秒）…";
+"Failed: %@" = "连接失败：%@";
+"Waiting for the device to connect…" = "正在等待设备连接…";
+"Device found — open the OpenDisplay app on it…" = "已找到设备，请在设备上打开 OpenDisplay…";
+"Waiting for a USB device — plug in the iPhone or iPad…" = "正在等待 USB 设备，请连接 iPhone 或 iPad…";
+"Waiting for the Android device — plug it in…" = "正在等待 Android 设备，请用 USB 线连接…";
+"Unlock the Android device to connect over USB…" = "请解锁 Android 设备以通过 USB 连接…";
+"Install OpenDisplay on the Android device and allow it to use the USB accessory" = "请在 Android 设备上安装 OpenDisplay 并允许它使用 USB 配件";
+
+/* MARK: Display sizes */
+
+"Larger Text" = "较大文字";
+"Default" = "默认";
+"More Space" = "更多空间";
+"Native (1x)" = "原始分辨率（1×）";
+"Looks like %@ × %@" = "显示为 %@ × %@";
+"%@ (same as Default)" = "%@（与默认相同）";

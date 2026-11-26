@@ -151,6 +151,7 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - MacTests
+      - Mac/AppLanguagePack.swift
       - Mac/DisplayArrangement.swift
       - Mac/OriginRestore.swift
       - Mac/StreamConfiguration.swift
