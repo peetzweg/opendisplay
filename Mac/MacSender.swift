@@ -360,6 +360,10 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     #endif
     /// Bitrate the encoder was configured with; refinement restores it.
     private var baseBitrate = 0
+    /// The Mac's screen is locked: the receiver shows black instead of the
+    /// last frame, and no frame is sent until unlock (`queue` only).
+    private var blankedForLock = false
+    private var lockObservers: [NSObjectProtocol] = []
 
     init(transport: SenderTransport, name: String, mode: CaptureMode,
          quality: StreamQuality = .best, displaySerial: UInt32 = 0x0001,
@@ -383,6 +387,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             monitorsStarted = true
             schedulePing()
             scheduleWatchdog()
+            observeScreenLock()
         }
 
         // Screen Recording permission: poll until granted. No auto-prompt at
@@ -1396,6 +1401,8 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stop() {
+        lockObservers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
+        lockObservers = []
         stopped = true
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
@@ -1557,8 +1564,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         // E.g. display sleep can tear the virtual display down underneath the
         // stream — rebuild instead of sitting dead until an app restart.
         guard !stopped, mode == .extend else { return }
+        // Display sleep that locks the Mac stops capture a moment before the
+        // lock notification arrives, and teardown clears the configuration
+        // the lock frame needs. Blank now, with the configuration in hand.
+        let lastConfiguration = activeStreamConfigurationSnapshot
+        let consoleGone = !consoleCanCapture
         invalidateCapturePipeline()
         self.stream = nil
+        if consoleGone {
+            queue.async { [weak self] in
+                guard let self, !self.blankedForLock else { return }
+                Log.info("capture stopped with the display asleep or locked — blanking before the lock arrives")
+                self.blankForLock(configuration: lastConfiguration)
+            }
+        }
         scheduleCaptureRecovery()
     }
 
@@ -1594,6 +1613,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         if waitingForConsole {
             waitingForConsole = false
             Log.info("console is back — resuming capture recovery")
+        }
+        // Blanked by a display sleep without a lock: no unlock notification
+        // will lift it, the console coming back does.
+        if blankedForLock {
+            blankedForLock = false
+            needsKeyframe = true
+            Log.info("console is back — lifting the lock frame")
         }
         captureRecoveryInFlight = true
         // Does our virtual display still exist? CGDisplayBounds returns a
@@ -2243,7 +2269,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             }
             // A reconnect on a static screen produces no capture frames, so
             // the receiver would stay black — replay the last frame as IDR.
-            if self.connectionReady, self.needsKeyframe,
+            if self.connectionReady, self.needsKeyframe, !self.blankedForLock,
                Date().timeIntervalSince(self.lastCaptureAt) > 1,
                 let pixelBuffer = self.lastPixelBuffer {
                 Log.info("static screen after reconnect to \(self.endpointName) — replaying last frame as keyframe")
@@ -2987,9 +3013,85 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         return true
     }
 
-    private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime, generation: UInt64) {
+    // MARK: - Screen lock
+
+    /// A locked Mac stops capture, but the receiver keeps showing the last
+    /// frame on another screen in the room. Replace it with black on lock.
+    private func observeScreenLock() {
+        let center = DistributedNotificationCenter.default()
+        lockObservers = [
+            center.addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
+                               object: nil, queue: nil) { [weak self] _ in
+                self?.queue.async { self?.blankForLock() }
+            },
+            center.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"),
+                               object: nil, queue: nil) { [weak self] _ in
+                self?.queue.async {
+                    guard let self, self.blankedForLock else { return }
+                    self.blankedForLock = false
+                    self.needsKeyframe = true
+                    Log.info("screen unlocked — streaming again")
+                    // A static screen sends nothing by itself: replay the last frame.
+                    if self.connectionReady, let pixelBuffer = self.lastPixelBuffer {
+                        self.encode(pixelBuffer, pts: CMClockGetTime(CMClockGetHostTimeClock()),
+                                    generation: self.captureGenerationNow)
+                    }
+                }
+            },
+        ]
+    }
+
+    /// On `queue`: send one black keyframe at the decoded raster, then hold
+    /// all frames until unlock.
+    private func blankForLock(attempt: Int = 0, configuration: VideoStreamConfiguration? = nil) {
+        guard !stopped, connectionReady, encoder != nil,
+              let active = configuration ?? activeStreamConfigurationSnapshot else {
+            if attempt == 0, !blankedForLock {
+                Log.info("screen locked — nothing to blank with (no connection, encoder or stream configuration)")
+            }
+            return
+        }
+        if attempt == 0 {
+            blankedForLock = true
+            Log.info("screen locked — blanking the receiver")
+            cancelDropReplayTimer()
+        }
+        guard blankedForLock else { return }
+        pipelineLock.lock()
+        let busy = pendingEncodes > 0
+        pipelineLock.unlock()
+        if busy {
+            guard attempt < 40 else { Log.info("screen locked — black frame not sent"); return }
+            queue.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+                self?.blankForLock(attempt: attempt + 1, configuration: configuration)
+            }
+            return
+        }
+        let size = active.encodedSize
+        var black: CVPixelBuffer?
+        CVPixelBufferCreate(nil, size.width, size.height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &black)
+        guard let black else { return }
+        CVPixelBufferLockBaseAddress(black, [])
+        if let y = CVPixelBufferGetBaseAddressOfPlane(black, 0) {
+            memset(y, 16, CVPixelBufferGetBytesPerRowOfPlane(black, 0) * CVPixelBufferGetHeightOfPlane(black, 0))
+        }
+        if let uv = CVPixelBufferGetBaseAddressOfPlane(black, 1) {
+            memset(uv, 128, CVPixelBufferGetBytesPerRowOfPlane(black, 1) * CVPixelBufferGetHeightOfPlane(black, 1))
+        }
+        CVPixelBufferUnlockBaseAddress(black, [])
+        needsKeyframe = true
+        encode(black, pts: CMClockGetTime(CMClockGetHostTimeClock()),
+               generation: captureGenerationNow, lockFrame: true)
+        needsKeyframe = true   // the next real frame starts a fresh chain
+    }
+
+    private func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime, generation: UInt64,
+                        lockFrame: Bool = false) {
         guard generation == captureGenerationNow, let encoder else { return }
-        guard shouldSubmitFrame(at: CMTimeGetSeconds(pts)) else {
+        // While locked only the lock frame itself goes out.
+        guard lockFrame || !blankedForLock else { return }
+        guard lockFrame || shouldSubmitFrame(at: CMTimeGetSeconds(pts)) else {
             // Preserve the latest changed frame if capture goes idle before the
             // next admission slot; the existing replay path sends it later.
             scheduleDropReplayTimer()
