@@ -681,7 +681,75 @@ fn conflict_or(e: anyhow::Error, receiver: String) -> Result<SessionEnd> {
     }
 }
 
-pub async fn run(addr: SocketAddr, backend: &mut dyn Backend, opts: RunOptions) -> Result<()> {
+/// Destination endpoint for a session: network or USB cable.
+#[derive(Debug, Clone)]
+pub enum Endpoint {
+    Network(SocketAddr),
+    Usb(Option<u32>),
+}
+
+impl std::fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Endpoint::Network(addr) => write!(f, "{addr}"),
+            Endpoint::Usb(Some(id)) => write!(f, "USB device {id}"),
+            Endpoint::Usb(None) => write!(f, "USB"),
+        }
+    }
+}
+
+pub enum Stream {
+    Tcp(TcpStream),
+    Unix(tokio::net::UnixStream),
+}
+
+impl AsyncRead for Stream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Tcp(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            Stream::Unix(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Stream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Stream::Tcp(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            Stream::Unix(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Tcp(s) => std::pin::Pin::new(s).poll_flush(cx),
+            Stream::Unix(s) => std::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Stream::Tcp(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            Stream::Unix(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+pub async fn run(endpoint: Endpoint, backend: &mut dyn Backend, opts: RunOptions) -> Result<()> {
     let start = Instant::now();
     info!(
         "backend {}: {} ({})",
@@ -703,14 +771,26 @@ pub async fn run(addr: SocketAddr, backend: &mut dyn Backend, opts: RunOptions) 
         if *shutdown.borrow() || opts.duration.is_some_and(|d| start.elapsed() >= d) {
             break;
         }
+        let dial = async {
+            match &endpoint {
+                Endpoint::Network(addr) => {
+                    let s = TcpStream::connect(addr).await?;
+                    let _ = s.set_nodelay(true);
+                    Ok::<_, anyhow::Error>((Stream::Tcp(s), Some(*addr)))
+                }
+                Endpoint::Usb(dev_id) => {
+                    let s = crate::usbmux::connect(*dev_id).await?;
+                    Ok((Stream::Unix(s), None))
+                }
+            }
+        };
         let dialed = tokio::select! {
-            r = TcpStream::connect(addr) => r,
+            r = dial => r,
             _ = shutdown.changed() => break,
         };
         match dialed {
-            Ok(stream) => {
-                let _ = stream.set_nodelay(true);
-                info!("connected to receiver {addr}");
+            Ok((stream, peer)) => {
+                info!("connected to receiver {endpoint}");
                 let began = Instant::now();
                 let end = session(
                     stream,
@@ -719,7 +799,7 @@ pub async fn run(addr: SocketAddr, backend: &mut dyn Backend, opts: RunOptions) 
                     start,
                     shutdown.clone(),
                     &mut losses,
-                    Some(addr),
+                    peer,
                 )
                 .await;
                 lasted = Some(began.elapsed());
@@ -743,7 +823,7 @@ pub async fn run(addr: SocketAddr, backend: &mut dyn Backend, opts: RunOptions) 
                     Err(e) => warn!("session error: {e:#}"),
                 }
             }
-            Err(e) => warn!("dial {addr}: {e}"),
+            Err(e) => warn!("dial {endpoint}: {e}"),
         }
         if !opts.reconnect || *shutdown.borrow() {
             break;
@@ -891,7 +971,12 @@ async fn session<S: AsyncRead + AsyncWrite + Unpin>(
     losses: &mut LossBudget,
     peer: Option<SocketAddr>,
 ) -> Result<SessionEnd> {
-    let mut sess = SenderSession::new(SenderConfig::default());
+    let mut config = SenderConfig::default();
+    if peer.is_none() {
+        // Must be false on the USB binding (§6.3).
+        config.use_cursor_udp = false;
+    }
+    let mut sess = SenderSession::new(config);
     // Cursor events from the display's cursor thread, and the UDP socket for
     // the side channel (bound on the first datagram).
     let (cursor_tx, mut cursor_rx) = mpsc::unbounded_channel::<CursorEvent>();
