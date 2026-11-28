@@ -70,6 +70,69 @@ class TouchGesturesTest {
     }
 
     @Test
+    fun oneFingerDragScrollsInsteadOfPressing() {
+        g.oneFingerScroll = true
+        g.down(p(100f, 100f))
+        g.move(1, p(105f, 100f), p(105f, 100f), 2f) // inside slop: cursor only
+        g.move(1, p(100f, 120f), p(100f, 120f), 2f) // past slop: starts scrolling, no delta yet
+        g.move(1, p(100f, 140f), p(100f, 140f), 2f)
+        g.up(p(100f, 140f))
+        assertEquals(listOf("moved 0.11,0.10", "scroll 0.0,10.0"), events)
+    }
+
+    @Test
+    fun oneFingerScrollStillClicksOnATap() {
+        g.oneFingerScroll = true
+        g.down(p(100f, 100f))
+        g.up(p(101f, 101f))
+        assertEquals(listOf("began 0.10,0.10", "ended 0.10,0.10"), events)
+    }
+
+    @Test
+    fun oneFingerScrollUsesTheLongerHoldBeforeDragging() {
+        g.oneFingerScroll = true
+        var delay = -1L
+        val timed = TouchGestures(
+            output = object : TouchGestures.Output {
+                override fun touch(phase: String, x: Double, y: Double) {}
+                override fun scroll(dx: Double, dy: Double) {}
+            },
+            scheduler = { d, _ ->
+                delay = d
+                TouchGestures.Cancellable { }
+            },
+            dragSlopPx = 10f,
+            holdDelayMs = 120,
+            scrollModeHoldMs = 350,
+        )
+        timed.oneFingerScroll = true
+        timed.down(p(1f, 1f))
+        assertEquals(350L, delay)
+        timed.oneFingerScroll = false
+        timed.down(p(1f, 1f))
+        assertEquals(120L, delay)
+    }
+
+    @Test
+    fun oneFingerHoldThenDragStillDrags() {
+        g.oneFingerScroll = true
+        g.down(p(100f, 100f))
+        pending!!.invoke() // the longer hold elapsed
+        g.move(1, p(200f, 100f), p(200f, 100f), 1f)
+        assertEquals(listOf("began 0.10,0.10", "moved 0.20,0.10"), events)
+    }
+
+    @Test
+    fun secondFingerTurnsOneFingerScrollIntoTwoFingerScroll() {
+        g.oneFingerScroll = true
+        g.down(p(100f, 100f))
+        g.move(1, p(100f, 120f), p(100f, 120f), 2f) // scrolling begins
+        g.pointerDown(2, p(125f, 120f))
+        g.move(2, p(100f, 130f), p(125f, 130f), 2f)
+        assertEquals(listOf("moved 0.13,0.12", "scroll 0.0,5.0"), events)
+    }
+
+    @Test
     fun secondFingerAfterCommitCancelsThePress() {
         g.down(p(100f, 100f))
         pending!!.invoke()

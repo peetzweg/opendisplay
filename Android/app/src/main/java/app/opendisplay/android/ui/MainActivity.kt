@@ -511,7 +511,10 @@ class MainActivity : AppCompatActivity(), ReceiverServer.Listener, VideoDecoder.
         }
         val primary = point(event.getX(0), event.getY(0))
         when (action) {
-            MotionEvent.ACTION_DOWN -> gestures.down(primary)
+            MotionEvent.ACTION_DOWN -> {
+                gestures.oneFingerScroll = prefs.oneFingerScroll
+                gestures.down(primary)
+            }
             MotionEvent.ACTION_POINTER_DOWN -> gestures.pointerDown(event.pointerCount, centroid(event))
             MotionEvent.ACTION_POINTER_UP -> gestures.pointerUp()
             MotionEvent.ACTION_MOVE -> {

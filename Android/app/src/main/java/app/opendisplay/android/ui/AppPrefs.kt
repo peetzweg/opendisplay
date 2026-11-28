@@ -10,6 +10,11 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_SHOW_ANALYTICS, false)
         set(v) = prefs.edit().putBoolean(KEY_SHOW_ANALYTICS, v).apply()
 
+    /** A one-finger drag scrolls instead of dragging; a tap still clicks. Off by default. */
+    var oneFingerScroll: Boolean
+        get() = prefs.getBoolean(KEY_ONE_FINGER_SCROLL, false)
+        set(v) = prefs.edit().putBoolean(KEY_ONE_FINGER_SCROLL, v).apply()
+
     var hasConnectedBefore: Boolean
         get() = prefs.getBoolean("hasConnectedBefore", false)
         set(v) = prefs.edit().putBoolean("hasConnectedBefore", v).apply()
@@ -21,5 +26,6 @@ class AppPrefs(context: Context) {
     companion object {
         const val FILE = "settings"
         const val KEY_SHOW_ANALYTICS = "showAnalytics"
+        const val KEY_ONE_FINGER_SCROLL = "oneFingerScroll"
     }
 }

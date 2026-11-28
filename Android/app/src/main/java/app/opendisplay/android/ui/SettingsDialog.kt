@@ -120,6 +120,16 @@ class SettingsDialog : DialogFragment() {
                 addPreference(footer(getString(R.string.name_footer)))
             }
 
+            screen.category(R.string.section_touch) {
+                addPreference(SwitchPreferenceCompat(ctx).apply {
+                    key = AppPrefs.KEY_ONE_FINGER_SCROLL
+                    title = getString(R.string.one_finger_scroll)
+                    summary = getString(R.string.one_finger_scroll_footer)
+                    setDefaultValue(false)
+                    isIconSpaceReserved = false
+                })
+            }
+
             screen.category(R.string.section_analytics) {
                 addPreference(SwitchPreferenceCompat(ctx).apply {
                     key = AppPrefs.KEY_SHOW_ANALYTICS
