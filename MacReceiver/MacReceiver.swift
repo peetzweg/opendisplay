@@ -90,7 +90,15 @@ final class ReceiverController: ObservableObject {
             .sink { [weak self] streaming in
                 self?.streaming = streaming
                 self?.updateSleepAssertion(streaming)
-                if streaming { self?.showWindow() } else { self?.scheduleCloseWindow() }
+                guard let self else { return }
+                if streaming {
+                    self.showWindow()
+                } else {
+                    // Black during the close delay: a frozen last frame looks
+                    // like a live screen (cable pulled, sender gone).
+                    self.receiver?.displayLayer.flushAndRemoveImage()
+                    self.scheduleCloseWindow()
+                }
             }
             .store(in: &cancellables)
 

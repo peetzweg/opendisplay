@@ -730,6 +730,20 @@ final class StreamReceiver: ObservableObject {
             default: break
             }
         }
+        // A pulled cable is reported here at once ("No network route"), while
+        // the watchdog would wait 5-7 s with the last frame frozen on screen.
+        // Short grace so a momentary flap (WiFi roam) doesn't end the session.
+        conn.viabilityUpdateHandler = { [weak self] viable in
+            guard let self, conn === self.connection, !viable else { return }
+            self.queue.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, conn === self.connection, conn.state == .ready,
+                      conn.currentPath?.status != .satisfied else { return }
+                Log.info("connection no longer viable (link lost) — dropping it")
+                conn.cancel()
+                self.connection = nil
+                self.setConnected(false)
+            }
+        }
         if conn.state == .ready {
             onReady()   // already up: the handler will not fire again
         } else {
