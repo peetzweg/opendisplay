@@ -1,3 +1,21 @@
+# Read first: production quality bar
+
+OpenDisplay is a production app used daily by thousands of people, and most of
+them update automatically. Every change follows [CONTRIBUTING.md](CONTRIBUTING.md).
+For agents in particular:
+
+- Before writing code, look for overlapping work: `gh pr list --state open` and
+  `gh issue list` for the files and feature you touch. Read overlapping PRs and
+  say in your PR how your change relates to them.
+- List every platform and peer version your change reaches (CONTRIBUTING.md,
+  "Every platform the change touches") and cover each one, or state plainly
+  which you did not check and why.
+- A build is not verification. Run the unit tests, verify runtime behaviour on
+  hardware or with a loopback or fake receiver, and report the numbers. Say
+  which parts you only reasoned through.
+- Keep diffs in shared, busy files (`Mac/MacSender.swift`, `Shared/`) small and
+  mechanical.
+
 # Local macOS development
 
 Keep the development app identities stable. macOS TCC associates Screen
