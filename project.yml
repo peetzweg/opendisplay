@@ -43,7 +43,7 @@ targets:
   OpenSidecarMac:
     type: application
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "12.3"
     sources:
       - Mac
       - Shared

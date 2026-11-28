@@ -108,7 +108,7 @@ final class VirtualDisplay {
                         self.manageOrigin()
                     }
                 }
-                try? await Task.sleep(for: .milliseconds(settled ? 2000 : 200))
+                try? await Task.sleep(nanoseconds: settled ? 2_000_000_000 : 200_000_000)
             }
         }
     }
@@ -172,9 +172,9 @@ final class VirtualDisplay {
         // The new size marks it; a mode macOS swapped for its 1x variant
         // never shows that size, and pays the full wait plus the move.
         let size = CGSize(width: pointsWide, height: pointsHigh)
-        let deadline = ContinuousClock.now + .milliseconds(500)
-        while CGDisplayBounds(display.displayID).size != size, ContinuousClock.now < deadline {
-            do { try await Task.sleep(for: .milliseconds(10)) } catch { break }
+        let deadline = Date().addingTimeInterval(0.5)
+        while CGDisplayBounds(display.displayID).size != size, Date() < deadline {
+            do { try await Task.sleep(nanoseconds: 10_000_000) } catch { break }
         }
         guard !Task.isCancelled, stillCurrent() else { return true }
         var settled = CGDisplayBounds(display.displayID).origin
@@ -370,7 +370,7 @@ enum DisplayUnits {
     static func clash(for id: CGDirectDisplayID) async -> (unit: UInt32, other: CGDirectDisplayID)? {
         var unit = CGDisplayUnitNumber(id)
         for _ in 0..<40 where unit == UInt32.max {
-            try? await Task.sleep(for: .milliseconds(50))
+            try? await Task.sleep(nanoseconds: 50_000_000)
             unit = CGDisplayUnitNumber(id)
         }
         guard unit != UInt32.max else { return nil }
@@ -392,7 +392,7 @@ enum DisplayUnits {
             var list = [CGDirectDisplayID](repeating: 0, count: Int(count))
             CGGetOnlineDisplayList(count, &list, &count)
             if !ids.contains(where: list.prefix(Int(count)).contains) { return }
-            try? await Task.sleep(for: .milliseconds(50))
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 }

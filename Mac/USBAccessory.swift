@@ -76,7 +76,7 @@ enum AOA {
     }
 
     /// Re-enumeration after START or a reset takes 1-3 s on a Pixel.
-    private static let reenumerationTimeout: Duration = .seconds(10)
+    private static let reenumerationTimeout: TimeInterval = 10
     /// Covers a cold app launch, and the consent dialog on first plug.
     private static let helloTimeout: TimeInterval = 30
 
@@ -95,7 +95,7 @@ enum AOA {
         try Task.checkCancellation()
 
         AccessoryRelay.close(serial: serial)
-        guard var device = try await waitForDevice(serial: serial, timeout: .seconds(5)) else {
+        guard var device = try await waitForDevice(serial: serial, timeout: 5) else {
             throw Failure.noDevice
         }
         // Already an accessory: left over from an earlier session (the
@@ -117,8 +117,8 @@ enum AOA {
         // unlocking then connects within seconds instead of after a timeout.
         var found: Device?
         var busy = false   // the last handshake found the device held by another app
-        let deadline = ContinuousClock.now + reenumerationTimeout
-        while found == nil, ContinuousClock.now < deadline {
+        let deadline = Date().addingTimeInterval(reenumerationTimeout)
+        while found == nil, Date() < deadline {
             try Task.checkCancellation()
             if let current = findDevice(serial: serial) {
                 if current.isAccessory {
@@ -134,7 +134,7 @@ enum AOA {
                 }
                 current.release()
             }
-            found = try await waitForDevice(serial: serial, accessory: true, timeout: .seconds(2))
+            found = try await waitForDevice(serial: serial, accessory: true, timeout: 2)
         }
         guard let accessory = found else { throw busy ? Failure.busy : Failure.notAccessory }
         defer { accessory.release() }
@@ -181,14 +181,14 @@ enum AOA {
     }
 
     private static func waitForDevice(serial: String, accessory: Bool? = nil,
-                                      timeout: Duration) async throws -> Device? {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
+                                      timeout: TimeInterval) async throws -> Device? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
             if let device = findDevice(serial: serial) {
                 if accessory == nil || device.isAccessory == accessory { return device }
                 device.release()
             }
-            try await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
         return nil
     }
@@ -311,7 +311,7 @@ enum AOA {
 
 /// Bridges one loopback TCP connection to the accessory's bulk pipes.
 final class AccessoryRelay {
-    private static let live = OSAllocatedUnfairLock(initialState: [String: AccessoryRelay]())
+    private static let live = UnfairLock(initialState: [String: AccessoryRelay]())
 
     /// End the relay serving this device, if any, resetting the device.
     static func close(serial: String) {
@@ -332,7 +332,7 @@ final class AccessoryRelay {
     private let readQueue = DispatchQueue(label: "aoa.relay.read")
     private let writeQueue = DispatchQueue(label: "aoa.relay.write")
     private let networkQueue = DispatchQueue(label: "aoa.relay.net")
-    private let closed = OSAllocatedUnfairLock(initialState: false)
+    private let closed = UnfairLock(initialState: false)
 
     private init(serial: String, service: io_service_t, interface: IOUSBHostInterface,
                  inPipe: IOUSBHostPipe, outPipe: IOUSBHostPipe, maxPacket: Int,
@@ -355,7 +355,7 @@ final class AccessoryRelay {
                 live.withLock { $0[serial] = relay }
                 return relay
             }
-            try await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
         throw AOA.Failure.noInterface
     }
@@ -465,7 +465,7 @@ final class AccessoryRelay {
 
     private func listen() async throws -> NWEndpoint.Port {
         try await withCheckedThrowingContinuation { continuation in
-            let resumed = OSAllocatedUnfairLock(initialState: false)
+            let resumed = UnfairLock(initialState: false)
             let resume: (Result<NWEndpoint.Port, Error>) -> Void = { result in
                 guard !resumed.withLock({ done in let was = done; done = true; return was }) else { return }
                 continuation.resume(with: result)
@@ -494,7 +494,7 @@ final class AccessoryRelay {
                     switch state {
                     case .ready:
                         self?.pumpToDevice(conn)
-                        self?.readQueue.async { self?.pumpFromDevice(conn) }
+                        self?.readQueue.async { [weak self] in self?.pumpFromDevice(conn) }
                     case .failed, .cancelled:
                         self?.close()
                     default:

@@ -28,8 +28,8 @@ import IOKit
 
 @MainActor
 final class AccessoryDeviceWatcher {
-    private static let detachGrace: Duration = .seconds(6)
-    private static let busyRetryInterval: Duration = .seconds(3)
+    private static let detachGrace: UInt64 = 6_000_000_000   // 6 s, in nanoseconds
+    private static let busyRetryInterval: UInt64 = 3_000_000_000   // 3 s, in nanoseconds
 
     private var devices: [String: UsbmuxDevice] = [:]          // by serial
     private var serialByEntry: [UInt64: String] = [:]          // device registry entry id
@@ -56,13 +56,13 @@ final class AccessoryDeviceWatcher {
         IONotificationPortSetDispatchQueue(port, .main)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         let deviceAdded: IOServiceMatchingCallback = { refcon, iterator in
-            MainActor.assumeIsolated { AccessoryDeviceWatcher.from(refcon).devicesAttached(iterator) }
+            assumeMainActor { AccessoryDeviceWatcher.from(refcon).devicesAttached(iterator) }
         }
         let deviceRemoved: IOServiceMatchingCallback = { refcon, iterator in
-            MainActor.assumeIsolated { AccessoryDeviceWatcher.from(refcon).devicesDetached(iterator) }
+            assumeMainActor { AccessoryDeviceWatcher.from(refcon).devicesDetached(iterator) }
         }
         let interfaceAdded: IOServiceMatchingCallback = { refcon, iterator in
-            MainActor.assumeIsolated { AccessoryDeviceWatcher.from(refcon).interfacesAttached(iterator) }
+            assumeMainActor { AccessoryDeviceWatcher.from(refcon).interfacesAttached(iterator) }
         }
         // Each call consumes one matching dictionary reference.
         var results: [kern_return_t] = []
@@ -161,7 +161,7 @@ final class AccessoryDeviceWatcher {
                     + "Run `adb kill-server` to free it; asking again while it stays plugged in")
             }
             while answer == .busy {
-                try? await Task.sleep(for: Self.busyRetryInterval)
+                try? await Task.sleep(nanoseconds: Self.busyRetryInterval)
                 guard !Task.isCancelled else { return }
                 answer = await Self.ask(device)
             }
@@ -178,7 +178,7 @@ final class AccessoryDeviceWatcher {
         await Task.detached {
             var answer = AOA.ProtocolAnswer.silent
             for attempt in 0..<3 where answer == .silent {
-                if attempt > 0 { try? await Task.sleep(for: .milliseconds(500)) }
+                if attempt > 0 { try? await Task.sleep(nanoseconds: 500_000_000) }
                 answer = AOA.askProtocol(device)
             }
             return answer
@@ -214,7 +214,7 @@ final class AccessoryDeviceWatcher {
                   devices[serial] != nil else { continue }
             pendingDetach[serial]?.cancel()
             pendingDetach[serial] = Task {
-                try? await Task.sleep(for: Self.detachGrace)
+                try? await Task.sleep(nanoseconds: Self.detachGrace)
                 guard !Task.isCancelled else { return }
                 pendingDetach[serial] = nil
                 Log.info("Android device detached: \(serial)")
