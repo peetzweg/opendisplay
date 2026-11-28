@@ -7,6 +7,7 @@ import SwiftUI
 struct ReceiverSections: View {
     @ObservedObject var controller: ReceiverController
     @AppStorage("showAnalytics") private var showAnalytics = false
+    @AppStorage(NotchAreaPreference.key) private var useNotchArea = false
 
     var body: some View {
         // The receiver exists only while receiver mode is on; observed in a
@@ -21,6 +22,14 @@ struct ReceiverSections: View {
             Text("Name")
         } footer: {
             Text("How this Mac appears in the other Mac's Devices list.")
+        }
+
+        Section {
+            Toggle("Use area around camera", isOn: Binding(
+                get: { useNotchArea },
+                set: { controller.setUseNotchArea($0) }))
+        } footer: {
+            Text("Extends the display into the menu-bar strip beside the notch. The video opens edge to edge over the whole screen; switch apps to bring others in front, or press Esc to close it.")
         }
 
         Section {
