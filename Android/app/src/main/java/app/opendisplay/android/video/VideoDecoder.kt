@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit
  * output thread renders each picture as soon as it is decoded (no
  * presentation timestamps cross the wire, frames show in arrival order).
  */
-class VideoDecoder(private val callbacks: Callbacks) {
+class VideoDecoder(private val callbacks: Callbacks, compat: Boolean = false) {
     interface Callbacks {
         fun requestKeyframe()
         /** Visible picture size, from the decoder's output format. */
@@ -37,6 +37,7 @@ class VideoDecoder(private val callbacks: Callbacks) {
         class Frame(val unit: AccessUnit, val receivedNanos: Long) : Work()
         class SetSurface(val surface: Surface?, val done: CountDownLatch?) : Work()
         class SetStream(val codec: Codec, val width: Int, val height: Int) : Work()
+        class SetCompat(val enabled: Boolean) : Work()
         object Reset : Work()
         class Fail(val failed: MediaCodec) : Work()
         object Quit : Work()
@@ -55,6 +56,8 @@ class VideoDecoder(private val callbacks: Callbacks) {
     private var parameterSets: List<ByteArray> = emptyList()
     private var awaitingKeyframe = true
     private var lastKeyframeRequest = 0L
+    /** Only the opt-in setting activates the old OMX/software-decoder path. */
+    @Volatile private var legacyCompat = compat
     /**
      * A created-but-unconfigured decoder for the expected codec. Creating a
      * MediaCodec costs a few hundred ms; doing it before the first IDR keeps
@@ -97,6 +100,9 @@ class VideoDecoder(private val callbacks: Callbacks) {
     /** From `streamConfig`: the codec to expect and the announced raster. */
     fun setStream(codec: Codec, width: Int, height: Int) = queue.put(Work.SetStream(codec, width, height))
 
+    /** Opt-in Android 5/6 decoder compatibility; rebuilds the current decoder. */
+    fun setCompatMode(enabled: Boolean) = queue.put(Work.SetCompat(enabled))
+
     /** New session: forget the old stream entirely (pending commands stay). */
     fun reset() {
         queue.removeAll { it is Work.Frame }
@@ -136,6 +142,18 @@ class VideoDecoder(private val callbacks: Callbacks) {
                     announcedWidth = work.width
                     announcedHeight = work.height
                     prewarm()
+                }
+                is Work.SetCompat -> {
+                    if (work.enabled != legacyCompat) {
+                        legacyCompat = work.enabled
+                        teardown()
+                        spare?.release()
+                        spare = null
+                        awaitingKeyframe = true
+                        prewarm()
+                        requestKeyframe(force = true)
+                        Log.i(TAG, "legacy video compatibility ${if (work.enabled) "enabled" else "disabled"}")
+                    }
                 }
                 Work.Reset -> {
                     teardown()
@@ -257,7 +275,7 @@ class VideoDecoder(private val callbacks: Callbacks) {
             val pts = work.receivedNanos / 1000
             inFlight[pts] = work.receivedNanos to work.unit.captureMs
             if (inFlight.size > 256) inFlight.clear()
-            val flags = if (keyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+            val flags = if (keyframe && !legacyCompat) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
             codec.queueInputBuffer(index, 0, data.size, pts, flags)
         } catch (e: IllegalStateException) {
             fail("queue input", e)
@@ -267,8 +285,13 @@ class VideoDecoder(private val callbacks: Callbacks) {
     private fun inputBuffer(codec: MediaCodec, index: Int): ByteBuffer = codec.getInputBuffer(index)!!
 
     private fun configure(surface: Surface): Boolean {
-        val (width, height) = configureSize()
+        val natural = configureSize()
+        val width = if (legacyCompat) DecoderCaps.ceilTo(natural.first, DecoderCaps.LEGACY_ALIGNMENT) else natural.first
+        val height = if (legacyCompat) DecoderCaps.ceilTo(natural.second, DecoderCaps.LEGACY_ALIGNMENT) else natural.second
         val format = MediaFormat.createVideoFormat(codec.mime, width, height)
+        if (legacyCompat) {
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, DecoderCaps.LEGACY_TARGET_FPS)
+        }
         when (codec) {
             Codec.H264 -> {
                 parameterSets.firstOrNull { AnnexB.nalType(codec, it) == 7 }?.let {
@@ -283,22 +306,24 @@ class VideoDecoder(private val callbacks: Callbacks) {
         }
         // Size the input buffers for a keyframe of the largest raster.
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height, minInputSize))
-        if (Build.VERSION.SDK_INT >= 23) {
-            format.setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
+        if (!legacyCompat) {
+            if (Build.VERSION.SDK_INT >= 23) {
+                format.setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
+            }
+            // Vendor low-latency switches; unknown keys are ignored by the codec.
+            format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
+            format.setInteger("vendor.qti-ext-dec-picture-order.enable", 1)
+            format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
+            format.setInteger("vendor.low-latency.enable", 1)
         }
-        // Vendor low-latency switches; unknown keys are ignored by the codec.
-        format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
-        format.setInteger("vendor.qti-ext-dec-picture-order.enable", 1)
-        format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
-        format.setInteger("vendor.low-latency.enable", 1)
 
         val created = try {
-            takeSpare() ?: MediaCodec.createDecoderByType(codec.mime)
+            takeSpare() ?: createDecoderFor(codec)
         } catch (e: Exception) {
             callbacks.onDecoderError("No ${codec.wire.uppercase()} decoder: ${e.message}")
             return false
         }
-        if (Build.VERSION.SDK_INT >= 30) {
+        if (!legacyCompat && Build.VERSION.SDK_INT >= 30) {
             val supportsLowLatency = try {
                 created.codecInfo.getCapabilitiesForType(codec.mime)
                     .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
@@ -336,13 +361,21 @@ class VideoDecoder(private val callbacks: Callbacks) {
 
     private fun prewarm() {
         if (surface == null || decoder != null) return
+        if (legacyCompat && codec == Codec.HEVC) return // compatibility path is H.264 only
         if (spare?.codecInfo?.supportedTypes?.any { it.equals(codec.mime, true) } == true) return
         spare?.release()
         spare = try {
-            MediaCodec.createDecoderByType(codec.mime)
+            createDecoderFor(codec)
         } catch (e: Exception) {
             null
         }
+    }
+
+    private fun createDecoderFor(codec: Codec): MediaCodec {
+        if (legacyCompat) {
+            DecoderCaps.softwareDecoderName(codec.mime)?.let { return MediaCodec.createByCodecName(it) }
+        }
+        return MediaCodec.createDecoderByType(codec.mime)
     }
 
     private fun takeSpare(): MediaCodec? {
@@ -380,7 +413,8 @@ class VideoDecoder(private val callbacks: Callbacks) {
 
     private fun requestKeyframe(force: Boolean = false) {
         val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastKeyframeRequest < KEYFRAME_REQUEST_INTERVAL_MS) return
+        val interval = if (legacyCompat) LEGACY_KEYFRAME_REQUEST_INTERVAL_MS else KEYFRAME_REQUEST_INTERVAL_MS
+        if (!force && now - lastKeyframeRequest < interval) return
         lastKeyframeRequest = now
         callbacks.requestKeyframe()
     }
@@ -435,13 +469,26 @@ class VideoDecoder(private val callbacks: Callbacks) {
         private fun reportSize(format: MediaFormat) {
             var width = format.getInteger(MediaFormat.KEY_WIDTH)
             var height = format.getInteger(MediaFormat.KEY_HEIGHT)
-            if (format.containsKey("crop-right") && format.containsKey("crop-left")) {
+            val hasHorizontalCrop = format.containsKey("crop-right") && format.containsKey("crop-left")
+            val hasVerticalCrop = format.containsKey("crop-bottom") && format.containsKey("crop-top")
+            if (hasHorizontalCrop) {
                 width = format.getInteger("crop-right") - format.getInteger("crop-left") + 1
             }
-            if (format.containsKey("crop-bottom") && format.containsKey("crop-top")) {
+            if (hasVerticalCrop) {
                 height = format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1
             }
-            Log.i(TAG, "decoder output ${width}x$height")
+            if (legacyCompat && (!hasHorizontalCrop || !hasVerticalCrop)) {
+                // Old OMX decoders report the padded raster; the SPS has the
+                // visible size the sender actually captured. Fill only axes the
+                // decoder did not report, so the default path stays unchanged.
+                parameterSets.firstOrNull { AnnexB.nalType(Codec.H264, it) == 7 }
+                    ?.let { SpsParser.h264Size(it) }
+                    ?.let {
+                        if (!hasHorizontalCrop) width = it.width
+                        if (!hasVerticalCrop) height = it.height
+                    }
+            }
+            Log.i(TAG, "decoder output ${width}x$height${if (legacyCompat) " (legacy)" else ""}")
             callbacks.onVideoSize(width, height)
         }
     }
@@ -453,5 +500,6 @@ class VideoDecoder(private val callbacks: Callbacks) {
         const val INPUT_TIMEOUT_US = 20_000L
         val OUTPUT_TIMEOUT_US = TimeUnit.MILLISECONDS.toMicros(10)
         const val KEYFRAME_REQUEST_INTERVAL_MS = 300L
+        const val LEGACY_KEYFRAME_REQUEST_INTERVAL_MS = 1000L
     }
 }

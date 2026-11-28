@@ -19,6 +19,9 @@ class Advertiser(context: Context) {
     var registeredName: String? = null
         private set
 
+    /** Notified once the NSD slot is free; used to sequence the AirPlay receiver. */
+    var onRegistered: (() -> Unit)? = null
+
     fun register(name: String, installId: String, port: Int = WireProtocol.TCP_PORT) {
         main.removeCallbacksAndMessages(null)
         retries = 0
@@ -38,6 +41,7 @@ class Advertiser(context: Context) {
             override fun onServiceRegistered(info: NsdServiceInfo) {
                 registeredName = info.serviceName
                 Log.i(TAG, "advertising '${info.serviceName}' as ${WireProtocol.SERVICE_TYPE}")
+                main.post { onRegistered?.invoke() }
                 // NSD renames on a collision ("Pixel 10a (2)"). Usually the
                 // collision is our own previous process, whose record lingers
                 // after a kill. The Mac remembers devices by name, so a renamed
