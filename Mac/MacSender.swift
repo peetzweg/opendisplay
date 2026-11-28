@@ -924,8 +924,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             invalidateCapturePipeline(discardingLastFrame: true)
             if let stream { try? await stream.stopCapture() }
             stream = nil
-            if let encoder { VTCompressionSessionInvalidate(encoder) }
-            encoder = nil
+            invalidateEncoder()
             needsKeyframe = true
             do {
                 switch mode {
@@ -1348,6 +1347,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             try setupEncoder(selected)
         }
         let chosen = selected
+        let ownEncoder = encoder
         setActiveStreamConfiguration(chosen)
         // `queue` is also the SCK sample queue. Enqueue the selection before
         // capture starts so a new receiver sees it before the first video frame.
@@ -1357,12 +1357,15 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
-        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        self.stream = stream
         do {
+            try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+            self.stream = stream
             try await stream.startCapture()
         } catch {
+            // Don't hold the new encoder (and its ~170 MB) for a capture that
+            // never started, unless an overlapping start already replaced it.
             if self.stream === stream { self.stream = nil }
+            if let ownEncoder, encoder === ownEncoder { invalidateEncoder() }
             throw error
         }
         do {
@@ -1373,8 +1376,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             if self.stream === stream {
                 self.stream = nil
                 invalidateCapturePipeline(discardingLastFrame: true)
-                if let encoder { VTCompressionSessionInvalidate(encoder) }
-                encoder = nil
+                invalidateEncoder()
             }
             throw error
         }
@@ -1417,8 +1419,7 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
             self?.pendingReconfigure?.cancel()
             self?.pendingReconfigure = nil
         }
-        if let encoder { VTCompressionSessionInvalidate(encoder) }
-        encoder = nil
+        invalidateEncoder()
         virtualDisplay = nil   // releasing it removes the display
         cancelDropReplayTimer()
         #if DEBUG
@@ -2714,7 +2715,20 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         )
     }
 
+    /// Tear down the compression session, if any. Dropping the reference is
+    /// not enough: a session that was never invalidated stays alive in
+    /// VTEncoderXPCService with its buffers (~170 MB at 2048x1536) until the
+    /// app quits (#474).
+    private func invalidateEncoder() {
+        if let encoder { VTCompressionSessionInvalidate(encoder) }
+        encoder = nil
+    }
+
     private func setupEncoder(_ configuration: VideoStreamConfiguration) throws {
+        // Capture recovery (re-attach) and the rebuild after display
+        // renumbering start capture over a live session; creating the new one
+        // would orphan the old.
+        invalidateEncoder()
         #if DEBUG
         if configuration.codec == VideoStreamConfiguration.hevcCodec,
            UserDefaults.standard.bool(forKey: "failHEVCSession") {   // late-fallback test knob
