@@ -1,0 +1,79 @@
+name: Optional native Screen Mirroring
+
+on:
+  pull_request:
+    paths:
+      - 'tools/native-screen-mirroring/**'
+      - '.github/workflows/native-screen-mirroring.yml'
+      - '.github/workflows/native-mirror-release.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/native-screen-mirroring/**'
+      - '.github/workflows/native-screen-mirroring.yml'
+      - '.github/workflows/native-mirror-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: tools/native-screen-mirroring
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+      - name: Install native build dependencies
+        run: brew install cmake pkgconf ffmpeg
+      - name: Verify publishing cannot bypass failures
+        run: node --test release/publish-workflow.test.js
+      - name: Build and test pinned macOS 14 static dependencies
+        run: bash scripts/ci-dependencies.sh
+      - name: Build and run all bridge tests
+        env:
+          PKG_CONFIG_PATH: ${{ github.workspace }}/tools/native-screen-mirroring/build/dependencies/lib/pkgconfig
+        run: |
+          cmake -S . -B build -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_PREFIX_PATH="$PWD/build/dependencies" \
+            -DLIBPLIST="$PWD/build/dependencies/lib/libplist-2.0.a" \
+            -DLIBCRYPTO="$PWD/build/dependencies/lib/libcrypto.a"
+          zsh Review.command --verify
+      - name: Record native results
+        run: |
+          mkdir -p build/distribution
+          set -o pipefail
+          ctest --test-dir build --output-on-failure | tee build/distribution/native-tests.log
+      # Artifact creation is not publication approval; physical release evidence
+      # is required separately by scripts/check-release.js.
+      - name: Build self-contained review installer
+        env:
+          MIRROR_DEPENDENCY_PREFIX: ${{ github.workspace }}/tools/native-screen-mirroring/build/dependencies
+        run: node scripts/build-installer.js
+      - name: Test the extracted installer with its bundled runtime
+        run: node scripts/ci-artifact.js verify build/distribution
+      - name: Retain failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-mirror-failed-diagnostics-${{ runner.arch }}
+          path: |
+            tools/native-screen-mirroring/build/distribution/tests.tap
+            tools/native-screen-mirroring/build/distribution/tests.stderr.log
+            tools/native-screen-mirroring/build/distribution/candidate.json
+            tools/native-screen-mirroring/build/distribution/native-tests.log
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-mirror-installer-${{ runner.arch }}
+          path: |
+            tools/native-screen-mirroring/build/distribution/*.zip
+            tools/native-screen-mirroring/build/distribution/candidate.json
+            tools/native-screen-mirroring/build/distribution/tests.tap
+            tools/native-screen-mirroring/build/distribution/native-tests.log
+          if-no-files-found: error
+          retention-days: 90
