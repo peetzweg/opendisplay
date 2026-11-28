@@ -18,14 +18,16 @@ final class CheckForUpdatesViewModel: ObservableObject {
 struct CheckForUpdatesView: View {
     @ObservedObject private var viewModel: CheckForUpdatesViewModel
     private let updater: SPUUpdater
+    private let title: String
 
-    init(updater: SPUStandardUpdaterController) {
+    init(updater: SPUStandardUpdaterController, title: String = String(localized: "Check for Updates…")) {
+        self.title = title
         self.updater = updater.updater
         self.viewModel = CheckForUpdatesViewModel(updater: updater.updater)
     }
 
     var body: some View {
-        Button("Check for Updates…") { updater.checkForUpdates() }
+        Button(title) { updater.checkForUpdates() }
             .controlSize(.small)
             .disabled(!viewModel.canCheckForUpdates)
     }
