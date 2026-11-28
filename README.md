@@ -585,6 +585,11 @@ secret. To switch it on:
 ## Contributing
 
 Issues and PRs are very welcome — especially for the roadmap items above.
+
+OpenDisplay is a production app that people rely on every day, so please read
+[CONTRIBUTING.md](CONTRIBUTING.md) first: it explains the bar every change is
+held to (no regressions for existing setups, mixed versions, every platform a
+change touches, tests and hardware numbers).
 The codebase is intentionally small: ~4 Swift files per platform, with
 [Sparkle](https://sparkle-project.org) (SPM) as the macOS app's only
 runtime dependency, for auto-update. The [How it works](#how-it-works)
