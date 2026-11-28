@@ -49,6 +49,7 @@ struct ReceiverScreen: View {
     // Shown until either the user dismisses it or the device connects once.
     @AppStorage("hasConnectedBefore") private var hasConnectedBefore = false
     @AppStorage("onboardingDismissed") private var onboardingDismissed = false
+    @AppStorage("respectSafeAreas") private var respectSafeAreas = false
 
     // Streaming = connected and the video format is known.
     private var isStreaming: Bool {
@@ -79,7 +80,6 @@ struct ReceiverScreen: View {
                                    receiver: model.receiver,
                                    useMetal: metalRenderer)
                         .id(metalRenderer)   // rebuild the layer tree on toggle
-                        .ignoresSafeArea()
                     if showAnalytics {
                         VStack {
                             Spacer()
@@ -100,7 +100,7 @@ struct ReceiverScreen: View {
                 OnboardingView { onboardingDismissed = true }
             }
         }
-        .ignoresSafeArea(edges: isStreaming ? .all : [])
+        .ignoresSafeArea(edges: isStreaming && !respectSafeAreas ? .all : [])
         .statusBarHidden(isStreaming)
         .systemOverlaysHidden(isStreaming)
         .sheet(isPresented: $showSettings) {
@@ -338,6 +338,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
+    @AppStorage("respectSafeAreas") private var respectSafeAreas = false
     // Set once the user tapped "Rate on the App Store": the row is an
     // invitation, not a permanent fixture.
     @AppStorage("rateAppTapped") private var rateAppTapped = false
@@ -394,6 +395,14 @@ struct SettingsView: View {
                     Text("Analytics")
                 } footer: {
                     Text("The overlay shows FPS, bitrate, frame timing, stalls, and latency graphs at the bottom of the screen while streaming. The experimental Metal renderer decodes and presents frames manually — it adds decode and true on-glass latency metrics to the overlay, but in our measurements the system video layer displays frames faster. Leave it off unless you're debugging.")
+                }
+
+                Section {
+                    Toggle("Respect safe areas", isOn: $respectSafeAreas)
+                } header: {
+                    Text("Display")
+                } footer: {
+                    Text("Respecting safe areas insets UI from the notch, Dynamic Island and rounded screen corners so nothing is hidden behind them.")
                 }
 
                 Section {
