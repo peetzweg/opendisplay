@@ -233,12 +233,28 @@ jobs:
           cp build/export/OpenDisplay.dmg /tmp/appcast-updates/
           cp build/export/OpenDisplayReceiver.dmg /tmp/appcast-receiver-updates/
 
+          # Sparkle pairs HTML notes with archives by basename. Embed the
+          # tagged release's notes without the install guide that the Linux
+          # release job may have appended in parallel.
+          notes=/tmp/appcast-updates/OpenDisplay.html
+          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body \
+            | sed '/^<!-- linux-release:start -->$/,/^<!-- linux-release:end -->$/d' \
+            | gh api --method POST markdown -F text=@- -f mode=gfm -f context="$GITHUB_REPOSITORY" > "$notes" \
+            && grep -q '[^[:space:]]' "$notes"; then
+            cp "$notes" /tmp/appcast-receiver-updates/OpenDisplayReceiver.html
+          else
+            rm -f "$notes"
+            echo "::warning::No release notes available for $TAG_NAME"
+          fi
+
           "$GEN_APPCAST" \
+            --embed-release-notes \
             --ed-key-file /tmp/sparkle_ed_priv \
             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/" \
             -o /tmp/appcast-updates/appcast.xml \
             /tmp/appcast-updates
           "$GEN_APPCAST" \
+            --embed-release-notes \
             --ed-key-file /tmp/sparkle_ed_priv \
             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/" \
             -o /tmp/appcast-receiver-updates/appcast-receiver.xml \
