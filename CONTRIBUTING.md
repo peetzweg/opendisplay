@@ -48,6 +48,12 @@ of them at once, so every change, small or large, is held to the same bar.
    buffers, timers, observers. Recurring work uses a cancellable handle, never
    a self-rescheduling `asyncAfter` chain.
 
+7. **People can find out about it.** A user-visible change updates the info
+   material in the same PR, or before the release that ships it: the README
+   (features, FAQ, comparison), the website (`src/App.tsx`), the docs
+   (`content/docs/`), and any sentence that no longer holds. Claim only what
+   was measured.
+
 ## Practicalities
 
 - One topic per PR. Describe what changes, why, and how you tested it.

@@ -21,3 +21,4 @@ Fixes #
 - [ ] Unit tests added or updated, and a run on real hardware for capture, codec, presentation, transport or display changes
 - [ ] Nothing grows per reconnect, sleep/wake or capture restart
 - [ ] Searched open PRs and issues for overlapping work and linked them
+- [ ] User-visible change: README, website and docs updated (or not user-visible)
