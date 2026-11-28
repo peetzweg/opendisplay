@@ -10,9 +10,9 @@ enum AppPresentation: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .menuBar: return "Menu bar"
-        case .dock: return "Dock"
-        case .background: return "Background only"
+        case .menuBar: return String(localized: "Menu bar")
+        case .dock: return String(localized: "Dock")
+        case .background: return String(localized: "Background only")
         }
     }
 }
@@ -1133,16 +1133,16 @@ struct ContentView: View {
 
                 Section("Permissions") {
                     permissionRow(
-                        "Screen Recording",
+                        String(localized: "Screen Recording"),
                         granted: permissions.screenRecording,
-                        help: "Required to capture the display.",
+                        help: String(localized: "Required to capture the display."),
                         anchor: "Privacy_ScreenCapture",
                         request: { permissions.requestScreenRecording() }
                     )
                     permissionRow(
-                        "Accessibility",
+                        String(localized: "Accessibility"),
                         granted: permissions.accessibility,
-                        help: "Required for touch input from the device.",
+                        help: String(localized: "Required for touch input from the device."),
                         anchor: "Privacy_Accessibility",
                         request: { permissions.requestAccessibility() }
                     )
@@ -1150,12 +1150,12 @@ struct ContentView: View {
                     // infer from discovery: a blocked browse is a definite no,
                     // an empty one may just mean no receiver is open.
                     permissionRow(
-                        "Local Network",
+                        String(localized: "Local Network"),
                         granted: !controller.discovered.isEmpty,
                         uncertain: controller.discovered.isEmpty && !controller.localNetworkDenied,
                         help: controller.localNetworkDenied
-                            ? "Off for OpenDisplay on this Mac, so WiFi mode finds no devices. Allow OpenDisplay under Privacy & Security → Local Network."
-                            : "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there.",
+                            ? String(localized: "Off for OpenDisplay on this Mac, so WiFi mode finds no devices. Allow OpenDisplay under Privacy & Security → Local Network.")
+                            : String(localized: "Required for WiFi mode. If no device appears in the Devices list, allow OpenDisplay under Privacy & Security → Local Network on this Mac AND on the device — and keep the OpenDisplay app open there."),
                         anchor: "Privacy_LocalNetwork"
                     )
                 }
@@ -1172,9 +1172,14 @@ struct ContentView: View {
                 Circle()
                     .fill(controller.running ? .green : .secondary.opacity(0.5))
                     .frame(width: 9, height: 9)
+                // Two explicit forms instead of English pluralisation: a
+                // translator gets a whole sentence either way, and languages
+                // that do not inflect for number need no plural machinery.
                 Text(controller.running
-                     ? "\(controller.sessions.count) device\(controller.sessions.count == 1 ? "" : "s") connected"
-                     : "Idle")
+                     ? (controller.sessions.count == 1
+                        ? String(localized: "1 device connected")
+                        : String(localized: "\(controller.sessions.count) devices connected"))
+                     : String(localized: "Idle"))
                     .font(.callout)
                     .lineLimit(1)
                 Spacer()

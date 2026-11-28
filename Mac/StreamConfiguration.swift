@@ -25,17 +25,17 @@ enum StreamQuality: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .best: return "Best"
-        case .balanced: return "Balanced"
-        case .fast: return "Fast"
+        case .best: return String(localized: "Best")
+        case .balanced: return String(localized: "Balanced")
+        case .fast: return String(localized: "Fast")
         }
     }
 
     var explanation: String {
         switch self {
-        case .best: return "Highest safe detail for this sender and display."
-        case .balanced: return "Lower capture resolution for less latency and bandwidth."
-        case .fast: return "Lowest latency and bandwidth, with a softer image. Good for WiFi."
+        case .best: return String(localized: "Highest safe detail for this sender and display.")
+        case .balanced: return String(localized: "Lower capture resolution for less latency and bandwidth.")
+        case .fast: return String(localized: "Lowest latency and bandwidth, with a softer image. Good for WiFi.")
         }
     }
 }
@@ -73,11 +73,11 @@ struct VideoStreamConfiguration: Equatable {
         var errorDescription: String? {
             switch self {
             case .invalidSource:
-                return "The display reported an invalid video size."
+                return String(localized: "The display reported an invalid video size.")
             case .noCompatibleCodec:
-                return "The receiver does not support the selected video codec."
+                return String(localized: "The receiver does not support the selected video codec.")
             case .noCompatibleConfiguration:
-                return "The receiver did not advertise a usable video configuration."
+                return String(localized: "The receiver did not advertise a usable video configuration.")
             }
         }
     }
