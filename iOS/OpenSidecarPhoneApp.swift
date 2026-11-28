@@ -42,6 +42,7 @@ struct ReceiverScreen: View {
     @State private var showSettings = false
     @State private var showOnboarding = false
     @State private var nagDismissed = false
+    @State private var brightnessHUDValue: Double?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("showAnalytics") private var showAnalytics = false
     @AppStorage("metalRenderer") private var metalRenderer = false
@@ -93,6 +94,7 @@ struct ReceiverScreen: View {
                     IdleView(receiver: model.receiver, showSettings: $showSettings)
                 }
             }
+            .brightnessHUD($brightnessHUDValue)
             // The window, not this view: a sheet, the keyboard or the
             // hidden status bar change the view's frame but not the panel.
             .background(WindowObserver { model.updatePanel(window: $0) })
@@ -164,16 +166,63 @@ struct ReceiverScreen: View {
                 hasConnectedBefore = true
                 showOnboarding = false
             }
+            else {
+                // Connection lost — reset accumulated brightness so the next
+                // session starts from the current system value.
+                brightnessHUDValue = nil
+            }
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             model.start()
+            
+            model.receiver.onBrightness = { delta in
+                Task { @MainActor in applyBrightness(delta) }
+            }
             // Show the first-run hint unless the device has connected before
             // or the user already dismissed it.
             if !hasConnectedBefore && !onboardingDismissed {
                 showOnboarding = true
             }
         }
+    }
+
+    @MainActor
+    private func applyBrightness(_ delta: Double) {
+        let next = updateScreenBrightness(by: delta)
+        if brightnessHUDValue == nil {
+            withAnimation(.easeOut(duration: 0.15)) {
+                brightnessHUDValue = next
+            }
+        } else {
+            brightnessHUDValue = next
+        }
+    }
+    
+    @MainActor
+    private func updateScreenBrightness(by delta: Double) -> Double {
+        let screen = activeScreen
+
+        // Use brightnessHUDValue as source of truth, not screen.brightness,
+        // because reading screen.brightness after writing may return a stale/system value.
+        let base = brightnessHUDValue ?? Double(screen.brightness)
+        var next = base + delta
+        next = min(max(next, 0.0), 1.0)
+
+        // Quantize to 0.01 step — so small Option+Shift deltas are not lost
+        let minStep: Double = 0.01
+        next = round(next / minStep) * minStep
+
+        screen.brightness = CGFloat(next)
+        brightnessHUDValue = next
+        return next
+    }
+    
+    @MainActor
+    private var activeScreen: UIScreen {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?.screen ?? UIScreen.main
     }
 }
 

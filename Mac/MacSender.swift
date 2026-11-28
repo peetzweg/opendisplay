@@ -1395,9 +1395,19 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         Log.info("capture started: \(pixelsWide)x\(pixelsHigh) display \(display.displayID) generation \(generation) mode \(mode.rawValue) localCursor=\(localCursor)")
         let kind = lastHello?.kind ?? "device"
         await status("\(mode == .extend ? "Extending to" : "Mirroring to") \(kind) (\(pixelsWide)×\(pixelsHigh))")
+        
+        if let virtualDisplay {
+            BrightnessKeyInterceptor.shared.register(displayID: virtualDisplay.displayID) { [weak self] delta in
+                return self?.sendBrightnessDelta(delta) ?? false
+            }
+        }
     }
 
     func stop() {
+        if let virtualDisplay {
+            BrightnessKeyInterceptor.shared.unregister(displayID: virtualDisplay.displayID)
+        }
+        
         stopped = true
         invalidateCapturePipeline(discardingLastFrame: true)
         stopCursorPositionEcho()
@@ -3282,6 +3292,13 @@ final class MacSender: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    func sendBrightnessDelta(_ delta: Double) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["type": "brightness", "delta": delta]),
+              let json = String(data: data, encoding: .utf8) else { return false }
+        sendJSONFrame(json)
+        return true
+    }
+    
     private func sendJSONFrame(_ json: String) {
         guard let connection, connectionReady else { return }
         sendJSONFrame(json, on: connection)

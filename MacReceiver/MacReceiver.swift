@@ -397,6 +397,7 @@ final class ReceiverVideoView: NSView {
     private weak var receiver: StreamReceiver?
     private let displayLayer: AVSampleBufferDisplayLayer
     private var videoSizeObserver: AnyCancellable?
+    private let brightnessHUD = MacBrightnessHUDPresenter()
 
     private let cursorLayer: CALayer = {
         let layer = CALayer()
@@ -423,6 +424,9 @@ final class ReceiverVideoView: NSView {
         layer?.addSublayer(displayLayer)
         layer?.addSublayer(cursorLayer)
 
+        receiver.onBrightness = { [weak self] delta in
+            self?.updateBrightness(delta: delta)
+        }
         receiver.onCursor = { [weak self] x, y, visible in
             self?.moveCursor(x: x, y: y, visible: visible)
         }
@@ -503,6 +507,18 @@ final class ReceiverVideoView: NSView {
         CATransaction.commit()
     }
 
+    private func updateBrightness(delta: Double) {
+        Task { @MainActor in
+            let targetWindow = NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible })
+            let screenNumber = targetWindow?.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+            let targetDisplayID = screenNumber ?? CGMainDisplayID()
+            let newBrightness = MacBrightnessController.applyDelta(Float(delta), on: targetDisplayID)
+            if let newBrightness, let contentView = targetWindow?.contentView {
+                brightnessHUD.show(brightness: Double(newBrightness), in: contentView)
+            }
+        }
+    }
+    
     private func updateCursorLayout() {
         guard let rect = videoRect(), cursorNormSize != .zero else { return }
         cursorLayer.bounds = CGRect(x: 0, y: 0,
