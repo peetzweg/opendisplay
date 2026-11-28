@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.30.4](https://github.com/peetzweg/opendisplay/compare/v1.30.3...v1.30.4) (2026-11-28)
+
+
+### Bug Fixes
+
+* **linux:** update FFmpeg bindings for FFmpeg 9.1 ([#510](https://github.com/peetzweg/opendisplay/issues/510)) ([fd5076e](https://github.com/peetzweg/opendisplay/commit/fd5076e3d0d20b08a1798c6b2d364400e3f056f7))
+* **mac:** declare a portrait size macOS honours for the virtual display ([#500](https://github.com/peetzweg/opendisplay/issues/500)) ([8568e18](https://github.com/peetzweg/opendisplay/commit/8568e1810e798532622b1e56dd9e17148f401eee))
+* **mac:** stop leaking an encoder session on every capture recovery ([#522](https://github.com/peetzweg/opendisplay/issues/522)) ([3897251](https://github.com/peetzweg/opendisplay/commit/389725117f2ebc71ae5141fcb87a928ac4cd8a30))
+* restore analytics on new service domain ([#511](https://github.com/peetzweg/opendisplay/issues/511)) ([7f61aeb](https://github.com/peetzweg/opendisplay/commit/7f61aeb619a93c3a5b310107cdd7029c8708e433))
+
 ## [1.30.3](https://github.com/peetzweg/opendisplay/compare/v1.30.2...v1.30.3) (2026-11-14)
 
 
