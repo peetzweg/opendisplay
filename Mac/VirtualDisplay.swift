@@ -70,6 +70,14 @@ final class VirtualDisplay {
                                            // abandoned (see MacSender)
         descriptor.vendorID = 0x5043       // "PC"
         descriptor.serialNum = serialNum
+        // Display P3 primaries and D65 white. Without them macOS profiles the
+        // virtual display as sRGB, which clips wide-gamut content (e.g. a
+        // terminal with a Display P3 colour space) before it is captured.
+        // The stream is captured and tagged as Display P3 to match.
+        descriptor.redPrimary = CGPoint(x: 0.680, y: 0.320)
+        descriptor.greenPrimary = CGPoint(x: 0.265, y: 0.690)
+        descriptor.bluePrimary = CGPoint(x: 0.150, y: 0.060)
+        descriptor.whitePoint = CGPoint(x: 0.3127, y: 0.3290)
         descriptor.terminationHandler = { _, _ in
             Log.info("virtual display terminated by the system")
         }
